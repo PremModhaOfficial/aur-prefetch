@@ -12,6 +12,13 @@ log=/var/log/sim-yay.log
 build_log=/var/log/sim-yay-build.log
 printf '%s\n' "$*" >>"$log"
 
+# Running as root is a bug on every path, including queries. Reject it before
+# any branch can exit successfully.
+if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+    echo "sim: refusing to run yay as root (argv: $*)" >&2
+    exit 98
+fi
+
 case "${1:-}" in
     -Qua)
         # No AUR updates in the simulation by default.
@@ -20,13 +27,7 @@ case "${1:-}" in
     -Syu | -Syuu | -Syyu | -Syyuu)
         # yay's extra "u" means "also upgrade VCS packages". For repo packages
         # the observable effect is pacman -Syu, and yay escalates through sudo
-        # rather than running pacman itself. Running as root is a bug: refuse
-        # it loudly, the same way the build path does.
-        if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
-            printf '%s\n' "$*" >>"$build_log"
-            echo "sim: refusing to run yay as root (argv: $*)" >&2
-            exit 98
-        fi
+        # rather than running pacman itself.
         exec sudo -n pacman -Syu --noconfirm
         ;;
     *)

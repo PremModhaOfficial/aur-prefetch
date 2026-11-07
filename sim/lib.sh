@@ -67,7 +67,8 @@ usr_state() {
 }
 
 yay_log() { cat /var/log/sim-yay.log 2>/dev/null || true; }
-yay_built_something() { [[ -e /var/log/sim-yay-build.log ]]; }
+# The log is pre-created writable at image build, so existence proves nothing.
+yay_built_something() { [[ -s /var/log/sim-yay-build.log ]]; }
 
 finish() {
     if ((FAILS > 0)); then
