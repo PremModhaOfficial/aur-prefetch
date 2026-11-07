@@ -9,11 +9,11 @@ This file is edge-case reference, not a plan.
 
 ### fetch
 - Free-space gate must check CacheDir filesystem AND `/` for install.
-- CacheDir fallback: `pacman-conf CacheDir` empty on default install (line commented). Fallback `/var/cache/pacman/pkg`.
+- CacheDir: pacman 7.1 prints a value even when the line is commented. Keep the static `/var/cache/pacman/pkg` fallback for a failed or empty query, not because the default is empty.
 - Threshold: 2 GiB floor, 2× download estimate + 2-5 GB floor (5 if snapshots).
 - Gate guards `pacman -Syuw` only, NOT aurto builds.
 - Check `/var/lib/pacman/db.lck` + `pgrep pacman` before running.
-- Refuse fetch until `/etc/aurto/trusted-users` approved (trust gate).
+- The trust gate belongs to `install`, not `fetch` (D1). Missing `/etc/aurto/trusted-users` means aurto trusts everyone; empty means trust no one; non-empty is an allowlist.
 
 ### check
 - Pending: `pacman -Qu` + `yay -Qua` non-empty = updates pending.
