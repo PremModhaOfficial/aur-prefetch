@@ -1,7 +1,11 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "aur-prefetch", version, about = "Split Arch updates: background fetch/build, foreground install")]
+#[command(
+    name = "aur-prefetch",
+    version,
+    about = "Split Arch updates: background fetch/build, foreground install"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
