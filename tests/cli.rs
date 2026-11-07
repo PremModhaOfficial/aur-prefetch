@@ -19,7 +19,7 @@ fn help_lists_every_subcommand() {
 // command from `cargo test` would touch the development host.
 #[test]
 fn every_stub_subcommand_reports_that_it_is_not_implemented() {
-    for name in ["init", "check", "install", "clean", "doctor"] {
+    for name in ["init", "install", "clean", "doctor"] {
         let output = binary().arg(name).output().expect("run subcommand");
 
         assert!(output.status.success(), "{name} did not exit 0");

@@ -146,15 +146,15 @@ exactly the pending package, and a lock scenario proves refusal.
 
 Read-only. Never writes state.
 
-- [ ] Pending official updates: `pacman -Qu`.
-- [ ] Pending AUR updates: `yay -Qua`.
-- [ ] Disk: `df` bytes and inodes for `/` and CacheDir.
-- [ ] Lock: file plus live process.
-- [ ] Caches: downloads, yay builds, aurto repo, chroots.
-- [ ] Timer: `systemctl --user list-timers`, last service result.
-- [ ] Drift: last fetch vs last install from state, pacman.log fallback.
-- [ ] Trust file state: missing, empty, populated.
-- [ ] Exit 1 when anything actionable is found, 0 when clean.
+- [x] Pending official updates: `pacman -Qu`.
+- [x] Pending AUR updates: `yay -Qua`.
+- [x] Disk: `df` bytes and inodes for `/` and CacheDir.
+- [x] Lock: file plus live process.
+- [x] Caches: downloads, yay builds, aurto repo, chroots.
+- [x] Timer: `systemctl --user list-timers`, last service result.
+- [x] Drift: last fetch vs last install from state, pacman.log fallback.
+- [x] Trust file state: missing, empty, populated.
+- [x] Exit 1 when anything actionable is found, 0 when clean.
 
 Done when: a sim scenario with a pending update exits 1 and names it, and an
 up-to-date container exits 0.
