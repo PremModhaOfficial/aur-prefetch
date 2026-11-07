@@ -6,14 +6,112 @@ on:
   pull_request:
   workflow_dispatch:
 
+# F15 — Fork PRs (`pull_request` from forks) run with a read-only GITHUB_TOKEN
+# and no secrets. This workflow uses no secrets and no deploy steps, so fork
+# PRs are safe as-is. Swatinem's cache is branch-scoped, so forks can't poison
+# the default-branch cache. If secrets or write access are ever needed, gate
+# them to non-fork (`if: github.event.pull_request.head.repo.fork == false`)
+# — never `pull_request_target` with an untrusted checkout ("pwn request").
+# F12 — Least privilege: this CI only reads the repo.
+permissions:
+  contents: read
+
+# F13 — Cancel superseded PR runs so they stop burning minutes (see F11: a
+# single debug profile per PR keeps runs short; concurrency is the other half
+# of the cost picture).
+# F14 — Cost: public repos are free/unlimited; private repos get $12/mo
+# compute on GitHub Free (~2,000 Linux minutes at $0.006/min) + 10 GB
+# cache/repo. The clap-only cache sits well under 1 GB.
+# Pushes to main are not cancelled mid-merge by design.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# F16 — Linux-only is INTENTIONAL: aur-prefetch is Arch-targeted (pacman,
+# /etc/aurto/trusted-users, systemd timers). There is no pacman on
+# Windows/macOS, so a cross-platform matrix would only test that the binary
+# doesn't start there. Revisit if the tool ever becomes cross-platform.
+
 jobs:
-  ci:
+  # F09 — MSRV gate. edition = "2024" requires Rust 1.85+; rust-version = "1.85"
+  # in Cargo.toml makes Cargo enforce it. This job proves the floor builds.
+  msrv:
+    name: MSRV (1.85)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
+      # F02 — SHA is inside dtolnay/rust-toolchain master history (master
+      # 2026-10-16); Keep it recent or it gets garbage-collected.
+      # L3: dtolnay/rust-toolchain publishes no tags, so Dependabot cannot
+      # propose a newer SHA (github-actions updates only track tagged
+      # releases). The monthly cargo schedule also doesn't touch this pin.
+      # Refresh procedure: (1) resolve master HEAD via
+      #   curl -s https://api.github.com/repos/dtolnay/rust-toolchain/git/refs/heads/master
+      # (2) update all three dtolnay/rust-toolchain SHA pins below (msrv + ci +
+      # stable jobs) in one PR. Audit this at least monthly — if dtolnay force-pushes or GCs
+      # old master commits, CI breaks with "unable to resolve action".
+      # `toolchain:` pins Rust itself.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+        with:
+          toolchain: "1.85"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build + test on MSRV
+        run: cargo test --all-targets --all-features --locked
+
+  ci:
+    name: CI (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # F04 — actions/checkout@v7 (v4 was 3 majors behind).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # F01/F02/F18 — SHA-pinned action + explicit toolchain pin (1.85), so a
+      # new Rust release can't turn fmt/clippy red without any code change.
+      # Dependabot maintains the SHA pins; the `toolchain:` pin is bumped
+      # deliberately.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+        with:
+          toolchain: "1.85"
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      # F05/F03 — rust-cache v2 confirmed current (v2.9.3 latest); SHA-pinned.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # F06 — Install the audit tool so the audit gate in ci.sh actually runs
+      # in CI instead of silently skipping. SHA-pinned (v2.90.2).
+      # taiki-e warns against SHA-pinning the `@<tool>` shorthand tags; but
+      # `@v<major>.<minor>.<patch>` releases are immutable, so a commit SHA is
+      # equivalent and Dependabot-maintainable.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-deny@0.20.2
       - name: Run CI script
         run: bash ci.sh
+
+  # F09 (tip) — Modern-toolchain signal. The msrv and ci jobs both pin 1.85,
+  # so a dependency that raises its rust-version (via the monthly Dependabot
+  # cargo PRs) would turn both red with no way to distinguish "the floor
+  # moved" from "the code broke". This job runs clippy/fmt/test on stable:
+  # if it stays green while msrv/ci go red, the floor moved, not the code.
+  stable:
+    name: Stable (tip)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master 2026-10-16
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Clippy + fmt + test on stable
+        run: |
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo fmt --all --check
+          cargo test --all-targets --all-features --locked

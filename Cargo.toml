@@ -1,7 +1,13 @@
 [package]
 name = "aur-prefetch"
 version = "0.1.0"
+license = "MIT OR Apache-2.0"
 edition = "2024"
+# F09 — edition 2024 requires Rust 1.85+; declaring it makes Cargo enforce a
+# clean "requires rustc 1.85" error instead of a cryptic parse error, and
+# gives distro toolchains (Arch/Debian) a clear floor. MSRV job in ci.yml
+# verifies this floor.
+rust-version = "1.85"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

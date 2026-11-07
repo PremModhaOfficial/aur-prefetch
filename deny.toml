@@ -1,0 +1,70 @@
+# cargo-deny policy for aur-prefetch.
+# Run: cargo deny check
+# (defaults to <cwd>/deny.toml; lockfile auto-discovered from manifest —
+# no --config/--lockfile flags; see ci.sh.)
+# Adapted from EmbarkStudios/cargo-deny deny.template.toml.
+# Deps are a minimal clap tree (see Cargo.lock); keep the allow list tight and
+# permissive-only so new deps need an explicit decision.
+
+[graph]
+# NOTE (I1): all-features = false while ci.sh builds/tests with --all-features.
+# The graphs coincide today because Cargo.toml declares no [features]. If
+# features are added later, flip this or feature-gated deps escape the audit.
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+# Known-vulnerability / yanked / unmaintained advisories (RUSTSEC database).
+# Explicit (not cargo-deny defaults): yanked defaults to warn, unsound to
+# workspace-only, so transitive yanked/unsound deps would pass silently.
+# Deny them all to match the "strict" audit claim in ci.sh.
+[advisories]
+yanked = "deny"
+unsound = "all"
+unmaintained = "all"
+ignore = []
+
+[licenses]
+confidence-threshold = 0.8
+allow = [
+    "MIT",
+    "Apache-2.0",
+    # unicode-ident 1.0.27 (via proc-macro2/syn -> clap_derive) is
+    # "(MIT OR Apache-2.0) AND Unicode-3.0"; the AND requires allowing it.
+    "Unicode-3.0",
+]
+exceptions = []
+
+[licenses.private]
+ignore = false
+registries = []
+
+[bans]
+# Report duplicate versions of the same crate (warn, not deny — transitive
+# duplicates are common and usually harmless; upgrade deps to resolve).
+multiple-versions = "warn"
+# `*` version requirements are banned from direct deps.
+wildcards = "deny"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+allow-workspace = false
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+# Deny (not warn) to match the stated tight policy: any non-crates.io
+# registry or git source must be an explicit decision, not a green-CI warning.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+github = []
+gitlab = []
+bitbucket = []
