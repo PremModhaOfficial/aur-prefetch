@@ -1,6 +1,10 @@
 [package]
 name = "aur-prefetch"
 version = "0.1.0"
+description = "Split Arch Linux updates: download in the background, install in the foreground"
+repository = "https://github.com/PremModhaOfficial/aur-prefetch"
+keywords = ["archlinux", "pacman", "aur", "updates"]
+categories = ["command-line-utilities", "os"]
 license = "MIT OR Apache-2.0"
 edition = "2024"
 # F09 — edition 2024 requires Rust 1.85+; declaring it makes Cargo enforce a

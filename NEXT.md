@@ -70,18 +70,21 @@ are filled in. Change them here first, then implement.
 
 ## Phase 1: scaffolding
 
-- [ ] `src/runner.rs`: `CommandRunner` trait, `SystemRunner`, `FakeRunner`.
+- [x] `src/runner.rs`: `CommandRunner` trait, `SystemRunner`, `FakeRunner`.
       Every external command goes through it. No `Command::new` anywhere else.
-- [ ] `src/error.rs`: typed error with an exit-code mapping. No `unwrap` on
+- [x] `src/error.rs`: typed error with an exit-code mapping. No `unwrap` on
       external input. `expect` only for invariants proven above it.
-- [ ] `src/config.rs`: paths with env overrides so tests can redirect:
-      `PACMAN_CONF`, `PACMAN_CACHE_DIR`, `AURTO_TRUSTED_USERS`,
-      `AUR_PREFETCH_STATE`.
-- [ ] `src/state.rs`: read/write the state file atomically.
-- [ ] `src/commands/{fetch,check,install,clean,doctor,init}.rs`.
-- [ ] `tests/` with fixtures for `pacman -Qui`, `pacman-conf`, `pacman.log`.
-- [ ] Unit tests assert exact argv strings through `FakeRunner`.
-- [ ] `Cargo.toml`: add `description`, `repository`, `keywords`, `categories`.
+- [x] `src/config.rs`: paths with env overrides so tests can redirect, all
+      prefixed to avoid clobbering system variables:
+      `AUR_PREFETCH_PACMAN`, `AUR_PREFETCH_PACMAN_CONF`,
+      `AUR_PREFETCH_PACMAN_CACHE_DIR`, `AUR_PREFETCH_PACMAN_LOCK`,
+      `AUR_PREFETCH_TRUSTED_USERS`, `AUR_PREFETCH_STATE`,
+      `AUR_PREFETCH_MIN_FREE_BYTES`.
+- [x] `src/state.rs`: read/write the state file atomically.
+- [x] `src/commands/{fetch,check,install,clean,doctor,init}.rs`.
+- [x] `tests/` with fixtures for `pacman -Qui`, `pacman-conf`, `pacman.log`.
+- [x] Unit tests assert exact argv strings through `FakeRunner`.
+- [x] `Cargo.toml`: add `description`, `repository`, `keywords`, `categories`.
 
 ---
 

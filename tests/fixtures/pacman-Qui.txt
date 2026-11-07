@@ -1,0 +1,38 @@
+Repository      : core
+Name            : bash
+Version         : 5.2.037-2
+Description     : The GNU Bourne Again shell
+Architecture    : x86_64
+URL             : https://www.gnu.org/software/bash/bash.html
+Licenses        : GPL-3.0-or-later
+Groups          : None
+Provides        : sh
+Depends On      : readline  libreadline.so=8-64  glibc  ncurses
+Optional Deps   : bash-completion: for tab completion
+Conflicts With  : None
+Replaces        : None
+Download Size   : 1.52 MiB
+Installed Size  : 8.71 MiB
+Packager        : Frederik Schwan <freswa@archlinux.org>
+Build Date      : Tue 14 Oct 2026 18:42:13 UTC
+Validated By    : MD5 Sum  SHA-256 Sum  Signature
+
+Repository      : extra
+Name            : linux
+Version         : 6.17.2.arch1-1
+Description     : The Linux kernel and modules
+Architecture    : x86_64
+URL             : https://www.kernel.org/
+Licenses        : GPL-2.0-only
+Groups          : None
+Provides        : None
+Depends On      : coreutils  kmod  initramfs
+Optional Deps   : linux-firmware: firmware files for various drivers
+                  wireless-regdb: regulatory database
+Conflicts With  : None
+Replaces        : None
+Download Size   : 142.18 MiB
+Installed Size  : 187.42 MiB
+Packager        : Arch Linux Kernel Maintainers <games@archlinux.org>
+Build Date      : Tue 21 Oct 2026 06:11:40 UTC
+Validated By    : MD5 Sum  SHA-256 Sum  Signature

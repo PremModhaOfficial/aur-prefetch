@@ -1,4 +1,8 @@
+use std::process::ExitCode;
+
 use clap::{Parser, Subcommand};
+
+use aur_prefetch::commands;
 
 #[derive(Parser)]
 #[command(
@@ -27,38 +31,22 @@ enum Commands {
     Doctor,
 }
 
-fn main() {
+fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command {
-        Commands::Init => cmd_init(),
-        Commands::Check => cmd_check(),
-        Commands::Fetch => cmd_fetch(),
-        Commands::Install => cmd_install(),
-        Commands::Clean => cmd_clean(),
-        Commands::Doctor => cmd_doctor(),
+    let result = match cli.command {
+        Commands::Init => commands::init::run(),
+        Commands::Check => commands::check::run(),
+        Commands::Fetch => commands::fetch::run(),
+        Commands::Install => commands::install::run(),
+        Commands::Clean => commands::clean::run(),
+        Commands::Doctor => commands::doctor::run(),
+    };
+
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("aur-prefetch: {error}");
+            ExitCode::from(error.exit_code())
+        }
     }
-}
-
-fn cmd_init() {
-    println!("init: not implemented yet");
-}
-
-fn cmd_check() {
-    println!("check: not implemented yet");
-}
-
-fn cmd_fetch() {
-    println!("fetch: not implemented yet");
-}
-
-fn cmd_install() {
-    println!("install: not implemented yet");
-}
-
-fn cmd_clean() {
-    println!("clean: not implemented yet");
-}
-
-fn cmd_doctor() {
-    println!("doctor: not implemented yet");
 }
