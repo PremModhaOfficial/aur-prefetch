@@ -13,6 +13,9 @@ disagrees with it, `NEXT.md` wins.
 Current position: Phase 0 decisions, then Phase 1 scaffolding, then `fetch`.
 Do not start from `src/main.rs`.
 
+If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
+state and the first concrete move.
+
 ## Hard safety rules
 
 1. Never run `pacman`, `yay`, `makepkg`, `aurto`, `paccache`, `pacdiff`, or
