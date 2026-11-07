@@ -92,16 +92,16 @@ are filled in. Change them here first, then implement.
 
 Today the sim runs everything as root, so the real privilege path is untested.
 
-- [ ] Add a `builder` user to the sim image, no blanket sudo.
-- [ ] Write `/etc/sudoers.d/sim` with only:
+- [x] Add a `builder` user to the sim image, no blanket sudo.
+- [x] Write `/etc/sudoers.d/sim` with only:
       `builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm`
 - [ ] Run fetch scenarios as `builder`. A wrong argv must fail, which proves
       the sudoers contract.
-- [ ] Fake `yay` must call `sudo -n pacman`, so running it as root is detectable.
-- [ ] Stubs, each logging argv and returning configurable output:
+- [x] Fake `yay` must call `sudo -n pacman`, so running it as root is detectable.
+- [x] Stubs, each logging argv and returning configurable output:
       `systemctl` (user and system), `journalctl`, `loginctl`, `aurto`,
       `paccache`, `pacdiff`.
-- [ ] Real `pacman-conf` stays, but add fixture configs for:
+- [x] Real `pacman-conf` stays, but add fixture configs for:
       default, multiple CacheDir, empty CacheDir, moved CacheDir.
 - [ ] Fault fixtures:
       `db.lck` with no process, `db.lck` with a sleeping fake pacman, tiny

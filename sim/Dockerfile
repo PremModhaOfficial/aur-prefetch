@@ -18,13 +18,28 @@ RUN cargo build --release --locked
 
 FROM archlinux:base-devel
 
+# Phase 2: a non-root user with exactly one NOPASSWD command. No blanket sudo,
+# no wildcards. The visudo check makes a malformed rule fail the build, not a
+# scenario.
+RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
+    && useradd --create-home --shell /bin/bash builder \
+    && printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n' > /etc/sudoers.d/sim \
+    && chmod 0440 /etc/sudoers.d/sim \
+    && visudo -cf /etc/sudoers.d/sim \
+    && mkdir -p /etc/sim
+
 # Replace mirrors with the offline sim repo. Done after the builder stage so
 # only runtime has no network.
 COPY sim/pacman.conf /etc/pacman.conf
 COPY sim/yay /usr/local/bin/yay
 COPY sim/make-repo.sh /usr/local/bin/make-repo.sh
 COPY sim/lib.sh /usr/local/lib/sim/lib.sh
+COPY sim/stubs/ /usr/local/bin/
+COPY sim/fixtures /usr/local/lib/sim/fixtures
 RUN chmod 755 /usr/local/bin/yay /usr/local/bin/make-repo.sh \
+        /usr/local/bin/systemctl /usr/local/bin/journalctl \
+        /usr/local/bin/loginctl /usr/local/bin/aurto \
+        /usr/local/bin/paccache /usr/local/bin/pacdiff \
     && /usr/local/bin/make-repo.sh
 
 COPY --from=builder /src/target/release/aur-prefetch /usr/local/bin/aur-prefetch
