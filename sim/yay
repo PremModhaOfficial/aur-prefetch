@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Fake AUR helper for the simulation harness.
+#
+# It records every invocation so scenarios can assert that a command did or did
+# not reach the AUR path. Repo-package operations are delegated to pacman. Any
+# request that would build from the AUR fails loudly with exit 97, because the
+# simulation does not ship a build toolchain and a silent success would be
+# false coverage.
+set -uo pipefail
+
+log=/var/log/sim-yay.log
+build_log=/var/log/sim-yay-build.log
+printf '%s\n' "$*" >>"$log"
+
+case "${1:-}" in
+    -Qua)
+        # No AUR updates in the simulation by default.
+        exit 0
+        ;;
+    -Syu | -Syuu | -Syyu | -Syyuu)
+        # yay's extra "u" means "also upgrade VCS packages". For repo packages
+        # the observable effect is pacman -Syu.
+        exec pacman -Syu --noconfirm
+        ;;
+    *)
+        printf '%s\n' "$*" >>"$build_log"
+        echo "sim: AUR build path is not simulated (argv: $*)" >&2
+        exit 97
+        ;;
+esac
