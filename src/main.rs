@@ -18,7 +18,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Set up timer, sudoers, checks
-    Init,
+    Init {
+        /// Write the artifacts and enable the timer. Without this, print them.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Pending updates, disk, lock, caches, timer status
     Check,
     /// Free-space gate, pacman -Syuw only
@@ -45,7 +49,7 @@ enum Commands {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Commands::Init => commands::init::run(),
+        Commands::Init { apply } => commands::init::run(apply),
         Commands::Check => commands::check::run(),
         Commands::Fetch => commands::fetch::run(),
         Commands::Install { yes, force } => commands::install::run(yes, force),

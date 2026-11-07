@@ -199,12 +199,12 @@ and that an AUR build path exits loudly instead of silently passing.
 
 ### 3.6 `init`
 
-- [ ] Detect the running executable path. Use it in the unit file.
-- [ ] Print artifacts by default, `--apply` to write.
-- [ ] Write the user service and timer, enable with `systemctl --user`.
-- [ ] Write `/etc/sudoers.d/aur-prefetch` through `visudo -c` validation.
-- [ ] Never run `aurto init`. Check for it and print the manual command.
-- [ ] Never write a wildcard sudoers rule.
+- [x] Detect the running executable path. Use it in the unit file.
+- [x] Print artifacts by default, `--apply` to write.
+- [x] Write the user service and timer, enable with `systemctl --user`.
+- [x] Write `/etc/sudoers.d/aur-prefetch` through `visudo -c` validation.
+- [x] Never run `aurto init`. Check for it and print the manual command.
+- [x] Never write a wildcard sudoers rule.
 
 Done when: sim can render the artifacts and `visudo -cf` accepts the generated
 file.
