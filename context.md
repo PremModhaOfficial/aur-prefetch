@@ -73,7 +73,19 @@ Prior review loops surfaced edge cases NOT in spec.md. Keep here for implementer
 
 ## Test assertions
 
-- Unit: disk gate, lock detection, trust gate, Qk/Qkk decisions. No pacman.
-- Docker: fetch changes cache+lists only never `/usr`; install changes `/usr` never rebuilds.
-- Chaos: kill mid-install, disk-full, lock-delete, single-install mid-window → `doctor`/`check` detects.
-- VM: snapshot → break → rollback → boots (`uname -r` matches `/usr/lib/modules/`).
+### Level 1: container (implemented in `sim/`)
+
+- `pacman -Syuw` downloads to cache and leaves `/usr` byte-identical.
+- `pacman -Syu` does change `/usr` (control: proves the detector is not blind).
+- `check`/`doctor` write nothing; `fetch` never touches `/usr`; no AUR build runs.
+
+Run with `./sim/run.sh`. Positive fetch/install assertions land with the
+implementation of each command.
+
+### Level 2 and 3: still to build
+
+- Chaos: kill mid-install, disk-full, lock-delete, single-install mid-window →
+  `doctor`/`check` detects. Needs fault injection; the container harness has no
+  hook for it yet.
+- VM: snapshot → break → rollback → boots (`uname -r` matches
+  `/usr/lib/modules/`). Needs btrfs + bootloader; a container cannot do this.

@@ -1,0 +1,7 @@
+# Keep local builds on the same floor CI enforces (Cargo.toml rust-version).
+# rustup reads this automatically. A plain distro rustc ignores it, which is
+# fine: CI still proves the floor.
+[toolchain]
+channel = "1.85"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
