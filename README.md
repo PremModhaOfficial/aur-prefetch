@@ -13,6 +13,22 @@ Early. The CLI surface exists and all six subcommands are stubs. Nothing here
 has been run against a real Arch system yet. `AGENTS.md` lists the rules that
 apply while implementing, and `sim/` is where behaviour gets proven.
 
+## Start here
+
+The working plan is **[`NEXT.md`](NEXT.md)**. Read it before touching
+`src/main.rs`, before writing a plan, and before trusting any chat summary.
+
+Order of work:
+
+1. **Phase 0:** lock the six decisions. The trust gate is the one that changes
+   behavior, and it moves from `fetch` to `install`.
+2. **Phase 1:** runner trait, error and exit codes, state file, tests, and the
+   sim non-root sudo path.
+3. **Phase 3:** `fetch`, then `check`, `doctor`, `clean`, `install`, `init`.
+
+A command is not done when it compiles. It is done when `./sim/run.sh` proves
+its side effects. Each command's acceptance criteria are in `NEXT.md`.
+
 ## Commands
 
 - `aur-prefetch init` — set up timer, sudoers, checks
@@ -25,7 +41,9 @@ apply while implementing, and `sim/` is where behaviour gets proven.
 ## Rules the tool will not break
 
 - Never sudo `yay` or `makepkg`. Only `pacman -Syuw` escalates.
-- Trust gate: refuse fetch until `/etc/aurto/trusted-users` is approved.
+- Trust gate: checked at `install`, not `fetch`. Missing
+  `/etc/aurto/trusted-users` means aurto trusts everyone. Empty means trust no
+  one. See `NEXT.md` D1.
 - Disk full mid-install: `Qkk` catches the damage; `Qk` does not.
 - Lock file: check `pgrep pacman` first, never delete while it runs.
 - Prefetch never writes to `/usr`. That is the whole point.

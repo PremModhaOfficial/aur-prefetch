@@ -4,6 +4,15 @@ Rules for anyone (human or agent) changing this repo. They exist because this
 tool changes pacman state, and because an earlier session burned a run printing
 "Done" instead of stopping.
 
+## Read this first
+
+Before planning or writing code, read [`NEXT.md`](NEXT.md). It is the
+authoritative order of work. If a chat summary, `context.md`, or an old plan
+disagrees with it, `NEXT.md` wins.
+
+Current position: Phase 0 decisions, then Phase 1 scaffolding, then `fetch`.
+Do not start from `src/main.rs`.
+
 ## Hard safety rules
 
 1. Never run `pacman`, `yay`, `makepkg`, `aurto`, `paccache`, `pacdiff`, or
@@ -27,6 +36,7 @@ tool changes pacman state, and because an earlier session burned a run printing
 - Any change that touches pacman behaviour has a scenario in `sim/scenarios/`.
   Unit tests with a fake runner are not enough for side-effect claims.
 - `README.md` updated when a command, flag, or path changes.
+- The matching `NEXT.md` checkbox is ticked in the same commit.
 
 ## Honesty rules
 
@@ -57,3 +67,6 @@ All six subcommands are stubs. `NEXT.md` is the authoritative order of work.
 `sim/` proves the harness works and enforces the read-only safety invariants;
 positive assertions (fetch actually downloads, install actually installs) get
 added with each command's implementation.
+
+Next action: Phase 0 decisions in `NEXT.md`, then the runner trait, then
+`fetch`.

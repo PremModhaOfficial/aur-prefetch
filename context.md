@@ -2,6 +2,9 @@
 
 Prior review loops surfaced edge cases NOT in spec.md. Keep here for implementers.
 
+For the current order of work and the locked decisions, read `NEXT.md` first.
+This file is edge-case reference, not a plan.
+
 ## Subcommand notes
 
 ### fetch
