@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Sim stub: records argv, then runs the real paccache.
+#
+# The real tool (pacman-contrib) does the deletion; the log proves the binary
+# asked for the policy it claims to use.
+set -uo pipefail
+
+printf '%s\n' "$*" >>/var/log/sim-paccache.log
+exec /usr/bin/paccache "$@"

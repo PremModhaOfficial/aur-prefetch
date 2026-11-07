@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Sim stub: records argv, then replays a configured response.
+#
+# pacdiff is interactive, so the simulation never runs the real one. The log
+# is the assertion surface: the tool may print the command but must not execute
+# it unattended.
+set -uo pipefail
+
+tool=${0##*/}
+printf '%s\n' "$*" >>"/var/log/sim-$tool.log"
+
+if [[ -f "/etc/sim/$tool.exit" ]]; then
+    exit "$(cat "/etc/sim/$tool.exit")"
+fi
+[[ -f "/etc/sim/$tool.out" ]] && cat "/etc/sim/$tool.out"
+[[ -f "/etc/sim/$tool.err" ]] && cat "/etc/sim/$tool.err" >&2
+exit 0

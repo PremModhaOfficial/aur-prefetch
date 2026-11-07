@@ -19,8 +19,15 @@ case "${1:-}" in
         ;;
     -Syu | -Syuu | -Syyu | -Syyuu)
         # yay's extra "u" means "also upgrade VCS packages". For repo packages
-        # the observable effect is pacman -Syu.
-        exec pacman -Syu --noconfirm
+        # the observable effect is pacman -Syu, and yay escalates through sudo
+        # rather than running pacman itself. Running as root is a bug: refuse
+        # it loudly, the same way the build path does.
+        if [[ ${EUID:-$(id -u)} -eq 0 ]]; then
+            printf '%s\n' "$*" >>"$build_log"
+            echo "sim: refusing to run yay as root (argv: $*)" >&2
+            exit 98
+        fi
+        exec sudo -n pacman -Syu --noconfirm
         ;;
     *)
         printf '%s\n' "$*" >>"$build_log"

@@ -22,8 +22,17 @@ Requires Docker or Podman. The container runs with `--network none`.
 - A local pacman repo at `/srv/simrepo` served over `file://`
 - `simapp 1.0.0-1` installed, `simapp 2.0.0-1` available as the pending update
 - An empty download cache
+- `builder`, a non-root user whose only passwordless sudo command is
+  `/usr/bin/pacman -Syuw --noconfirm`
 - `/usr/local/bin/yay`, a fake helper that logs every call to
-  `/var/log/sim-yay.log` and fails with exit 97 if asked to build from the AUR
+  `/var/log/sim-yay.log`, escalates through `sudo -n pacman`, and fails with
+  exit 97 if asked to build from the AUR or exit 98 if run as root
+- Stubs for `systemctl`, `journalctl`, `loginctl`, `aurto`, `paccache`, and
+  `pacdiff`. Each logs argv to `/var/log/sim-<tool>.log`; a scenario sets the
+  reply with `/etc/sim/<tool>.out`, `.err`, and `.exit`. `paccache` forwards to
+  the real tool; `pacdiff` never runs for real.
+- Pacman config fixtures for default, multiple, empty, and moved `CacheDir`
+  under `/usr/local/lib/sim/fixtures`
 - `/usr/local/bin/aur-prefetch`, built inside the image so the glibc matches
 
 No mirrors, no keys, no network at scenario time. If a scenario needs another
@@ -36,6 +45,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `01-download-only-keeps-usr.sh` | `pacman -Syuw` downloads `simapp-2.0.0` and leaves `/usr` byte-identical |
 | `02-full-upgrade-changes-usr.sh` | `pacman -Syu` does change `/usr`, so the detector in 01 is not blind |
 | `03-binary-readonly-safety.sh` | `check`/`doctor` write nothing, `fetch` never touches `/usr`, nothing triggers an AUR build |
+| `04-sudo-contract.sh` | `builder` may run exactly `pacman -Syuw --noconfirm`; another argv and blanket sudo are refused |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
