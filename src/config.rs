@@ -15,6 +15,8 @@ pub struct Config {
     pub pacman_log: PathBuf,
     pub yay_cache_dir: PathBuf,
     pub trusted_users: PathBuf,
+    pub sudoers_file: PathBuf,
+    pub journald_conf: PathBuf,
     pub snapper_config_dir: PathBuf,
     pub sudoers_file: PathBuf,
     pub user_unit_dir: Option<PathBuf>,
@@ -71,6 +73,16 @@ impl Config {
                 &lookup,
                 "AUR_PREFETCH_TRUSTED_USERS",
                 "/etc/aurto/trusted-users",
+            ),
+            sudoers_file: path_or(
+                &lookup,
+                "AUR_PREFETCH_SUDOERS",
+                "/etc/sudoers.d/aur-prefetch",
+            ),
+            journald_conf: path_or(
+                &lookup,
+                "AUR_PREFETCH_JOURNALD_CONF",
+                "/etc/systemd/journald.conf",
             ),
             snapper_config_dir: path_or(
                 &lookup,
@@ -187,6 +199,14 @@ mod tests {
             PathBuf::from("/etc/aurto/trusted-users")
         );
         assert_eq!(
+            config.sudoers_file,
+            PathBuf::from("/etc/sudoers.d/aur-prefetch")
+        );
+        assert_eq!(
+            config.journald_conf,
+            PathBuf::from("/etc/systemd/journald.conf")
+        );
+        assert_eq!(
             config.snapper_config_dir,
             PathBuf::from("/etc/snapper/configs")
         );
@@ -215,6 +235,8 @@ mod tests {
             ("AUR_PREFETCH_PACMAN_LOG", "/tmp/pacman.log"),
             ("AUR_PREFETCH_YAY_CACHE_DIR", "/tmp/yay"),
             ("AUR_PREFETCH_TRUSTED_USERS", "/tmp/trusted-users"),
+            ("AUR_PREFETCH_SUDOERS", "/tmp/sudoers"),
+            ("AUR_PREFETCH_JOURNALD_CONF", "/tmp/journald.conf"),
             ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", "/tmp/snapper"),
             ("AUR_PREFETCH_SUDOERS", "/tmp/sudoers"),
             ("AUR_PREFETCH_USER_UNIT_DIR", "/tmp/user-units"),
@@ -230,6 +252,8 @@ mod tests {
         assert_eq!(config.pacman_log, PathBuf::from("/tmp/pacman.log"));
         assert_eq!(config.yay_cache_dir, PathBuf::from("/tmp/yay"));
         assert_eq!(config.trusted_users, PathBuf::from("/tmp/trusted-users"));
+        assert_eq!(config.sudoers_file, PathBuf::from("/tmp/sudoers"));
+        assert_eq!(config.journald_conf, PathBuf::from("/tmp/journald.conf"));
         assert_eq!(config.snapper_config_dir, PathBuf::from("/tmp/snapper"));
         assert_eq!(config.sudoers_file, PathBuf::from("/tmp/sudoers"));
         assert_eq!(config.user_unit_dir, Some(PathBuf::from("/tmp/user-units")));

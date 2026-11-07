@@ -60,6 +60,8 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `08-stub-contract.sh` | stubs replay `.out`/`.err`/`.exit`, `builder` can append to logs, `paccache` honors a configured failure, and `yay` rejects root on every path |
 | `09-check-pending.sh` | `check` exits 1, names the pending package, and writes nothing |
 | `10-check-clean.sh` | `check` exits 0 and writes nothing when the system is current |
+| `11-doctor-missing-setup.sh` | `doctor` exits 1 and names the timer, sudoers, trust, and repo problems |
+| `12-doctor-configured.sh` | `doctor` exits 0 on a configured container |
 | `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
 | `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
 | `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |

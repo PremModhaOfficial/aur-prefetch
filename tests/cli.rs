@@ -14,17 +14,3 @@ fn help_lists_every_subcommand() {
         assert!(text.contains(name), "help is missing {name}");
     }
 }
-
-// Only commands that are still stubs may run here. Executing an implemented
-// command from `cargo test` would touch the development host.
-#[test]
-fn every_stub_subcommand_reports_that_it_is_not_implemented() {
-    let name = "doctor";
-    let output = binary().arg(name).output().expect("run subcommand");
-
-    assert!(output.status.success(), "{name} did not exit 0");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout).trim(),
-        format!("{name}: not implemented yet")
-    );
-}
