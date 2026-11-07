@@ -1,0 +1,273 @@
+# NEXT.md
+
+Everything still to do before and during implementation. Written 2026-11-07.
+This is the working plan. `AGENTS.md` has the rules, `spec.md` has the user
+flow, `context.md` has the edge cases.
+
+Guiding rule: a command is not done when it compiles. It is done when a sim
+scenario proves its side effects.
+
+---
+
+## Phase 0: lock the decisions
+
+These change behavior, so decide them before writing code. Recommended values
+are filled in. Change them here first, then implement.
+
+### D1. Trust gate
+
+- **Decision:** gate `install`, not `fetch`. `fetch` only handles official repo
+  packages, so AUR maintainer trust is irrelevant to it.
+- Missing `/etc/aurto/trusted-users` means aurto trusts everyone. Warn, and
+  require `--yes` for `install`.
+- Empty file means trust no one. Refuse `install` unless `--force`.
+- Non-empty file means allowlist. Continue.
+- `doctor` reports which of the three states is active.
+
+### D2. Privilege model
+
+- The binary runs as the user. `fetch` calls
+  `sudo -n /usr/bin/pacman -Syuw --noconfirm`, the exact command in the sudoers
+  rule. No wildcards.
+- If euid is already 0, call pacman directly. This is for containers and for an
+  optional system-level timer, not for normal use.
+- `install` and all AUR work run as the user, never with sudo.
+- `init` writes the sudoers line, never a blanket NOPASSWD rule.
+
+### D3. Install interactivity
+
+- Never pass `--noconfirm` to `yay`. PKGBUILD review is the point.
+- Stream the terminal, do not capture it.
+- Before running, show pending official and AUR updates and require `--yes`
+  when stdin is not a TTY.
+- After running, print the `pacdiff` and reboot checks.
+
+### D4. State
+
+- Own state file at `$XDG_STATE_HOME/aur-prefetch/state.json`, default
+  `~/.local/state/aur-prefetch/state.json`.
+- Records last successful fetch time, last install time, package counts.
+- `/var/log/pacman.log` is a fallback for first run and for drift detection.
+- Never write state from `check` or `doctor`.
+
+### D5. Clean
+
+- Dry-run is the default. `--apply` is required to delete anything.
+- Download cache: `paccache` only, policy from flags. Default `-rk1`.
+- yay build cache: only directories older than 30 days, and only after
+  `pacman -Q` confirms the package is installed.
+- aurto repo and build chroots: report only. Never delete automatically.
+- Logs and snapshots: report only in v1.
+
+### D6. Exit codes
+
+- `0` healthy, nothing to do, or action completed.
+- `1` action needed or blocked by a gate (updates pending, disk low, lock held).
+- `2` execution error (pacman, yay, config parse, permission).
+- Same contract for every command. Document it in `--help`.
+
+---
+
+## Phase 1: scaffolding
+
+- [ ] `src/runner.rs`: `CommandRunner` trait, `SystemRunner`, `FakeRunner`.
+      Every external command goes through it. No `Command::new` anywhere else.
+- [ ] `src/error.rs`: typed error with an exit-code mapping. No `unwrap` on
+      external input. `expect` only for invariants proven above it.
+- [ ] `src/config.rs`: paths with env overrides so tests can redirect:
+      `PACMAN_CONF`, `PACMAN_CACHE_DIR`, `AURTO_TRUSTED_USERS`,
+      `AUR_PREFETCH_STATE`.
+- [ ] `src/state.rs`: read/write the state file atomically.
+- [ ] `src/commands/{fetch,check,install,clean,doctor,init}.rs`.
+- [ ] `tests/` with fixtures for `pacman -Qui`, `pacman-conf`, `pacman.log`.
+- [ ] Unit tests assert exact argv strings through `FakeRunner`.
+- [ ] `Cargo.toml`: add `description`, `repository`, `keywords`, `categories`.
+
+---
+
+## Phase 2: sim harness, level up
+
+Today the sim runs everything as root, so the real privilege path is untested.
+
+- [ ] Add a `builder` user to the sim image, no blanket sudo.
+- [ ] Write `/etc/sudoers.d/sim` with only:
+      `builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm`
+- [ ] Run fetch scenarios as `builder`. A wrong argv must fail, which proves
+      the sudoers contract.
+- [ ] Fake `yay` must call `sudo -n pacman`, so running it as root is detectable.
+- [ ] Stubs, each logging argv and returning configurable output:
+      `systemctl` (user and system), `journalctl`, `loginctl`, `aurto`,
+      `paccache`, `pacdiff`.
+- [ ] Real `pacman-conf` stays, but add fixture configs for:
+      default, multiple CacheDir, empty CacheDir, moved CacheDir.
+- [ ] Fault fixtures:
+      `db.lck` with no process, `db.lck` with a sleeping fake pacman, tiny
+      tmpfs CacheDir, stale aurto repo, a `pacman.log` with an install after a
+      fetch.
+- [ ] Scenario: `fetch` refuses while pacman holds the lock.
+- [ ] Scenario: `fetch` refuses below the free-space floor.
+- [ ] Scenario: `fetch` uses only the allowed argv.
+- [ ] Scenario: `install` builds nothing when the local repo is current.
+
+Note: pacman 7.1 sets `DownloadUser = alpm`. Cache directories must be
+accessible to that user, or downloads fail. Test a moved CacheDir explicitly.
+
+---
+
+## Phase 3: commands, in order
+
+### 3.1 `fetch` (first)
+
+Gates in order: lock, free space, then pacman.
+
+- [ ] Lock: exists `/var/lib/pacman/db.lck` and `pgrep -x pacman` is alive,
+      refuse with exit 1. Never delete the lock.
+- [ ] Free space: `need = max(2 GiB, 2 * pending_download + 2 GiB)`. Check the
+      CacheDir filesystem, and `/` too when they differ. 5 GiB floor if
+      snapshots are detected.
+- [ ] Pending download size: sum `Download Size` from `pacman -Qui`, fall back
+      to the floor if parsing fails.
+- [ ] Run `sudo -n /usr/bin/pacman -Syuw --noconfirm`.
+- [ ] Exit 0 on success or nothing to do, 1 on gate, 2 on pacman failure.
+- [ ] Record state: timestamp, pending count, bytes downloaded if available.
+- [ ] Invariant: never writes `/usr` or `/var/lib/pacman/local`.
+- [ ] Sim scenarios: download-only, lock refusal, disk refusal, wrong argv.
+
+Done when: scenario 01 still passes, a new scenario proves the cache grew by
+exactly the pending package, and a lock scenario proves refusal.
+
+### 3.2 `check`
+
+Read-only. Never writes state.
+
+- [ ] Pending official updates: `pacman -Qu`.
+- [ ] Pending AUR updates: `yay -Qua`.
+- [ ] Disk: `df` bytes and inodes for `/` and CacheDir.
+- [ ] Lock: file plus live process.
+- [ ] Caches: downloads, yay builds, aurto repo, chroots.
+- [ ] Timer: `systemctl --user list-timers`, last service result.
+- [ ] Drift: last fetch vs last install from state, pacman.log fallback.
+- [ ] Trust file state: missing, empty, populated.
+- [ ] Exit 1 when anything actionable is found, 0 when clean.
+
+Done when: a sim scenario with a pending update exits 1 and names it, and an
+up-to-date container exits 0.
+
+### 3.3 `doctor`
+
+Read-only setup audit.
+
+- [ ] Timer enabled and next run scheduled.
+- [ ] Sudoers rule present and exact.
+- [ ] Trust file state and repo include.
+- [ ] `pacman-conf CacheDir` resolves, directory writable by `alpm`.
+- [ ] journald `Storage=persistent` and a size cap.
+- [ ] Snapper timers and ranges, only if snapper is installed.
+- [ ] Disk floor.
+
+Done when: each broken setup has a scenario that reports it, not just a missing
+file.
+
+### 3.4 `clean`
+
+- [ ] Dry-run output with sizes and the exact commands that would run.
+- [ ] `--apply` required for deletion.
+- [ ] Never touch aurto repo or chroots.
+- [ ] Never delete a yay build for a package that is not installed.
+- [ ] Sim scenario: dry-run changes nothing, apply removes only the expected
+      files, and a non-installed package is untouched.
+
+### 3.5 `install`
+
+- [ ] Lock gate, same as fetch.
+- [ ] News gate: show pending list, require `--yes` when not a TTY. Do not try
+      to parse news in v1. Print the URL and the last install time.
+- [ ] Trust gate from D1.
+- [ ] Run `yay -Syuu` as the user, no `--noconfirm`.
+- [ ] After: print pacdiff, reboot, and kernel checks.
+- [ ] Exit 2 if yay fails, 1 if gated.
+
+Done when: sim proves a repo-package install changes `/usr` and never builds,
+and that an AUR build path exits loudly instead of silently passing.
+
+### 3.6 `init`
+
+- [ ] Detect the running executable path. Use it in the unit file.
+- [ ] Print artifacts by default, `--apply` to write.
+- [ ] Write the user service and timer, enable with `systemctl --user`.
+- [ ] Write `/etc/sudoers.d/aur-prefetch` through `visudo -c` validation.
+- [ ] Never run `aurto init`. Check for it and print the manual command.
+- [ ] Never write a wildcard sudoers rule.
+
+Done when: sim can render the artifacts and `visudo -cf` accepts the generated
+file.
+
+---
+
+## Phase 4: chaos level
+
+Requires fault injection in the sim.
+
+- [ ] Kill pacman mid-download, verify cache is retryable and lists are new.
+- [ ] Fill the CacheDir tmpfs mid-download, verify exit 1 and no `/usr` write.
+- [ ] Kill pacman mid-install, verify `pacman -Qkk` detects damage and `Qk`
+      does not.
+- [ ] Delete `db.lck` while pacman runs, verify `doctor` catches it.
+- [ ] Install a single package between fetch and install, verify `check`
+      reports a partial upgrade.
+- [ ] Stale aurto repo, verify `install` reports a foreground build risk.
+
+## Phase 5: VM level
+
+A container cannot test snapshots or boot.
+
+- [ ] Scripted btrfs VM: base install, snapper config, prefetch, install.
+- [ ] Snapshot, force a broken install, roll back, verify it boots and
+      `uname -r` matches `/usr/lib/modules/`.
+- [ ] Verify `SPACE_LIMIT` and `FREE_LIMIT` behave as configured.
+
+---
+
+## Phase 6: packaging and release
+
+- [ ] `PKGBUILD` for the AUR, depends on `pacman`, optional `aurto`, `yay`.
+- [ ] Install the binary to `/usr/bin`, units to `/usr/lib/systemd/user`.
+- [ ] `cargo install` path documented.
+- [ ] `--json` output for `check` and `doctor`.
+- [ ] Release workflow with `cargo publish --dry-run`.
+
+---
+
+## Doc corrections to make before Phase 3
+
+- [ ] `context.md` says `pacman-conf CacheDir` is empty on a default install.
+      On pacman 7.1 it prints `/var/cache/pacman/pkg/` even when the line is
+      commented. Keep the fallback, drop the premise.
+- [ ] `context.md` trust gate is inverted. Missing file means trust everyone.
+      See D1.
+- [ ] `spec.md` names the timer target `~/.local/bin/aur-prefetch.sh`, while the
+      repo builds `aur-prefetch`. Decide: install the binary and call it
+      directly, or keep a thin wrapper. Recommendation: call the binary.
+- [ ] `spec.md` embeds a shell free-space gate. That logic now lives in the
+      binary. Keep the shell block only as a teaching example, and say so.
+
+---
+
+## Verified external facts (re-check before release)
+
+Checked 2026-11-07.
+
+- `aurto` 0.14.7, last commit 2026-11-03, AUR package current. Maintained but
+  small. Uses `aurutils` and `makechrootpkg`.
+- `yay` 13.1.0, last push 2026-11-02. Maintained.
+- pacman 7.1.0, libalpm 16.0.1. `DownloadUser = alpm`.
+- Arch news RSS: `https://archlinux.org/feeds/news/`, live.
+- `aurto` is not installed on this dev machine. Not required for container
+  tests, required for the VM end-to-end run.
+
+## Nice to have, not blocking
+
+- Skip the Sim workflow for docs-only pushes (`paths-ignore`).
+- Docker layer cache between CI runs.
+- Coverage report for unit tests.
+- Branch protection requiring `CI` and `Sim` before merge.

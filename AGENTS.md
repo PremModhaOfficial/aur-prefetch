@@ -43,6 +43,7 @@ tool changes pacman state, and because an earlier session burned a run printing
 | Path | Role |
 |---|---|
 | `spec.md` | User-facing, plain-language flow and failure modes |
+| `NEXT.md` | Working plan: decisions, phases, acceptance criteria |
 | `context.md` | Implementation notes and edge cases |
 | `src/main.rs` | CLI surface (subcommands) |
 | `ci.sh` | Local mirror of the GitHub checks |
@@ -52,6 +53,7 @@ tool changes pacman state, and because an earlier session burned a run printing
 
 ## Current status
 
-All six subcommands are stubs. `sim/` proves the harness works and enforces the
-read-only safety invariants; positive assertions (fetch actually downloads,
-install actually installs) get added with each command's implementation.
+All six subcommands are stubs. `NEXT.md` is the authoritative order of work.
+`sim/` proves the harness works and enforces the read-only safety invariants;
+positive assertions (fetch actually downloads, install actually installs) get
+added with each command's implementation.

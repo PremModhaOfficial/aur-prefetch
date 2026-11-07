@@ -45,6 +45,7 @@ helper's log. The development machine is never a test machine.
 
 ## Docs
 
+- [`NEXT.md`](NEXT.md) — the working plan: decisions, phases, acceptance criteria
 - [`spec.md`](spec.md) — plain-language flow and the five ways to break an Arch box
 - [`context.md`](context.md) — implementation notes and edge cases
 - [`sim/README.md`](sim/README.md) — simulation harness
