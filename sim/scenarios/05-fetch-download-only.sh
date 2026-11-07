@@ -7,14 +7,15 @@ source /usr/local/lib/sim/lib.sh
 
 echo "scenario: fetch downloads as builder and records state"
 
+log=$(mktemp)
 before_usr=$(usr_state)
 before_pkgs=$(pkg_state)
 
-runuser -l builder -c 'aur-prefetch fetch' >/tmp/sim-fetch.log 2>&1
+runuser -l builder -c 'aur-prefetch fetch' >"$log" 2>&1
 status=$?
 
 assert_eq "$status" "0" "fetch exited 0"
-assert_contains "$(cat /tmp/sim-fetch.log)" "running sudo -n /usr/bin/pacman -Syuw --noconfirm" "fetch used the allowed argv"
+assert_contains "$(cat "$log")" "running sudo -n /usr/bin/pacman -Syuw --noconfirm" "fetch used the allowed argv"
 assert_contains "$(cache_files)" "simapp-2.0.0" "fetch downloaded the pending package"
 assert_eq "$(cache_files | wc -l | tr -d ' ')" "1" "cache holds exactly the pending package"
 assert_eq "$(installed_version)" "1.0.0-1" "fetch did not install the download"
