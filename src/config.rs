@@ -13,6 +13,7 @@ pub struct Config {
     pub pacman_cache_dir: PathBuf,
     pub pacman_lock: PathBuf,
     pub trusted_users: PathBuf,
+    pub snapper_config_dir: PathBuf,
     pub state_file: PathBuf,
     pub min_free_bytes: u64,
 }
@@ -61,6 +62,11 @@ impl Config {
                 &lookup,
                 "AUR_PREFETCH_TRUSTED_USERS",
                 "/etc/aurto/trusted-users",
+            ),
+            snapper_config_dir: path_or(
+                &lookup,
+                "AUR_PREFETCH_SNAPPER_CONFIG_DIR",
+                "/etc/snapper/configs",
             ),
             state_file,
             min_free_bytes,
@@ -128,6 +134,10 @@ mod tests {
             PathBuf::from("/etc/aurto/trusted-users")
         );
         assert_eq!(
+            config.snapper_config_dir,
+            PathBuf::from("/etc/snapper/configs")
+        );
+        assert_eq!(
             config.state_file,
             PathBuf::from("/home/user/.local/state/aur-prefetch/state.json")
         );
@@ -142,6 +152,7 @@ mod tests {
             ("AUR_PREFETCH_PACMAN_CACHE_DIR", "/tmp/cache"),
             ("AUR_PREFETCH_PACMAN_LOCK", "/tmp/db.lck"),
             ("AUR_PREFETCH_TRUSTED_USERS", "/tmp/trusted-users"),
+            ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", "/tmp/snapper"),
             ("AUR_PREFETCH_STATE", "/tmp/state.json"),
             ("AUR_PREFETCH_MIN_FREE_BYTES", "1048576"),
         ]))
@@ -152,6 +163,7 @@ mod tests {
         assert_eq!(config.pacman_cache_dir, PathBuf::from("/tmp/cache"));
         assert_eq!(config.pacman_lock, PathBuf::from("/tmp/db.lck"));
         assert_eq!(config.trusted_users, PathBuf::from("/tmp/trusted-users"));
+        assert_eq!(config.snapper_config_dir, PathBuf::from("/tmp/snapper"));
         assert_eq!(config.state_file, PathBuf::from("/tmp/state.json"));
         assert_eq!(config.min_free_bytes, 1_048_576);
     }
