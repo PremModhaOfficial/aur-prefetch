@@ -26,7 +26,11 @@ enum Commands {
     /// News gate, lock check, then yay -Syuu
     Install,
     /// Prune download cache, yay builds, logs, orphans
-    Clean,
+    Clean {
+        /// Delete. Without this flag the command only reports.
+        #[arg(long)]
+        apply: bool,
+    },
     /// Verify timers, limits, repo, journald
     Doctor,
 }
@@ -38,7 +42,7 @@ fn main() -> ExitCode {
         Commands::Check => commands::check::run(),
         Commands::Fetch => commands::fetch::run(),
         Commands::Install => commands::install::run(),
-        Commands::Clean => commands::clean::run(),
+        Commands::Clean { apply } => commands::clean::run(apply),
         Commands::Doctor => commands::doctor::run(),
     };
 
