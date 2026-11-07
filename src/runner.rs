@@ -19,6 +19,10 @@ pub struct CommandOutput {
 /// mean "nothing to report". Callers inspect `code`.
 pub trait CommandRunner {
     fn run(&self, program: &str, args: &[&str]) -> Result<CommandOutput, Error>;
+
+    /// Run with inherited stdio so an interactive tool keeps the terminal.
+    /// Returns the exit code; nothing is captured.
+    fn run_interactive(&self, program: &str, args: &[&str]) -> Result<i32, Error>;
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -37,6 +41,14 @@ impl CommandRunner for SystemRunner {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }
+
+    fn run_interactive(&self, program: &str, args: &[&str]) -> Result<i32, Error> {
+        let status = Command::new(program)
+            .args(args)
+            .status()
+            .map_err(|err| Error::failed(format!("failed to run {program}: {err}")))?;
+        Ok(status.code().unwrap_or(-1))
+    }
 }
 
 pub type Call = (String, Vec<String>);
@@ -46,6 +58,7 @@ pub type Call = (String, Vec<String>);
 pub struct FakeRunner {
     calls: Mutex<Vec<Call>>,
     outputs: Mutex<VecDeque<CommandOutput>>,
+    interactive: Mutex<VecDeque<i32>>,
 }
 
 impl FakeRunner {
@@ -59,6 +72,14 @@ impl FakeRunner {
             .lock()
             .expect("fake runner output queue poisoned")
             .push_back(output);
+    }
+
+    /// Queue one interactive exit code. An empty queue returns 0.
+    pub fn push_interactive(&self, code: i32) {
+        self.interactive
+            .lock()
+            .expect("fake runner interactive queue poisoned")
+            .push_back(code);
     }
 
     /// Every call in order, as `(program, args)`.
@@ -86,6 +107,23 @@ impl CommandRunner for FakeRunner {
             .expect("fake runner output queue poisoned")
             .pop_front()
             .unwrap_or_default())
+    }
+
+    fn run_interactive(&self, program: &str, args: &[&str]) -> Result<i32, Error> {
+        self.calls
+            .lock()
+            .expect("fake runner call log poisoned")
+            .push((
+                program.to_string(),
+                args.iter().map(|arg| (*arg).to_string()).collect(),
+            ));
+
+        Ok(self
+            .interactive
+            .lock()
+            .expect("fake runner interactive queue poisoned")
+            .pop_front()
+            .unwrap_or(0))
     }
 }
 
@@ -123,6 +161,25 @@ mod tests {
         assert_eq!(first.code, 1);
         assert_eq!(first.stdout, "first");
         assert_eq!(second, CommandOutput::default());
+    }
+
+    #[test]
+    fn fake_runner_records_interactive_calls_and_replays_codes() {
+        let runner = FakeRunner::new();
+        runner.push_interactive(3);
+
+        let first = runner.run_interactive("yay", &["-Syuu"]).expect("fake run");
+        let second = runner.run_interactive("yay", &["-Syuu"]).expect("fake run");
+
+        assert_eq!(first, 3);
+        assert_eq!(second, 0);
+        assert_eq!(
+            runner.calls(),
+            vec![
+                ("yay".to_string(), vec!["-Syuu".to_string()]),
+                ("yay".to_string(), vec!["-Syuu".to_string()]),
+            ]
+        );
     }
 
     #[test]

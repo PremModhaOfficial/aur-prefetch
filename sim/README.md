@@ -24,6 +24,8 @@ Requires Docker or Podman. The container runs with `--network none`.
 - An empty download cache
 - `builder`, a non-root user whose only passwordless sudo command is
   `/usr/bin/pacman -Syuw --noconfirm`
+- `installer`, a sim-only user whose only rule is
+  `/usr/bin/pacman -Syu --noconfirm`, so yay's upgrade path can complete
 - `/usr/local/bin/yay`, a fake helper that logs every call to
   `/var/log/sim-yay.log`, escalates through `sudo -n pacman`, and fails with
   exit 97 if asked to build from the AUR or exit 98 if run as root
@@ -53,6 +55,8 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `09-check-pending.sh` | `check` exits 1, names the pending package, and writes nothing |
 | `10-check-clean.sh` | `check` exits 0 and writes nothing when the system is current |
 | `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
+| `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
+| `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

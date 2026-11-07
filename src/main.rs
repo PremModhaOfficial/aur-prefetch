@@ -24,7 +24,14 @@ enum Commands {
     /// Free-space gate, pacman -Syuw only
     Fetch,
     /// News gate, lock check, then yay -Syuu
-    Install,
+    Install {
+        /// Continue without a TTY. Required when stdin is not a terminal.
+        #[arg(long)]
+        yes: bool,
+        /// Proceed even when the trust file is empty.
+        #[arg(long)]
+        force: bool,
+    },
     /// Prune download cache, yay builds, logs, orphans
     Clean {
         /// Delete. Without this flag the command only reports.
@@ -41,7 +48,7 @@ fn main() -> ExitCode {
         Commands::Init => commands::init::run(),
         Commands::Check => commands::check::run(),
         Commands::Fetch => commands::fetch::run(),
-        Commands::Install => commands::install::run(),
+        Commands::Install { yes, force } => commands::install::run(yes, force),
         Commands::Clean { apply } => commands::clean::run(apply),
         Commands::Doctor => commands::doctor::run(),
     };

@@ -33,6 +33,12 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
         /var/log/sim-paccache.log /var/log/sim-pacdiff.log \
     && chmod 0666 /var/log/sim-*.log
 
+# Sim-only: the install scenario needs yay's pacman -Syu path to succeed
+# without a password prompt. `init` never writes this rule.
+RUN useradd --create-home --shell /bin/bash installer \
+    && printf 'installer ALL=(root) NOPASSWD: /usr/bin/pacman -Syu --noconfirm\n' >> /etc/sudoers.d/sim \
+    && visudo -cf /etc/sudoers.d/sim
+
 # Replace mirrors with the offline sim repo. Done after the builder stage so
 # only runtime has no network.
 COPY sim/pacman.conf /etc/pacman.conf
