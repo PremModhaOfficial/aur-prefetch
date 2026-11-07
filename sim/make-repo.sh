@@ -57,12 +57,15 @@ EOF
 build_pkg "$OLD"
 repo-add "$REPO/sim.db.tar.gz" "$REPO/$PKG-$OLD-1-x86_64.pkg.tar.zst" >/dev/null
 
-pacman -Sy --noconfirm >/dev/null
+# -Syy, not -Sy: the second repo-add can land in the same wall-clock second
+# as the first refresh, and pacman then skips the file:// db as "not newer".
+# Forcing the refresh is what makes the upgrade reliably visible.
+pacman -Syy --noconfirm >/dev/null
 pacman -S --noconfirm "$PKG" >/dev/null
 
 build_pkg "$NEW"
 repo-add "$REPO/sim.db.tar.gz" "$REPO/$PKG-$NEW-1-x86_64.pkg.tar.zst" >/dev/null
-pacman -Sy --noconfirm >/dev/null
+pacman -Syy --noconfirm >/dev/null
 
 rm -rf "$WORK"
 rm -f /var/cache/pacman/pkg/*
