@@ -13,13 +13,18 @@ const AURBUILD: &str = "/var/lib/aurbuild";
 const ARCHBUILD: &str = "/var/lib/archbuild";
 
 pub fn run(apply: bool) -> Result<(), Error> {
-    let config = Config::from_env()?;
+    let mut config = Config::from_env()?;
     if apply {
         let euid = SystemRunner.run("id", &["-u"])?;
         if euid.stdout.trim() != "0" {
             return Err(Error::blocked(
                 "clean --apply needs root for the download cache; run `sudo aur-prefetch clean --apply`",
             ));
+        }
+    }
+    if std::env::var("AUR_PREFETCH_YAY_CACHE_DIR").is_err() {
+        if let Ok(user) = std::env::var("SUDO_USER") {
+            config.yay_cache_dir = PathBuf::from("/home").join(user).join(".cache/yay");
         }
     }
     run_with(&config, &SystemRunner, apply)
@@ -125,21 +130,25 @@ fn report_only(runner: &dyn CommandRunner) -> Result<(), Error> {
         ("aurbuild chroot", AURBUILD),
         ("archbuild chroot", ARCHBUILD),
     ] {
-        match runner.run("du", &["-sb", path]) {
-            Ok(output) if output.code == 0 => {
-                let bytes = output
-                    .stdout
-                    .split_whitespace()
-                    .next()
-                    .and_then(|value| value.parse::<u64>().ok());
-                match bytes {
-                    Some(bytes) => {
-                        println!("clean: {label}: {} (report only)", human_bytes(bytes));
-                    }
-                    None => println!("clean: {label}: unreadable (report only)"),
-                }
+        let output = runner.run("du", &["-sb", path])?;
+        if output.code != 0 {
+            if Path::new(path).exists() {
+                return Err(Error::failed(format!(
+                    "cannot measure {path}: {}",
+                    output.stderr.trim()
+                )));
             }
-            _ => println!("clean: {label}: absent"),
+            println!("clean: {label}: absent");
+            continue;
+        }
+        let bytes = output
+            .stdout
+            .split_whitespace()
+            .next()
+            .and_then(|value| value.parse::<u64>().ok());
+        match bytes {
+            Some(bytes) => println!("clean: {label}: {} (report only)", human_bytes(bytes)),
+            None => println!("clean: {label}: unreadable (report only)"),
         }
     }
 
