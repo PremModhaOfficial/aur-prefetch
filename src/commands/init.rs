@@ -1,4 +1,6 @@
 use std::fs;
+use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
@@ -290,6 +292,20 @@ fn write_atomic(path: &Path, contents: &str) -> Result<(), Error> {
     })
 }
 
+/// Create a new file that is not writable by group or other, even with a
+/// permissive umask. The sudo path validates this file and later installs it as
+/// root, so another local user must not be able to change it in between.
+fn write_private(path: &Path, contents: &str) -> Result<(), Error> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|err| Error::failed(format!("cannot create {}: {err}", path.display())))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|err| Error::failed(format!("cannot write {}: {err}", path.display())))
+}
+
 fn install_sudoers_with_sudo(
     runner: &dyn CommandRunner,
     sudoers: &str,
@@ -323,8 +339,7 @@ fn install_sudoers_with_sudo_in(
         std::process::id(),
         now_nanos()
     )));
-    fs::write(temp.path(), sudoers)
-        .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.path().display())))?;
+    write_private(temp.path(), sudoers)?;
 
     // Validate as root: visudo checks the file's owner and mode, and some
     // builds refuse a user-owned file in /tmp. The user already expects a
@@ -352,6 +367,7 @@ fn install_sudoers_with_sudo_in(
         ],
     )?;
     if code != 0 {
+        let _ = runner.run_interactive("sudo", &["rm", "-f", path_str(&staged)?]);
         return Err(Error::failed(
             "sudo could not stage the sudoers rule; run `sudo visudo -f /etc/sudoers.d/aur-prefetch` manually",
         ));
@@ -377,7 +393,7 @@ mod tests {
 
     use super::{
         Setup, current_user, install_sudoers, install_sudoers_with_sudo_in, render_service,
-        run_with, write_atomic,
+        run_with, write_atomic, write_private,
     };
     use crate::config::Config;
     use crate::error::Error;
@@ -776,6 +792,69 @@ mod tests {
             fs::read_dir(&temp).expect("read temp dir").count(),
             0,
             "a rejection must not leave the rendered rule behind"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn the_temp_rule_is_private_from_creation() {
+        let dir = temp_dir();
+        let path = dir.join("rule");
+
+        write_private(
+            &path,
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+        )
+        .expect("write private rule");
+
+        let mode = fs::metadata(&path)
+            .expect("rule metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "the rule must not be writable by others");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_failed_stage_removes_the_hidden_file() {
+        let dir = temp_dir();
+        let temp = dir.join("tmp");
+        fs::create_dir_all(&temp).expect("temp dir");
+        let parent = dir.join("sudoers.d");
+        fs::create_dir_all(&parent).expect("sudoers dir");
+        let target = parent.join("aur-prefetch");
+        let runner = FakeRunner::new();
+        runner.push_interactive(0); // visudo accepts
+        runner.push_interactive(1); // install fails
+        runner.push_interactive(0); // cleanup
+
+        let result = install_sudoers_with_sudo_in(
+            &runner,
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            &target,
+            &parent,
+            &temp,
+        );
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        let calls = runner.calls();
+        assert_eq!(
+            calls.len(),
+            3,
+            "the install failure must clean up: {calls:?}"
+        );
+        assert_eq!(calls[2].0, "sudo");
+        assert_eq!(&calls[2].1[..2], ["rm", "-f"]);
+        assert!(
+            calls[2].1[2].starts_with(&format!(
+                "{}/.aur-prefetch-sudoers-install-",
+                parent.display()
+            )),
+            "the hidden staged rule is removed: {:?}",
+            calls[2]
         );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
