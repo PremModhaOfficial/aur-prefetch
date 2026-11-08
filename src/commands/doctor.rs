@@ -36,9 +36,11 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     problems += report_cache_dir(&cache_dir)?;
     problems += report_journald(config)?;
     problems += report_snapper(config, runner)?;
-    problems += report_disk(runner, &cache_dir, config.min_free_bytes)?;
-    if cache_dir != PathBuf::from("/") {
-        problems += report_disk(runner, Path::new("/"), config.min_free_bytes)?;
+    if cache_dir.exists() {
+        problems += report_disk(runner, &cache_dir, config.min_free_bytes)?;
+        if cache_dir != PathBuf::from("/") {
+            problems += report_disk(runner, Path::new("/"), config.min_free_bytes)?;
+        }
     }
 
     if problems == 0 {
@@ -95,17 +97,47 @@ fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
 }
 
 fn sudo_list_ok(text: &str) -> bool {
-    text.contains("NOPASSWD: /usr/bin/pacman -Syuw --noconfirm") && !text.contains("NOPASSWD: ALL")
+    let mut exact = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.contains("NOPASSWD: ALL") || line.contains("ALL=(ALL)") || line.contains('*') {
+            return false;
+        }
+        let Some(command) = line.strip_prefix("(root) NOPASSWD:") else {
+            continue;
+        };
+        if command.trim() == "/usr/bin/pacman -Syuw --noconfirm" {
+            exact = true;
+        } else {
+            return false;
+        }
+    }
+    exact
 }
 
 fn sudoers_rule_ok(text: &str) -> bool {
-    text.lines().any(|line| {
+    let mut exact = false;
+    for line in text.lines() {
         let line = line.trim();
-        !line.starts_with('#')
-            && line.contains("ALL=(root)")
-            && line.ends_with("NOPASSWD: /usr/bin/pacman -Syuw --noconfirm")
-            && !line.contains("NOPASSWD: ALL")
-    })
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.contains("NOPASSWD: ALL") || line.contains("ALL=(ALL)") || line.contains('*') {
+            return false;
+        }
+        if !line.contains("ALL=(root)") {
+            continue;
+        }
+        let Some((_, command)) = line.split_once("NOPASSWD:") else {
+            return false;
+        };
+        if command.trim() == "/usr/bin/pacman -Syuw --noconfirm" {
+            exact = true;
+        } else {
+            return false;
+        }
+    }
+    exact
 }
 
 fn report_trust(config: &Config) -> Result<u32, Error> {
@@ -262,7 +294,7 @@ fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
         return Ok(0);
     }
 
-    let system_timers = runner.run("systemctl", &["list-timers", "--all"])?;
+    let system_timers = runner.run("systemctl", &["list-timers"])?;
     let mut problems = 0;
     let timers_ok = ["snapper-timeline.timer", "snapper-cleanup.timer"]
         .iter()
