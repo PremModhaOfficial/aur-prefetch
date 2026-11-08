@@ -41,6 +41,9 @@ repository secret, `.pr_agent.toml` policy.
 | D20 | Image pin | `pragent/pr-agent@sha256:b1ed6e8d…` | Immutable; matches tag `0.49.0-github_action` | `[VERIFIED: Docker Hub tag API, manifest digest, 2026-10-25]` |
 | D21 | Concurrency | Per PR/issue, no cancel | A skipped command must not cancel a queued review | `[VERIFIED: upstream pr-agent-review.yaml comment]` |
 | D22 | Policy file | `.pr_agent.toml` with repo-specific blocking rules | Carries the pacman invariants from AGENTS.md and context.md into every review | `[VERIFIED: repo files and configuration.toml key names]` |
+| D23 | Finding shape | `inline_key_issues = true` | Findings as file:line comments an agent can act on, not prose buried in a summary | `[VERIFIED: configuration.toml line 200]` |
+| D24 | Verdict fields | `require_risk_assessment = true`, `require_merge_recommendation = true` | Typed risk level and merge verdict, so an agent gets a decision without parsing prose | `[VERIFIED: configuration.toml lines 183-184]` |
+| D25 | Large PRs | `enable_large_pr_chunking = true`, `max_number_of_calls = 3` | Chunk instead of skip or truncate | `[VERIFIED: configuration.toml lines 216-217]` |
 
 ## Not-done ledger
 
@@ -54,6 +57,9 @@ repository secret, `.pr_agent.toml` policy.
 | N6 | Ollama or another local model | Needs an always-on host; user chose Command Code | `[VERIFIED: user directive]` |
 | N7 | Auto-merge or auto-approve | Review is advisory; approval stays human | `[VERIFIED: enable_auto_approval default false]` |
 | N8 | `workflow_run` CI-conclusion trigger | Doubles runs; the chosen trigger set matches the user's "describe + review on open" choice | `[VERIFIED: github_action_runner.py workflow_run branch]` |
+| N9 | Review on every push (`synchronize`) | User: per-PR review is enough | `[VERIFIED: user instruction]` |
+| N10 | Path filters for `target/**`, `Cargo.lock` | User: those paths are reviewed too | `[VERIFIED: user instruction]` |
+| N11 | Per-directory `.pr_agent.toml` rules | Not requested; one global policy is enough | `[VERIFIED: user instruction]` |
 
 ## Coverage
 
@@ -70,6 +76,29 @@ Coverage script: `coverage_diff.py` against `configuration.toml` reported many
 `GAP` rows for the `[N/A]` group above and `SINGLE-SOURCE` because only one
 machine-readable source was supplied. Both are recorded here, not hidden. The
 Provider API facts were checked against the live endpoint instead of a file.
+
+## Agent experience (AX)
+
+The surface is built agent-first: a coding agent reads the PR comment and acts;
+a human reads it second.
+
+| Role | How it is served |
+|---|---|
+| Reader | `.github/PR-AGENT.md` is the reference; policy loads from `main`; repo context bounded at 900 lines |
+| Developer | Inline file:line findings, typed risk and merge verdict, one persistent comment, deterministic `/review` and `/describe` commands |
+| End user (agent) | Machine-readable state over prose; merge stays a human action; CI and Sim remain the gates |
+
+Invariants applied:
+
+- Typed contracts over prose: `require_risk_assessment`,
+  `require_merge_recommendation`, `inline_key_issues`.
+- Recovery-shaped failures: a failed tool fails the check and posts a failure
+  comment; it never turns green.
+- Machine-readable state: one persistent comment with stable keys, not a thread
+  an agent has to reconstruct.
+- Trust boundary closed by default: rules and config from `main`, fork PRs
+  skipped, commands limited to OWNER, MEMBER, COLLABORATOR.
+- Prose guides, gates guarantee: the bot advises; CI and Sim enforce.
 
 ## Verification
 
@@ -89,6 +118,7 @@ Provider API facts were checked against the live endpoint instead of a file.
 | pr-agent `review` on PR #12, reasoning off | completed in 22s |
 | Env spelling `CONFIG__MODEL`, `CONFIG__REASONING_EFFORT`, `CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS`, `GITHUB_ACTION_CONFIG__AUTO_IMPROVE`, `OPENAI__API_BASE` | all read by `get_settings()`; same spelling as upstream's own workflow |
 | Full review with the exact workflow env, dunder names, reasoning max | 509s, review generated, not published |
+| New AX fields (`inline_key_issues`, risk, merge verdict, chunking) | keys verified in configuration.toml; first live run is the next PR after merge |
 | Workflow on PR #19 | success, 400s, all 6 checks passed, review comment posted |
 
 ## Open items

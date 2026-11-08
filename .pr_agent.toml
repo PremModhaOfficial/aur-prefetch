@@ -40,6 +40,14 @@ response_language = "en-US"
 [pr_reviewer]
 num_max_findings = 5
 require_tests_review = true
+# Agent-first output (AX): file:line findings plus typed risk and merge-verdict
+# fields that a coding agent can act on without parsing prose.
+inline_key_issues = true
+require_risk_assessment = true
+require_merge_recommendation = true
+# Large PRs are chunked instead of skipped or truncated.
+enable_large_pr_chunking = true
+max_number_of_calls = 3
 extra_instructions = """
 This repo is a Rust CLI that splits Arch Linux updates into a background
 download (`fetch`) and a foreground install (`install`). AGENTS.md, NEXT.md, and
