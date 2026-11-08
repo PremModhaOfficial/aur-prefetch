@@ -63,6 +63,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `11-doctor-missing-setup.sh` | `doctor` exits 1 and names the timer, sudoers, trust, and repo problems |
 | `12-doctor-configured.sh` | `doctor` exits 0 on a configured container |
 | `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
+| `13-check-missing-cache-dir.sh` | a missing `CacheDir` makes `check` exit 1 instead of failing on `df` |
 | `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
 | `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |
 | `16-init-setup.sh` | `init` renders without writing, applies with `visudo` approval, and never runs `aurto` |

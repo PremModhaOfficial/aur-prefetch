@@ -38,9 +38,10 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     problems += report_snapper(config, runner)?;
     if cache_dir.exists() {
         problems += report_disk(runner, &cache_dir, config.min_free_bytes)?;
-        if cache_dir != PathBuf::from("/") {
-            problems += report_disk(runner, Path::new("/"), config.min_free_bytes)?;
-        }
+    }
+    // The root floor still matters when the configured CacheDir is missing.
+    if cache_dir != PathBuf::from("/") {
+        problems += report_disk(runner, Path::new("/"), config.min_free_bytes)?;
     }
 
     if problems == 0 {
@@ -704,6 +705,36 @@ mod tests {
         let result = run_with(&config, &runner);
 
         assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn the_root_disk_is_checked_when_the_cache_dir_is_missing() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        let cache = dir.join("cache");
+        fs::remove_dir_all(&cache).expect("remove cache dir");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("1000\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+        let df_paths: Vec<String> = runner
+            .calls()
+            .into_iter()
+            .filter(|(program, _)| program == "df")
+            .map(|(_, args)| args.last().cloned().unwrap_or_default())
+            .collect();
+        assert_eq!(df_paths, vec!["/".to_string()]);
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

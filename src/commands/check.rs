@@ -53,7 +53,17 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     }
 
     let cache_dir = resolve_cache_dir(config, runner)?;
-    if report_disk(runner, &cache_dir, config.min_free_bytes)? {
+    if cache_dir.exists() {
+        if report_disk(runner, &cache_dir, config.min_free_bytes)? {
+            actionable += 1;
+        }
+    } else {
+        // A missing CacheDir is action needed, not an execution error. `df`
+        // would exit non-zero and turn this into exit 2.
+        println!(
+            "check: disk {}: not checked (cache dir is missing)",
+            cache_dir.display()
+        );
         actionable += 1;
     }
     if cache_dir != PathBuf::from("/")
@@ -471,6 +481,45 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Failed(_))));
         assert_eq!(result.unwrap_err().exit_code(), 2);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_missing_cache_dir_is_actionable_not_an_execution_error() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let missing = dir.join("missing-cache");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
+        runner.push_output(ok(&format!("{}\n", missing.to_string_lossy())));
+        runner.push_output(ok("107374182400 53687091200\n"));
+        runner.push_output(ok("6553600 3200000\n"));
+        for _ in 0..5 {
+            runner.push_output(ok("1048576\n"));
+        }
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+        assert_eq!(result.unwrap_err().exit_code(), 1);
+
+        // Only the root filesystem is probed; `df` never sees the missing path.
+        let df_paths: Vec<String> = runner
+            .calls()
+            .into_iter()
+            .filter(|(program, _)| program == "df")
+            .map(|(_, args)| args.last().cloned().unwrap_or_default())
+            .collect();
+        assert!(!df_paths.is_empty(), "the root disk is still checked");
+        assert!(
+            df_paths.iter().all(|path| path == "/"),
+            "df was called on the missing cache dir: {df_paths:?}"
+        );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
