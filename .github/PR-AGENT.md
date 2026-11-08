@@ -43,8 +43,10 @@ repository secret, `.pr_agent.toml` policy.
 | D22 | Policy file | `.pr_agent.toml` with repo-specific blocking rules | Carries the pacman invariants from AGENTS.md and context.md into every review | `[VERIFIED: repo files and configuration.toml key names]` |
 | D23 | Finding shape | `inline_key_issues = true` | Findings as file:line comments an agent can act on, not prose buried in a summary | `[VERIFIED: configuration.toml line 200]` |
 | D24 | Verdict fields | `require_risk_assessment = true`, `require_merge_recommendation = true` | Typed risk level and merge verdict, so an agent gets a decision without parsing prose | `[VERIFIED: configuration.toml lines 183-184]` |
-| D25 | Large PRs | `enable_large_pr_chunking = true`, `max_number_of_calls = 3` | Chunk instead of skip or truncate | `[VERIFIED: configuration.toml lines 216-217]` |
+| D25 | Large PRs | `enable_large_pr_chunking = true`, `max_number_of_calls = 3` | Chunk instead of skip or truncate. Chunks beyond the cap land in `remaining_files_list`, and the coverage footer lists them; the footer stays enabled so a partial review is never silent | `[VERIFIED: configuration.toml lines 216-217; pr_processing.py _pack_pr_multi_diffs; pr_reviewer.py coverage footer]` |
 | D26 | AX contract | `AGENTS.md` section "Agent review surface" | An agent entering the repo learns triggers, commands, output fields, authority, and failure semantics without reading the workflow | `[VERIFIED: AGENTS.md]` |
+| D27 | Output trim | `require_estimate_effort_to_review = false`, `require_ticket_analysis_review = false`, `enable_intro_text = false` | Drop rows that only help human triage; keep findings, tests, security, risk, and verdict | `[VERIFIED: configuration.toml lines 176, 181, 211]` |
+| D28 | Agent state CLI | `scripts/review-state.sh` | Reads the `pr-agent-review-state:v1` typed block: head staleness, coverage, finding counts, `path:line`; TOON-ish output, exit codes, `--help`, `--version` | `[VERIFIED: review comment state block; script tests]` |
 
 ## Not-done ledger
 
@@ -61,6 +63,7 @@ repository secret, `.pr_agent.toml` policy.
 | N9 | Review on every push (`synchronize`) | User: per-PR review is enough | `[VERIFIED: user instruction]` |
 | N10 | Path filters for `target/**`, `Cargo.lock` | User: those paths are reviewed too | `[VERIFIED: user instruction]` |
 | N11 | Per-directory `.pr_agent.toml` rules | Not requested; one global policy is enough | `[VERIFIED: user instruction]` |
+| N12 | TOON for the bot's own PR comment | The comment format is pr-agent's; the state command emits the compact form instead | `[VERIFIED: pr_reviewer prompts and renderer]` |
 
 ## Coverage
 
@@ -93,7 +96,10 @@ surface".
 Invariants applied:
 
 - Typed contracts over prose: `require_risk_assessment`,
-  `require_merge_recommendation`, `inline_key_issues`.
+  `require_merge_recommendation`, `inline_key_issues`, and the
+  `pr-agent-review-state:v1` block the bot embeds in its comment.
+- State command: `scripts/review-state.sh` turns that block into compact state:
+  head staleness, coverage, finding counts, and `path:line` rows.
 - Recovery-shaped failures: a failed tool fails the check and posts a failure
   comment; it never turns green.
 - Machine-readable state: one persistent comment with stable keys, not a thread
@@ -122,6 +128,8 @@ Invariants applied:
 | Full review with the exact workflow env, dunder names, reasoning max | 509s, review generated, not published |
 | New AX fields (`inline_key_issues`, risk, merge verdict, chunking) | keys verified in configuration.toml; first live run is the next PR after merge |
 | Workflow on PR #19 | success, 400s, all 6 checks passed, review comment posted |
+| `scripts/review-state.sh` on PR #20 | 1 finding, stale true, coverage full, `path:line` table |
+| State command empty / usage / error paths | 0-PR message exit 0; unknown flag exit 2; missing PR exit 1 |
 
 ## Open items
 
