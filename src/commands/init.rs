@@ -295,14 +295,13 @@ fn install_sudoers_with_sudo_in(
     fs::write(temp.path(), sudoers)
         .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.path().display())))?;
 
-    // `visudo -cf` is a syntax check, so it runs as the invoking user. It is
-    // the only option before the rule exists; validating after the write is
-    // too late. Scenario 20 proves this path as the unprivileged builder.
-    let check = runner.run("visudo", &["-cf", path_str(temp.path())?])?;
-    if check.code != 0 {
+    // Validate as root: visudo checks the file's owner and mode, and some
+    // builds refuse a user-owned file in /tmp. The user already expects a
+    // sudo prompt for the rule install; validation is part of that install.
+    let check = runner.run_interactive("sudo", &["visudo", "-cf", path_str(temp.path())?])?;
+    if check != 0 {
         return Err(Error::failed(format!(
-            "visudo rejected the sudoers rule: {}",
-            check.stderr.trim()
+            "sudo visudo rejected the sudoers rule (exit {check}); run `sudo visudo -f /etc/sudoers.d/aur-prefetch` manually"
         )));
     }
 
@@ -577,7 +576,6 @@ mod tests {
         fs::set_permissions(&sudoers_dir, fs::Permissions::from_mode(0o555)).expect("chmod");
 
         let runner = FakeRunner::new();
-        runner.push_output(ok("")); // visudo accepts the staged copy in /tmp
 
         run_with(&config, &runner, setup(true)).expect("init");
 
@@ -588,11 +586,22 @@ mod tests {
             .collect();
         assert_eq!(
             sudo_calls.len(),
-            2,
-            "init must sudo exactly twice: {sudo_calls:?}"
+            3,
+            "init must sudo exactly three times: {sudo_calls:?}"
         );
 
-        let install = &sudo_calls[0].1;
+        let visudo = &sudo_calls[0].1;
+        assert_eq!(&visudo[..2], ["visudo", "-cf"]);
+        assert!(
+            Path::new(&visudo[2])
+                .file_name()
+                .map(|name| name.to_string_lossy().starts_with("aur-prefetch-sudoers-"))
+                .unwrap_or(false),
+            "visudo validates the private temp file: {}",
+            visudo[2]
+        );
+
+        let install = &sudo_calls[1].1;
         assert_eq!(&install[..3], ["install", "-m", "0440"]);
         let temp = Path::new(&install[3]);
         assert!(
@@ -609,7 +618,7 @@ mod tests {
             "the rule is staged in the same directory: {staged}"
         );
 
-        let mv = &sudo_calls[1].1;
+        let mv = &sudo_calls[2].1;
         assert_eq!(
             mv,
             &vec![
@@ -646,6 +655,41 @@ mod tests {
             fs::read_dir(&temp).expect("read temp dir").count(),
             0,
             "a spawn error must not leave the rendered rule in the temp dir"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_sudo_visudo_rejection_blocks_before_staging() {
+        let dir = temp_dir();
+        let temp = dir.join("tmp");
+        fs::create_dir_all(&temp).expect("temp dir");
+        let parent = dir.join("sudoers.d");
+        fs::create_dir_all(&parent).expect("sudoers dir");
+        let target = parent.join("aur-prefetch");
+
+        let runner = FakeRunner::new();
+        runner.push_interactive(1);
+
+        let result = install_sudoers_with_sudo_in(
+            &runner,
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            &target,
+            &parent,
+            &temp,
+        );
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 1, "only sudo visudo may run: {calls:?}");
+        assert_eq!(calls[0].0, "sudo");
+        assert_eq!(&calls[0].1[..2], ["visudo", "-cf"]);
+        assert!(!target.exists(), "a rejected rule must not be installed");
+        assert_eq!(
+            fs::read_dir(&temp).expect("read temp dir").count(),
+            0,
+            "a rejection must not leave the rendered rule behind"
         );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");

@@ -25,7 +25,7 @@ assert_false "a refused sudo run wrote no root unit" test -e /root/.config/syste
 # pid/nanos suffix, so the rule matches the prefix.
 printf '%s\n' \
     'Defaults logfile=/var/log/sim-sudo.log' \
-    'builder ALL=(root) NOPASSWD: /usr/bin/install -m 0440 /tmp/aur-prefetch-sudoers-* /etc/sudoers.d/.aur-prefetch-sudoers-install-*, /usr/bin/mv /etc/sudoers.d/.aur-prefetch-sudoers-install-* /etc/sudoers.d/aur-prefetch' \
+    'builder ALL=(root) NOPASSWD: /usr/bin/visudo -cf /tmp/aur-prefetch-sudoers-*, /usr/bin/install -m 0440 /tmp/aur-prefetch-sudoers-* /etc/sudoers.d/.aur-prefetch-sudoers-install-*, /usr/bin/mv /etc/sudoers.d/.aur-prefetch-sudoers-install-* /etc/sudoers.d/aur-prefetch' \
     >/etc/sudoers.d/sim-init
 chmod 0440 /etc/sudoers.d/sim-init
 if ! visudo -cf /etc/sudoers.d/sim-init >/dev/null 2>&1; then
@@ -61,6 +61,7 @@ assert_contains "$(cat /home/builder/.config/systemd/user/aur-prefetch.service)"
 assert_eq "$(find /home/builder/.config/systemd/user -maxdepth 1 -name '.*' | wc -l | tr -d ' ')" "0" "no hidden unit temp remains"
 
 sudo_log=$(tr '\n' ' ' </var/log/sim-sudo.log 2>/dev/null | tr -s ' ' || true)
+assert_contains "$sudo_log" "COMMAND=/usr/bin/visudo -cf /tmp/aur-prefetch-sudoers-" "the rendered rule was validated by root visudo"
 assert_contains "$sudo_log" "COMMAND=/usr/bin/install -m 0440 /tmp/aur-prefetch-sudoers-" "the rule was staged with the exact install argv"
 assert_contains "$sudo_log" " /etc/sudoers.d/.aur-prefetch-sudoers-install-" "the staged file is hidden from sudo's include dir"
 assert_contains "$sudo_log" "COMMAND=/usr/bin/mv /etc/sudoers.d/.aur-prefetch-sudoers-install-" "the staged rule was moved into place"
