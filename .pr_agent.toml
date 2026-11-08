@@ -23,8 +23,11 @@ reasoning_effort = "max"
 # LiteLLM does not know this id, so pr-agent only forwards reasoning_effort when
 # the id is listed here (configuration.toml: additional_reasoning_effort_models).
 additional_reasoning_effort_models = ["openai/deepseek/deepseek-v4.1-flash"]
-# Default is 120s, far shorter than a measured max-reasoning review (498s).
-ai_timeout = 1800
+# Default is 120s, far shorter than a measured max-reasoning review (498-509s).
+# Worst case is bounded: a timeout goes to the fallback entry (same model) once,
+# so 2 x 900s = 30 min, under the workflow's 45-minute job timeout.
+ai_timeout = 900
+retry_same_model_on_timeout = false
 
 # Read the rules from the default branch, never from the PR branch, so a PR
 # cannot rewrite the rules it is judged by.

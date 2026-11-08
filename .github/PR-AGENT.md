@@ -28,7 +28,7 @@ repository secret, `.pr_agent.toml` policy.
 | D7 | Context window | `custom_model_max_tokens = 1000000` | pr-agent refuses an unknown id without a declared window | `[MEASURED: "Model ... is not defined in MAX_TOKENS ... set config.custom_model_max_tokens"]`; `[VERIFIED: live models list context_length=1000000]` |
 | D8 | Input cap | `max_model_tokens = 256000` | Input and output share this budget; 256k leaves 128k of input after the 128k output cap. The measured prompt is ~14k | `[VERIFIED: configuration.toml line 50 meaning]`; `[MEASURED: "leaves no input capacity" at 64k/64k]` |
 | D9 | Output cap | `max_output_tokens = 128000` | Max reasoning consumed 70,483 tokens; a 64k cap returned empty content with `finish_reason=length`, 128k finished | `[VERIFIED: configuration.toml line 60]`; `[MEASURED: 64k empty, 128k success]` |
-| D10 | Request timeout | `ai_timeout = 1800` | Measured max-reasoning review: 498s. Default 120s is far too short | `[VERIFIED: configuration.toml line 27 default 120]`; `[MEASURED: 498s]` |
+| D10 | Request timeout | `ai_timeout = 900`, `retry_same_model_on_timeout = false` | Measured max review: 400-509s. Worst case is primary + one fallback entry (same model) = 2 x 900s = 30 min, under the 45-minute job timeout. Same-model replay on timeout would make it 4 attempts = 60 min | `[VERIFIED: configuration.toml line 27 default 120; _should_retry_same_model; retry_with_fallback_models]`; `[MEASURED: 400s on PR #19, 498-509s locally]` |
 | D11 | Fallback | Same model only | Failures retry the chosen model; no silent switch to another vendor | `[VERIFIED: configuration.toml fallback_models]` |
 | D12 | Auto tools | `/describe` and `/review` on open; `/improve` manual | Chosen by the user; lowest quota, no committable suggestions | `[VERIFIED: github_action_config.auto_* defaults in github_action_runner.py]` |
 | D13 | Failure semantics | A recorded tool failure fails the check | No green check without a review | `[VERIFIED: github_action_runner.py _fail_on_recorded_tool_error, default true]` |
@@ -89,22 +89,19 @@ Provider API facts were checked against the live endpoint instead of a file.
 | pr-agent `review` on PR #12, reasoning off | completed in 22s |
 | Env spelling `CONFIG__MODEL`, `CONFIG__REASONING_EFFORT`, `CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS`, `GITHUB_ACTION_CONFIG__AUTO_IMPROVE`, `OPENAI__API_BASE` | all read by `get_settings()`; same spelling as upstream's own workflow |
 | Full review with the exact workflow env, dunder names, reasoning max | 509s, review generated, not published |
-| Workflow on GitHub | **not yet run** — secret not set |
+| Workflow on PR #19 | success, 400s, all 6 checks passed, review comment posted |
 
 ## Open items
 
-1. `COMMAND_CODE_API_KEY` is not set. Until it is, the `Review` check fails at
-   the API call. This is intentional: a missing key is not a green check.
-2. Reasoning latency: max measured 498s on an 8,164-token diff. A larger diff,
-   or the extra repo-context lines in CI, can push toward `ai_timeout` (1800s)
-   or exhaust `max_output_tokens` (128k). Worst case is one failed attempt plus
-   a same-model retry, still under the 45-minute job timeout. Watch for
+1. Reasoning latency: max measured 400s on PR #19 and 498-509s locally on the
+   same diff. The retry budget is 2 x 900s = 30 min, under the 45-minute job
+   timeout. A larger diff can still time out; the check fails loudly. Watch for
    `finish_reason=length` in the Action log. `[UNVERIFIABLE]` without a larger PR.
-3. Docker Hub anonymous pull limits on GitHub runners. `[UNVERIFIABLE]`; a limit
+2. Docker Hub anonymous pull limits on GitHub runners. `[UNVERIFIABLE]`; a limit
    fails the job loudly.
-4. Provider API access is plan-gated (every plan except Go). The key used for
-   local tests worked; the CI key must come from a plan with API access.
-   `[VERIFIED: Provider API docs]` + `[MEASURED: local calls succeeded]`.
+3. Provider API access is plan-gated (every plan except Go). The key used for
+   local tests and PR #19 worked; the CI key must come from a plan with API
+   access. `[VERIFIED: Provider API docs]` + `[MEASURED: live calls succeeded]`.
 
 ## Rollback
 
