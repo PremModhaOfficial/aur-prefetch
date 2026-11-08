@@ -14,9 +14,9 @@ bin: $BIN
 description: Compact PR review state for agents
 
 usage:
-  review-state [<pr>] [--findings] [--full]
-  review-state --help
-  review-state --version
+  scripts/review-state.sh [<pr>] [--findings] [--full]
+  scripts/review-state.sh --help
+  scripts/review-state.sh --version
 
 flags:
   --findings  list findings as a TOON table
@@ -25,10 +25,10 @@ flags:
   --version   print the version only
 
 examples:
-  review-state
-  review-state 20
-  review-state 20 --findings
-  review-state 20 --full
+  scripts/review-state.sh
+  scripts/review-state.sh 20
+  scripts/review-state.sh 20 --findings
+  scripts/review-state.sh 20 --full
 EOF
 }
 
@@ -58,20 +58,27 @@ done
 command -v gh >/dev/null 2>&1 || err "gh is not installed" "install the GitHub CLI"
 command -v jq >/dev/null 2>&1 || err "jq is not installed" "install jq"
 
+GERR="$(mktemp)"
+trap 'rm -f "$GERR"' EXIT
+
 if [[ -z "$pr" ]]; then
-  pr="$(gh pr view --json number --jq .number 2>/dev/null || true)"
+  pr="$(gh pr view --json number --jq .number 2>"$GERR")"
   if [[ -z "$pr" ]]; then
-    branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-    printf 'pr: 0 open pull requests for branch %s\n' "$branch"
-    printf 'help[1]: push the branch and open a PR to get a review\n'
-    exit 0
+    if grep -qi "no pull requests found" "$GERR"; then
+      branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+      printf 'pr: 0 open pull requests for branch %s\n' "$branch"
+      printf 'help[1]: push the branch and open a PR to get a review\n'
+      exit 0
+    fi
+    err "gh pr view failed: $(head -1 "$GERR")" "run \`gh auth status\`"
   fi
 else
   [[ "$pr" =~ ^[0-9]+$ ]] || err "PR must be a number, got $pr" "run \`gh pr list\` to see numbers" 2
 fi
 
-meta="$(gh pr view "$pr" --json number,state,title,headRefOid,url 2>/dev/null)" \
-  || err "PR #$pr not found" "check the number or run \`gh pr list\`"
+if ! meta="$(gh pr view "$pr" --json number,state,title,headRefOid,url 2>"$GERR")"; then
+  err "PR #$pr not found: $(head -1 "$GERR")" "check the number or run \`gh pr list\`"
+fi
 
 number="$(jq -r '.number' <<<"$meta")"
 state="$(jq -r '.state' <<<"$meta")"
@@ -80,19 +87,28 @@ head="$(jq -r '.headRefOid[0:7]' <<<"$meta")"
 head_full="$(jq -r '.headRefOid' <<<"$meta")"
 url="$(jq -r '.url' <<<"$meta")"
 
-checks="$(gh pr checks "$pr" --json name,state 2>/dev/null || true)"
-[[ -n "$checks" ]] || checks='[]'
-jq -e . >/dev/null 2>&1 <<<"$checks" || checks='[]'
+checks="$(gh pr checks "$pr" --json name,state 2>"$GERR")"
+if [[ -z "$checks" ]]; then
+  if grep -qi "no checks reported" "$GERR"; then
+    checks='[]'
+  else
+    err "gh pr checks failed: $(head -1 "$GERR")" "run \`gh auth status\`"
+  fi
+fi
+jq -e . >/dev/null 2>&1 <<<"$checks" || err "gh pr checks returned invalid JSON" "rerun the command"
 
 total="$(jq 'length' <<<"$checks")"
 passed="$(jq '[.[] | select(.state == "SUCCESS")] | length' <<<"$checks")"
-failed="$(jq '[.[] | select(.state == "FAILURE" or .state == "CANCELLED" or .state == "TIMED_OUT" or .state == "ERROR")] | length' <<<"$checks")"
-pending="$(jq '[.[] | select(.state == "PENDING" or .state == "IN_PROGRESS" or .state == "QUEUED" or .state == "WAITING")] | length' <<<"$checks")"
+failed="$(jq '[.[] | select(.state == "FAILURE" or .state == "CANCELLED" or .state == "TIMED_OUT" or .state == "ERROR" or .state == "ACTION_REQUIRED" or .state == "STARTUP_FAILURE" or .state == "STALE")] | length' <<<"$checks")"
+pending="$(jq '[.[] | select(.state == "PENDING" or .state == "IN_PROGRESS" or .state == "QUEUED" or .state == "WAITING" or .state == "REQUESTED" or .state == "EXPECTED")] | length' <<<"$checks")"
 skipped="$(jq '[.[] | select(.state == "SKIPPED" or .state == "NEUTRAL")] | length' <<<"$checks")"
 
-review="$(gh pr view "$pr" --json comments \
+if ! review="$(gh pr view "$pr" --json comments \
   --jq '[.comments[] | select(.body | test("pr-agent-review-state|Risk level|Merge recommendation|PR Reviewer Guide"))] | last // {}' \
-  2>/dev/null || echo '{}')"
+  2>"$GERR")"; then
+  err "gh pr view comments failed: $(head -1 "$GERR")" "run \`gh auth status\`"
+fi
+[[ -n "$review" ]] || review='{}'
 
 review_body="$(jq -r '.body // ""' <<<"$review" 2>/dev/null || echo "")"
 review_url="$(jq -r '.url // ""' <<<"$review" 2>/dev/null || echo "")"
@@ -115,7 +131,13 @@ else
   findings_total="0"
   findings_active="0"
   review_head=""
-  if grep -q "Review coverage" <<<"$review_body"; then coverage="partial"; else coverage="full"; fi
+  if [[ -z "$review_body" ]]; then
+    coverage="unknown"
+  elif grep -q "Review coverage" <<<"$review_body"; then
+    coverage="partial"
+  else
+    coverage="full"
+  fi
 fi
 
 if [[ -n "$review_head" ]]; then
@@ -190,13 +212,13 @@ if [[ "$present" != "true" ]]; then
 elif [[ "$stale" == "true" ]]; then
   printf 'help[2]:\n'
   printf '  Review is stale for head %s; run `gh pr comment %s --body "/review"` to refresh\n' "$head" "$number"
-  printf '  Run `scripts/review-state %s --findings` to list findings\n' "$number"
+  printf '  Run `scripts/review-state.sh %s --findings` to list findings\n' "$number"
 elif [[ "$coverage" == "partial" ]]; then
   printf 'help[2]:\n'
   printf '  Coverage is partial; open the PR and read the coverage footer\n'
-  printf '  Run `scripts/review-state %s --findings` to list findings\n' "$number"
+  printf '  Run `scripts/review-state.sh %s --findings` to list findings\n' "$number"
 else
   printf 'help[2]:\n'
-  printf '  Run `scripts/review-state %s --findings` to list findings\n' "$number"
+  printf '  Run `scripts/review-state.sh %s --findings` to list findings\n' "$number"
   printf '  Run `gh pr view %s --web` to open the PR\n' "$number"
 fi
