@@ -250,6 +250,7 @@ mod tests {
     fn test_config(dir: &Path) -> Config {
         let mut map: HashMap<String, String> = HashMap::new();
         for (key, value) in [
+            ("HOME", dir.join("home")),
             ("AUR_PREFETCH_STATE", dir.join("state.json")),
             ("AUR_PREFETCH_PACMAN_LOCK", dir.join("db.lck")),
             ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", dir.join("snapper")),
