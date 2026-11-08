@@ -9,9 +9,10 @@ of waiting on your connection.
 
 ## Status
 
-Early. The CLI surface exists and all six subcommands are stubs. Nothing here
-has been run against a real Arch system yet. `AGENTS.md` lists the rules that
-apply while implementing, and `sim/` is where behaviour gets proven.
+Early. `fetch` and `check` are implemented and proven in `sim/`; `doctor`,
+`clean`, `install`, and `init` are still stubs. Nothing here has been run
+against a real Arch system yet. `AGENTS.md` lists the rules that apply while
+implementing, and `sim/` is where behaviour gets proven.
 
 ## Start here
 
@@ -37,6 +38,36 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch install` — news gate, lock check, then `yay -Syuu`
 - `aur-prefetch clean` — prune download cache, yay builds, logs, orphans
 - `aur-prefetch doctor` — verify timers, limits, repo, journald
+
+### `check`
+
+`check` is read-only: it writes neither state nor any cache it inspects. It
+reports pending official and AUR updates, free space and inodes on the download
+cache and `/`, the pacman lock, cache sizes, timer state, and the last
+fetch/install times. System-owned caches (`/var/cache/pacman/aurto`, aurutils
+chroots) that the invoking user cannot read are reported as unreadable but do
+not fail a healthy system; unreadable user caches do.
+
+Exit codes: `0` when clean, `1` when one or more checks need attention, `2`
+when a check could not run (for example `pacman -Qu` failed).
+
+## Environment overrides
+
+Every path can be overridden, which the tests and the simulation harness use.
+An empty value falls back to the default.
+
+| Variable | Default |
+|---|---|
+| `AUR_PREFETCH_PACMAN` | `/usr/bin/pacman` |
+| `AUR_PREFETCH_PACMAN_CONF` | `/etc/pacman.conf` |
+| `AUR_PREFETCH_PACMAN_CACHE_DIR` | `/var/cache/pacman/pkg` |
+| `AUR_PREFETCH_PACMAN_LOCK` | `/var/lib/pacman/db.lck` |
+| `AUR_PREFETCH_PACMAN_LOG` | `/var/log/pacman.log` |
+| `AUR_PREFETCH_YAY_CACHE_DIR` | `$XDG_CACHE_HOME/yay` or `~/.cache/yay` |
+| `AUR_PREFETCH_TRUSTED_USERS` | `/etc/aurto/trusted-users` |
+| `AUR_PREFETCH_SNAPPER_CONFIG_DIR` | `/etc/snapper/configs` |
+| `AUR_PREFETCH_STATE` | `$XDG_STATE_HOME/aur-prefetch/state.json` |
+| `AUR_PREFETCH_MIN_FREE_BYTES` | `2147483648` (2 GiB) |
 
 ## Rules the tool will not break
 

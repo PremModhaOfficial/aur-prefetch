@@ -12,6 +12,8 @@ pub struct Config {
     pub pacman_conf: PathBuf,
     pub pacman_cache_dir: PathBuf,
     pub pacman_lock: PathBuf,
+    pub pacman_log: PathBuf,
+    pub yay_cache_dir: PathBuf,
     pub trusted_users: PathBuf,
     pub snapper_config_dir: PathBuf,
     pub state_file: PathBuf,
@@ -58,6 +60,11 @@ impl Config {
                 "AUR_PREFETCH_PACMAN_LOCK",
                 "/var/lib/pacman/db.lck",
             ),
+            pacman_log: path_or(&lookup, "AUR_PREFETCH_PACMAN_LOG", "/var/log/pacman.log"),
+            yay_cache_dir: match non_empty(&lookup, "AUR_PREFETCH_YAY_CACHE_DIR") {
+                Some(path) => PathBuf::from(path),
+                None => default_cache_dir(&lookup)?.join("yay"),
+            },
             trusted_users: path_or(
                 &lookup,
                 "AUR_PREFETCH_TRUSTED_USERS",
@@ -85,6 +92,21 @@ where
         Some(home) => Ok(PathBuf::from(home).join(".local/state")),
         None => Err(Error::failed(
             "HOME is not set; cannot locate the state file",
+        )),
+    }
+}
+
+fn default_cache_dir<F>(lookup: &F) -> Result<PathBuf, Error>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(dir) = non_empty(lookup, "XDG_CACHE_HOME") {
+        return Ok(PathBuf::from(dir));
+    }
+    match non_empty(lookup, "HOME") {
+        Some(home) => Ok(PathBuf::from(home).join(".cache")),
+        None => Err(Error::failed(
+            "HOME is not set; cannot locate the yay cache",
         )),
     }
 }
@@ -129,6 +151,8 @@ mod tests {
             PathBuf::from("/var/cache/pacman/pkg")
         );
         assert_eq!(config.pacman_lock, PathBuf::from("/var/lib/pacman/db.lck"));
+        assert_eq!(config.pacman_log, PathBuf::from("/var/log/pacman.log"));
+        assert_eq!(config.yay_cache_dir, PathBuf::from("/home/user/.cache/yay"));
         assert_eq!(
             config.trusted_users,
             PathBuf::from("/etc/aurto/trusted-users")
@@ -151,6 +175,8 @@ mod tests {
             ("AUR_PREFETCH_PACMAN_CONF", "/tmp/pacman.conf"),
             ("AUR_PREFETCH_PACMAN_CACHE_DIR", "/tmp/cache"),
             ("AUR_PREFETCH_PACMAN_LOCK", "/tmp/db.lck"),
+            ("AUR_PREFETCH_PACMAN_LOG", "/tmp/pacman.log"),
+            ("AUR_PREFETCH_YAY_CACHE_DIR", "/tmp/yay"),
             ("AUR_PREFETCH_TRUSTED_USERS", "/tmp/trusted-users"),
             ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", "/tmp/snapper"),
             ("AUR_PREFETCH_STATE", "/tmp/state.json"),
@@ -162,6 +188,8 @@ mod tests {
         assert_eq!(config.pacman_conf, PathBuf::from("/tmp/pacman.conf"));
         assert_eq!(config.pacman_cache_dir, PathBuf::from("/tmp/cache"));
         assert_eq!(config.pacman_lock, PathBuf::from("/tmp/db.lck"));
+        assert_eq!(config.pacman_log, PathBuf::from("/tmp/pacman.log"));
+        assert_eq!(config.yay_cache_dir, PathBuf::from("/tmp/yay"));
         assert_eq!(config.trusted_users, PathBuf::from("/tmp/trusted-users"));
         assert_eq!(config.snapper_config_dir, PathBuf::from("/tmp/snapper"));
         assert_eq!(config.state_file, PathBuf::from("/tmp/state.json"));
