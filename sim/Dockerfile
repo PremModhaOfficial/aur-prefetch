@@ -26,7 +26,8 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
     && printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n' > /etc/sudoers.d/sim \
     && chmod 0440 /etc/sudoers.d/sim \
     && visudo -cf /etc/sudoers.d/sim \
-    && mkdir -p /etc/sim \
+    && mkdir -p /etc/sim /etc/pacman.d \
+    && printf '[aurto]\nServer = file:///srv/empty-repo\n' > /etc/pacman.d/aurto \
     && touch /var/log/sim-yay.log /var/log/sim-yay-build.log \
         /var/log/sim-systemctl.log /var/log/sim-journalctl.log \
         /var/log/sim-loginctl.log /var/log/sim-aurto.log \

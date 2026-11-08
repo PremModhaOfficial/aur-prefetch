@@ -208,18 +208,53 @@ fn report_trust(config: &Config) -> Result<u32, Error> {
 fn report_repo(config: &Config) -> Result<u32, Error> {
     match fs::read_to_string(&config.pacman_conf) {
         Ok(text) => {
-            let included = text
-                .lines()
-                .any(|line| line.replace(' ', "") == "Include=/etc/pacman.d/aurto");
-            if included {
-                println!("doctor: repo: aurto include present");
-                Ok(0)
-            } else {
+            let include = text.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                if key.trim() != "Include" {
+                    return None;
+                }
+                let path = PathBuf::from(value.trim());
+                (path.file_name() == Some(std::ffi::OsStr::new("aurto"))).then_some(path)
+            });
+            let Some(include) = include else {
                 println!(
-                    "doctor: repo: {} does not include /etc/pacman.d/aurto",
+                    "doctor: repo: {} does not include an aurto file",
                     config.pacman_conf.display()
                 );
-                Ok(1)
+                return Ok(1);
+            };
+
+            match fs::metadata(&include) {
+                Ok(meta) if !meta.is_file() => {
+                    println!("doctor: repo: {} is not a file", include.display());
+                    Ok(1)
+                }
+                Ok(_) => match fs::File::open(&include) {
+                    Ok(_) => {
+                        println!("doctor: repo: aurto include present");
+                        Ok(0)
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                        println!("doctor: repo: {} is not readable", include.display());
+                        Ok(1)
+                    }
+                    Err(err) => Err(Error::failed(format!(
+                        "cannot read {}: {err}",
+                        include.display()
+                    ))),
+                },
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    println!(
+                        "doctor: repo: {} is missing (included by {})",
+                        include.display(),
+                        config.pacman_conf.display()
+                    );
+                    Ok(1)
+                }
+                Err(err) => Err(Error::failed(format!(
+                    "cannot inspect {}: {err}",
+                    include.display()
+                ))),
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -463,7 +498,12 @@ impl JournaldSettings {
     fn capped(&self) -> bool {
         [&self.system_max_use, &self.runtime_max_use]
             .iter()
-            .any(|value| value.as_deref().is_some_and(|value| !value.is_empty()))
+            .any(|value| {
+                value.as_deref().is_some_and(|value| {
+                    let value = value.trim();
+                    !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("infinity")
+                })
+            })
     }
 }
 
@@ -489,12 +529,9 @@ fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
     let root = config.snapper_config_dir.join("root");
     match fs::read_to_string(&root) {
         Ok(text) => {
-            let ranges = ["SPACE_LIMIT", "FREE_LIMIT"].iter().all(|key| {
-                text.lines().any(|line| {
-                    let line = line.trim();
-                    line.starts_with(&format!("{key}=")) && line.contains('-')
-                })
-            });
+            let ranges = ["SPACE_LIMIT", "FREE_LIMIT"]
+                .iter()
+                .all(|key| snapper_limit_is_range(&text, key));
             if ranges {
                 println!("doctor: snapper: limits are ranges");
             } else {
@@ -502,13 +539,28 @@ fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
                 problems += 1;
             }
         }
-        Err(_) => {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             println!("doctor: snapper: {} is missing", root.display());
             problems += 1;
+        }
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot read {}: {err}",
+                root.display()
+            )));
         }
     }
 
     Ok(problems)
+}
+
+fn snapper_limit_is_range(text: &str, key: &str) -> bool {
+    text.lines().any(|line| {
+        let Some((name, value)) = line.trim().split_once('=') else {
+            return false;
+        };
+        name.trim() == key && value.trim().contains('-')
+    })
 }
 
 fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<u32, Error> {
@@ -550,8 +602,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        JournaldSettings, cache_writable_by, identity_can, report_journald, run_with, sudo_list_ok,
-        sudoers_rule_ok,
+        JournaldSettings, cache_writable_by, identity_can, report_journald, report_snapper,
+        run_with, snapper_limit_is_range, sudo_list_ok, sudoers_rule_ok,
     };
     use crate::config::Config;
     use crate::error::Error;
@@ -626,11 +678,13 @@ mod tests {
         )
         .expect("sudoers");
         fs::write(&config.trusted_users, "maintainer\n").expect("trust");
+        let aurto = dir.join("aurto");
         fs::write(
             &config.pacman_conf,
-            "[options]\nInclude = /etc/pacman.d/aurto\n",
+            format!("[options]\nInclude = {}\n", aurto.display()),
         )
         .expect("pacman.conf");
+        fs::write(&aurto, "[aurto]\nServer = file:///srv/empty-repo\n").expect("aurto include");
         fs::write(
             &config.journald_conf,
             "[Journal]\nStorage=persistent\nSystemMaxUse=500M\n",
@@ -675,6 +729,23 @@ mod tests {
 
         let runner = FakeRunner::new();
         queue_happy(&runner, &dir, "alice", "1000\n");
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_missing_aurto_include_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        fs::remove_file(dir.join("aurto")).expect("remove aurto include");
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "alice", "10737418240\n");
 
         let result = run_with(&config, &runner);
 
@@ -919,6 +990,40 @@ mod tests {
         settings.apply("[Journal]\nStorage = persistent\nSystemMaxUse = 500M\n");
         assert!(settings.persistent());
         assert!(settings.capped());
+    }
+
+    #[test]
+    fn journald_zero_and_infinity_are_not_caps() {
+        let mut settings = JournaldSettings::default();
+        settings.apply("[Journal]\nStorage=persistent\nSystemMaxUse=0\nRuntimeMaxUse=infinity\n");
+        assert!(!settings.capped());
+    }
+
+    #[test]
+    fn snapper_limits_accept_spaces_around_equals() {
+        assert!(snapper_limit_is_range(
+            "SPACE_LIMIT = \"0.1-0.5\"\n",
+            "SPACE_LIMIT"
+        ));
+        assert!(!snapper_limit_is_range(
+            "SPACE_LIMIT = 0.5\n",
+            "SPACE_LIMIT"
+        ));
+    }
+
+    #[test]
+    fn a_snapper_read_error_is_an_execution_error() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::create_dir_all(config.snapper_config_dir.join("root")).expect("root dir");
+        let runner = FakeRunner::new();
+
+        assert!(matches!(
+            report_snapper(&config, &runner),
+            Err(Error::Failed(_))
+        ));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 
     #[test]
