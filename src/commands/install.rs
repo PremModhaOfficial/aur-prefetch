@@ -18,14 +18,16 @@ pub struct Options {
 
 pub fn run(yes: bool, force: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
+    let runner = SystemRunner;
+    let euid = effective_uid(&runner)?;
     run_with(
         &config,
-        &SystemRunner,
+        &runner,
         Options {
             yes,
             force,
             stdin_is_tty: std::io::stdin().is_terminal(),
-            euid: current_euid()?,
+            euid,
         },
     )
 }
@@ -190,16 +192,29 @@ fn now_unix() -> Result<u64, Error> {
         .map_err(|err| Error::failed(format!("system clock is before the epoch: {err}")))
 }
 
-fn current_euid() -> Result<u32, Error> {
-    use std::os::unix::fs::MetadataExt;
+/// GNU `id -u` prints the effective UID, unlike `/proc/self` metadata, which
+/// reports the real UID. That difference matters under `sudo`.
+fn effective_uid(runner: &dyn CommandRunner) -> Result<u32, Error> {
+    let output = runner.run("id", &["-u"])?;
+    if output.code != 0 {
+        let detail = output.stderr.trim();
+        let suffix = if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {detail}")
+        };
+        return Err(Error::failed(format!(
+            "id -u exited {}; cannot determine the effective user{suffix}",
+            output.code
+        )));
+    }
 
-    fs::metadata("/proc/self")
-        .map(|metadata| metadata.uid())
-        .map_err(|err| {
-            Error::failed(format!(
-                "cannot read /proc/self to determine the effective user: {err}"
-            ))
-        })
+    let text = output.stdout.trim();
+    text.parse::<u32>().map_err(|_| {
+        Error::failed(format!(
+            "id -u printed {text:?}, which is not a numeric effective uid"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -209,7 +224,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Options, run_with};
+    use super::{Options, effective_uid, run_with};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -306,6 +321,42 @@ mod tests {
         assert!(runner.calls().is_empty(), "no command may run as root");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn effective_uid_reads_id_minus_u() {
+        let runner = FakeRunner::new();
+        runner.push_output(ok("1000\n"));
+
+        assert_eq!(effective_uid(&runner).expect("euid"), 1000);
+        assert_eq!(
+            runner.calls(),
+            vec![("id".to_string(), vec!["-u".to_string()])]
+        );
+    }
+
+    #[test]
+    fn effective_uid_rejects_a_failed_id() {
+        let runner = FakeRunner::new();
+        let mut failed = ok("");
+        failed.code = 1;
+        failed.stderr = "id: cannot find name".to_string();
+        runner.push_output(failed);
+
+        let error = effective_uid(&runner).expect_err("a failed id must not be read as uid 0");
+        assert!(matches!(error, Error::Failed(_)));
+        assert_eq!(error.exit_code(), 2);
+        assert!(error.to_string().contains("id -u"), "message was: {error}");
+    }
+
+    #[test]
+    fn effective_uid_rejects_non_numeric_output() {
+        let runner = FakeRunner::new();
+        runner.push_output(ok("root\n"));
+
+        let error = effective_uid(&runner).expect_err("a non-numeric id must fail");
+        assert!(matches!(error, Error::Failed(_)));
+        assert!(error.to_string().contains("root"), "message was: {error}");
     }
 
     #[test]
