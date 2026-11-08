@@ -44,6 +44,7 @@ repository secret, `.pr_agent.toml` policy.
 | D23 | Finding shape | `inline_key_issues = true` | Findings as file:line comments an agent can act on, not prose buried in a summary | `[VERIFIED: configuration.toml line 200]` |
 | D24 | Verdict fields | `require_risk_assessment = true`, `require_merge_recommendation = true` | Typed risk level and merge verdict, so an agent gets a decision without parsing prose | `[VERIFIED: configuration.toml lines 183-184]` |
 | D25 | Large PRs | `enable_large_pr_chunking = true`, `max_number_of_calls = 3` | Chunk instead of skip or truncate | `[VERIFIED: configuration.toml lines 216-217]` |
+| D26 | AX contract | `AGENTS.md` section "Agent review surface" | An agent entering the repo learns triggers, commands, output fields, authority, and failure semantics without reading the workflow | `[VERIFIED: AGENTS.md]` |
 
 ## Not-done ledger
 
@@ -80,7 +81,8 @@ Provider API facts were checked against the live endpoint instead of a file.
 ## Agent experience (AX)
 
 The surface is built agent-first: a coding agent reads the PR comment and acts;
-a human reads it second.
+a human reads it second. The contract lives in `AGENTS.md` under "Agent review
+surface".
 
 | Role | How it is served |
 |---|---|

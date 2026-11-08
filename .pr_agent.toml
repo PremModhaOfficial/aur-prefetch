@@ -53,6 +53,10 @@ This repo is a Rust CLI that splits Arch Linux updates into a background
 download (`fetch`) and a foreground install (`install`). AGENTS.md, NEXT.md, and
 context.md are already in your context. Treat them as binding requirements.
 
+Write for an agent consumer first. Each finding gives the file, the line, the
+invariant violated, and the exact change required. Do not restate the diff. The
+risk level and merge verdict are the decision surface.
+
 Treat these as blocking findings:
 - Any code path outside `install` that writes /usr, /etc, or
   /var/lib/pacman/local; any write at all from `check` or `doctor`; `fetch`
@@ -87,8 +91,8 @@ Check these when the diff touches them:
 - Do not propose new dependencies for parsing that state.rs already handles by
   hand.
 
-Report only findings a human would block a merge on. Skip naming, formatting,
-and comment-only suggestions.
+Report only findings that block a merge or violate a rule below. Skip naming,
+formatting, and comment-only suggestions.
 """
 
 [pr_description]
