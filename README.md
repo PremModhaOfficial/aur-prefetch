@@ -9,8 +9,8 @@ of waiting on your connection.
 
 ## Status
 
-Early. `fetch`, `check`, `clean`, and `install` are implemented and proven in
-`sim/`; `doctor` and `init` are still stubs. Nothing here has been run against a
+Early. `fetch`, `check`, `clean`, `install`, and `init` are implemented and
+proven in `sim/`; `doctor` is still a stub. Nothing here has been run against a
 real Arch system yet. `AGENTS.md` lists the rules that apply while implementing,
 and `sim/` is where behaviour gets proven.
 
@@ -32,7 +32,7 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 
 ## Commands
 
-- `aur-prefetch init` — set up timer, sudoers, checks
+- `aur-prefetch init [--apply]` — print, or with `--apply` write, the user service, timer, and exact sudoers rule. Run it as your user; it prompts for sudo only to install the rule, and never runs `aurto`
 - `aur-prefetch check` — pending updates, disk, lock, caches, timer status
 - `aur-prefetch fetch` — free-space gate, `pacman -Syuw` only
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
@@ -66,6 +66,8 @@ An empty value falls back to the default.
 | `AUR_PREFETCH_YAY_CACHE_DIR` | `$XDG_CACHE_HOME/yay` or `~/.cache/yay` |
 | `AUR_PREFETCH_TRUSTED_USERS` | `/etc/aurto/trusted-users` |
 | `AUR_PREFETCH_SNAPPER_CONFIG_DIR` | `/etc/snapper/configs` |
+| `AUR_PREFETCH_SUDOERS` | `/etc/sudoers.d/aur-prefetch` |
+| `AUR_PREFETCH_USER_UNIT_DIR` | `$XDG_CONFIG_HOME/systemd/user` or `~/.config/systemd/user` |
 | `AUR_PREFETCH_STATE` | `$XDG_STATE_HOME/aur-prefetch/state.json` |
 | `AUR_PREFETCH_MIN_FREE_BYTES` | `2147483648` (2 GiB) |
 

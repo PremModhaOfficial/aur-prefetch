@@ -16,6 +16,8 @@ pub struct Config {
     pub yay_cache_dir: PathBuf,
     pub trusted_users: PathBuf,
     pub snapper_config_dir: PathBuf,
+    pub sudoers_file: PathBuf,
+    pub user_unit_dir: Option<PathBuf>,
     pub state_file: PathBuf,
     pub min_free_bytes: u64,
 }
@@ -75,6 +77,18 @@ impl Config {
                 "AUR_PREFETCH_SNAPPER_CONFIG_DIR",
                 "/etc/snapper/configs",
             ),
+            sudoers_file: path_or(
+                &lookup,
+                "AUR_PREFETCH_SUDOERS",
+                "/etc/sudoers.d/aur-prefetch",
+            ),
+            user_unit_dir: non_empty(&lookup, "AUR_PREFETCH_USER_UNIT_DIR")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    default_config_dir(&lookup)
+                        .ok()
+                        .map(|dir| dir.join("systemd").join("user"))
+                }),
             state_file,
             min_free_bytes,
         })
@@ -107,6 +121,21 @@ where
         Some(home) => Ok(PathBuf::from(home).join(".cache")),
         None => Err(Error::failed(
             "HOME is not set; cannot locate the yay cache",
+        )),
+    }
+}
+
+fn default_config_dir<F>(lookup: &F) -> Result<PathBuf, Error>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    if let Some(dir) = non_empty(lookup, "XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(dir));
+    }
+    match non_empty(lookup, "HOME") {
+        Some(home) => Ok(PathBuf::from(home).join(".config")),
+        None => Err(Error::failed(
+            "HOME is not set; cannot locate the user unit directory",
         )),
     }
 }
@@ -162,6 +191,14 @@ mod tests {
             PathBuf::from("/etc/snapper/configs")
         );
         assert_eq!(
+            config.sudoers_file,
+            PathBuf::from("/etc/sudoers.d/aur-prefetch")
+        );
+        assert_eq!(
+            config.user_unit_dir,
+            Some(PathBuf::from("/home/user/.config/systemd/user"))
+        );
+        assert_eq!(
             config.state_file,
             PathBuf::from("/home/user/.local/state/aur-prefetch/state.json")
         );
@@ -179,6 +216,8 @@ mod tests {
             ("AUR_PREFETCH_YAY_CACHE_DIR", "/tmp/yay"),
             ("AUR_PREFETCH_TRUSTED_USERS", "/tmp/trusted-users"),
             ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", "/tmp/snapper"),
+            ("AUR_PREFETCH_SUDOERS", "/tmp/sudoers"),
+            ("AUR_PREFETCH_USER_UNIT_DIR", "/tmp/user-units"),
             ("AUR_PREFETCH_STATE", "/tmp/state.json"),
             ("AUR_PREFETCH_MIN_FREE_BYTES", "1048576"),
         ]))
@@ -192,6 +231,8 @@ mod tests {
         assert_eq!(config.yay_cache_dir, PathBuf::from("/tmp/yay"));
         assert_eq!(config.trusted_users, PathBuf::from("/tmp/trusted-users"));
         assert_eq!(config.snapper_config_dir, PathBuf::from("/tmp/snapper"));
+        assert_eq!(config.sudoers_file, PathBuf::from("/tmp/sudoers"));
+        assert_eq!(config.user_unit_dir, Some(PathBuf::from("/tmp/user-units")));
         assert_eq!(config.state_file, PathBuf::from("/tmp/state.json"));
         assert_eq!(config.min_free_bytes, 1_048_576);
     }
