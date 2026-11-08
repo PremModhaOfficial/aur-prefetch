@@ -22,21 +22,34 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     let mut actionable = 0u32;
 
     let official = runner.run(path_str(&config.pacman)?, &["-Qu"])?;
+    if official.code != 0 && official.code != 1 {
+        return Err(Error::failed(format!(
+            "pacman -Qu exited {}: {}",
+            official.code,
+            official.stderr.trim()
+        )));
+    }
     if report_pending("official", &official.stdout) > 0 {
         actionable += 1;
     }
 
     match runner.run("yay", &["-Qua"]) {
-        Ok(output) if output.code == 0 => {
+        Ok(output) if output.code == 0 || output.code == 1 => {
             if report_pending("aur", &output.stdout) > 0 {
                 actionable += 1;
             }
         }
-        Ok(output) => println!(
-            "check: aur updates: unavailable (yay exited {})",
-            output.code
-        ),
-        Err(_) => println!("check: aur updates: unavailable (yay not found)"),
+        Ok(output) => {
+            println!(
+                "check: aur updates: unavailable (yay exited {})",
+                output.code
+            );
+            actionable += 1;
+        }
+        Err(_) => {
+            println!("check: aur updates: unavailable (yay not found)");
+            actionable += 1;
+        }
     }
 
     let cache_dir = resolve_cache_dir(config, runner)?;
@@ -60,7 +73,9 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         ("aurbuild chroot", Path::new(AURBUILD)),
         ("archbuild chroot", Path::new(ARCHBUILD)),
     ] {
-        report_cache(runner, label, path)?;
+        if report_cache(runner, label, path)? {
+            actionable += 1;
+        }
     }
 
     report_timer(runner)?;
@@ -137,13 +152,20 @@ fn report_lock(config: &Config, runner: &dyn CommandRunner) -> Result<bool, Erro
     Ok(true)
 }
 
-fn report_cache(runner: &dyn CommandRunner, label: &str, path: &Path) -> Result<(), Error> {
+fn report_cache(runner: &dyn CommandRunner, label: &str, path: &Path) -> Result<bool, Error> {
     let path = path_str(path)?;
     let output = runner.run("du", &["-sb", path])?;
 
     if output.code != 0 {
+        if Path::new(path).exists() {
+            println!(
+                "check: cache {label}: unreadable ({})",
+                output.stderr.trim()
+            );
+            return Ok(true);
+        }
         println!("check: cache {label}: absent");
-        return Ok(());
+        return Ok(false);
     }
 
     match output
@@ -152,10 +174,15 @@ fn report_cache(runner: &dyn CommandRunner, label: &str, path: &Path) -> Result<
         .next()
         .and_then(|value| value.parse::<u64>().ok())
     {
-        Some(bytes) => println!("check: cache {label}: {}", human_bytes(bytes)),
-        None => println!("check: cache {label}: unreadable"),
+        Some(bytes) => {
+            println!("check: cache {label}: {}", human_bytes(bytes));
+            Ok(false)
+        }
+        None => {
+            println!("check: cache {label}: unreadable (no size in du output)");
+            Ok(true)
+        }
     }
-    Ok(())
 }
 
 fn report_timer(runner: &dyn CommandRunner) -> Result<(), Error> {
@@ -214,9 +241,7 @@ fn report_log_fallback(config: &Config) -> Result<(), Error> {
     };
 
     let lines: Vec<&str> = log.lines().collect();
-    let fetch = lines
-        .iter()
-        .rposition(|line| line.contains("Running 'pacman -Syuw"));
+    let fetch = lines.iter().rposition(|line| line.contains("-Syuw"));
     let install = lines
         .iter()
         .rposition(|line| line.contains("[ALPM] installed") || line.contains("[ALPM] upgraded"));
@@ -339,9 +364,8 @@ mod tests {
 
         let size = format!("107374182400 {available}\n");
         runner.push_output(ok(&size));
-        runner.push_output(ok(&size));
-
         runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(ok(&size));
         runner.push_output(ok("6553600 3200000\n"));
 
         if lock_held {
@@ -411,6 +435,87 @@ mod tests {
         let config = test_config(&dir);
         let runner = FakeRunner::new();
         queue(&runner, "", 1000, false);
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_pacman_query_failure_exits_two() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        let mut failed = ok("");
+        failed.code = 2;
+        failed.stderr = "database error".to_string();
+        runner.push_output(failed);
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        assert_eq!(result.unwrap_err().exit_code(), 2);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unavailable_aur_check_is_actionable() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+
+        runner.push_output(ok(""));
+        let mut failed = ok("");
+        failed.code = 2;
+        runner.push_output(failed);
+        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok("107374182400 53687091200\n"));
+        runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(ok("107374182400 53687091200\n"));
+        runner.push_output(ok("6553600 3200000\n"));
+        for _ in 0..5 {
+            runner.push_output(ok("1048576\n"));
+        }
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unreadable_cache_is_actionable() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let cache = dir.join("cache");
+        fs::create_dir_all(&cache).expect("cache dir");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
+        runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
+        runner.push_output(ok("107374182400 53687091200\n"));
+        runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(ok("107374182400 53687091200\n"));
+        runner.push_output(ok("6553600 3200000\n"));
+
+        let mut unreadable = ok("");
+        unreadable.code = 1;
+        unreadable.stderr = "permission denied".to_string();
+        runner.push_output(unreadable);
+        for _ in 0..4 {
+            let mut absent = ok("");
+            absent.code = 1;
+            runner.push_output(absent);
+        }
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
 
         let result = run_with(&config, &runner);
 
