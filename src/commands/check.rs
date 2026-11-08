@@ -196,17 +196,13 @@ fn report_cache(
 }
 
 fn report_timer(runner: &dyn CommandRunner) -> Result<bool, Error> {
-    let output = runner.run("systemctl", &["--user", "list-timers", "--all"])?;
+    let output = runner.run("systemctl", &["--user", "list-timers"])?;
     if output.code != 0 {
         println!("check: timer: unavailable");
         return Ok(true);
     }
 
-    match output
-        .stdout
-        .lines()
-        .find(|line| line.contains("aur-prefetch"))
-    {
+    match scheduled_timer(&output.stdout) {
         Some(line) => {
             let compact = line.split_whitespace().collect::<Vec<_>>().join(" ");
             println!("check: timer: {compact}");
@@ -228,6 +224,14 @@ fn report_timer(runner: &dyn CommandRunner) -> Result<bool, Error> {
         println!("check: timer: last service result: {value}");
     }
     Ok(false)
+}
+
+/// A loaded timer is not enough: its NEXT column must name a real run.
+fn scheduled_timer(stdout: &str) -> Option<&str> {
+    stdout
+        .lines()
+        .find(|line| line.contains("aur-prefetch"))
+        .filter(|line| !line.trim_start().starts_with("n/a"))
 }
 
 fn report_state(config: &Config) -> Result<(), Error> {
@@ -324,7 +328,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{report_cache, run_with};
+    use super::{report_cache, run_with, scheduled_timer};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -552,5 +556,13 @@ mod tests {
         assert!(!actionable, "system-owned caches must not force action");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_inactive_timer_is_not_scheduled() {
+        assert!(
+            scheduled_timer("n/a  n/a  Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer").is_none()
+        );
+        assert!(scheduled_timer("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer").is_some());
     }
 }
