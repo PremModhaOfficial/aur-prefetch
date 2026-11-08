@@ -165,16 +165,18 @@ up-to-date container exits 0.
 
 Read-only setup audit.
 
-- [ ] Timer enabled and next run scheduled.
-- [ ] Sudoers rule present and exact.
-- [ ] Trust file state and repo include.
-- [ ] `pacman-conf CacheDir` resolves, directory writable by `alpm`.
-- [ ] journald `Storage=persistent` and a size cap.
-- [ ] Snapper timers and ranges, only if snapper is installed.
-- [ ] Disk floor.
+- [x] Timer enabled and next run scheduled.
+- [x] Sudoers rule present and exact.
+- [x] Trust file state and repo include.
+- [x] `pacman-conf CacheDir` resolves and the directory is writable by `alpm`
+      (checked from ownership and mode bits; ACLs are not inspected).
+- [x] journald `Storage=persistent` and a size cap.
+- [x] Snapper timers and ranges, only if snapper is installed.
+- [x] Disk floor.
 
 Done when: each broken setup has a scenario that reports it, not just a missing
-file.
+file. Scenarios 11-12 and 21-24 cover the missing setup, a configured system, a
+wildcard sudoers grant, the disk floor, snapper timers, and cache permissions.
 
 ### 3.4 `clean`
 

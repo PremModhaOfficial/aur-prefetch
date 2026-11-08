@@ -1,6 +1,1187 @@
+use std::fs;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+
+use crate::config::Config;
 use crate::error::Error;
+use crate::runner::{CommandRunner, SystemRunner};
+use crate::util::{human_bytes, resolve_cache_dir};
 
 pub fn run() -> Result<(), Error> {
-    println!("doctor: not implemented yet");
-    Ok(())
+    let config = Config::from_env()?;
+    run_with(&config, &SystemRunner)
+}
+
+/// Read-only setup audit.
+pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
+    let mut problems = 0u32;
+
+    let timers = runner.run("systemctl", &["--user", "list-timers"])?;
+    let timer_scheduled =
+        timers.code == 0 && timer_is_scheduled(&timers.stdout, "aur-prefetch.timer");
+    if timer_scheduled {
+        println!("doctor: timer: scheduled");
+    } else {
+        println!("doctor: timer: not scheduled");
+        problems += 1;
+    }
+
+    problems += report_sudoers(config, runner)?;
+    problems += report_trust(config)?;
+    problems += report_repo(config)?;
+    let cache_dir = resolve_cache_dir(config, runner)?;
+    problems += report_cache_dir(runner, &cache_dir)?;
+    problems += report_journald(config)?;
+    problems += report_snapper(config, runner)?;
+    if cache_dir.exists() {
+        problems += report_disk(runner, &cache_dir, config.min_free_bytes)?;
+    }
+    // The root floor still matters when the configured CacheDir is missing.
+    if cache_dir != PathBuf::from("/") {
+        problems += report_disk(runner, Path::new("/"), config.min_free_bytes)?;
+    }
+
+    if problems == 0 {
+        println!("doctor: ok");
+        Ok(())
+    } else {
+        println!("doctor: action needed ({problems} problem(s))");
+        Err(Error::blocked(format!("{problems} setup problem(s)")))
+    }
+}
+
+fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
+    match fs::read_to_string(&config.sudoers_file) {
+        Ok(text) => match current_user(runner)? {
+            Some(user) if sudoers_rule_ok(&text, &user) => {
+                println!("doctor: sudoers: exact rule present for {user}");
+                Ok(0)
+            }
+            Some(user) => {
+                println!(
+                    "doctor: sudoers: {} has no exact pacman -Syuw rule for {user}",
+                    config.sudoers_file.display()
+                );
+                Ok(1)
+            }
+            None => {
+                println!(
+                    "doctor: sudoers: cannot determine the current user to verify {}",
+                    config.sudoers_file.display()
+                );
+                Ok(1)
+            }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "doctor: sudoers: {} is missing",
+                config.sudoers_file.display()
+            );
+            Ok(1)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            report_sudoers_unreadable(config, runner)
+        }
+        Err(err) => Err(Error::failed(format!(
+            "cannot read {}: {err}",
+            config.sudoers_file.display()
+        ))),
+    }
+}
+
+fn report_sudoers_unreadable(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
+    // A correct rule is a root-owned 0440 file. Check the file's shape before
+    // trusting `sudo -l`, which cannot say which file granted the command.
+    let meta = match fs::metadata(&config.sudoers_file) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "doctor: sudoers: {} is missing",
+                config.sudoers_file.display()
+            );
+            return Ok(1);
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            // The parent directory is root-only, so even stat is unavailable.
+            // sudo -l is the only signal left; do not claim the source.
+            return report_sudoers_via_sudo(config, runner, false);
+        }
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot inspect {}: {err}",
+                config.sudoers_file.display()
+            )));
+        }
+    };
+    let mode = meta.permissions().mode() & 0o777;
+    if !meta.is_file() || meta.uid() != 0 || mode != 0o440 {
+        println!(
+            "doctor: sudoers: {} is not a root-owned 0440 file (mode {mode:o}, uid {})",
+            config.sudoers_file.display(),
+            meta.uid()
+        );
+        return Ok(1);
+    }
+
+    report_sudoers_via_sudo(config, runner, true)
+}
+
+fn report_sudoers_via_sudo(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    source_checked: bool,
+) -> Result<u32, Error> {
+    match runner.run("sudo", &["-n", "-l"]) {
+        Ok(output) if output.code == 0 && sudo_list_ok(&output.stdout) => {
+            if source_checked {
+                println!(
+                    "doctor: sudoers: exact rule present (root-owned 0440 file; sudo -l matches)"
+                );
+            } else {
+                println!(
+                    "doctor: sudoers: exact rule present (sudo -l matches; file source unverified)"
+                );
+            }
+            Ok(0)
+        }
+        _ => {
+            println!(
+                "doctor: sudoers: {} is unreadable and sudo -l could not verify it",
+                config.sudoers_file.display()
+            );
+            Ok(1)
+        }
+    }
+}
+
+fn sudo_list_ok(text: &str) -> bool {
+    let rule = "(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm";
+    let mut exact = false;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+        if line == rule {
+            exact = true;
+            continue;
+        }
+        // Any other rule entry is a wider grant. Informational lines from
+        // `sudo -l` (`User alice may run...`, `Matching Defaults...`) contain
+        // no parentheses.
+        if line.contains("NOPASSWD:")
+            || line.contains("pacman -Syuw")
+            || line.starts_with('(')
+            || line.ends_with(" ALL")
+        {
+            return false;
+        }
+    }
+    exact
+}
+
+fn sudoers_rule_ok(text: &str, user: &str) -> bool {
+    const SUFFIX: &str = " ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm";
+
+    let mut rule = None;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with("#include")
+            || line.starts_with("#includedir")
+            || line.starts_with("@include")
+        {
+            return false;
+        }
+        if line.starts_with('#') {
+            continue;
+        }
+        if rule.is_some() {
+            return false;
+        }
+        rule = Some(line);
+    }
+
+    let Some(rule) = rule else {
+        return false;
+    };
+    let Some(principal) = rule.strip_suffix(SUFFIX) else {
+        return false;
+    };
+    principal == user
+}
+
+fn current_user(runner: &dyn CommandRunner) -> Result<Option<String>, Error> {
+    let output = runner.run("id", &["-un"])?;
+    if output.code != 0 {
+        return Ok(None);
+    }
+    let name = output.stdout.trim();
+    if name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(name.to_string()))
+    }
+}
+
+fn report_trust(config: &Config) -> Result<u32, Error> {
+    match fs::read_to_string(&config.trusted_users) {
+        Ok(text) => {
+            let count = text
+                .lines()
+                .filter(|line| {
+                    let line = line.trim();
+                    !line.is_empty() && !line.starts_with('#')
+                })
+                .count();
+            if count == 0 {
+                println!("doctor: trust: empty (trusts no one)");
+                Ok(1)
+            } else {
+                println!("doctor: trust: {count} maintainer(s)");
+                Ok(0)
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("doctor: trust: missing (aurto trusts everyone)");
+            Ok(1)
+        }
+        Err(err) => Err(Error::failed(format!(
+            "cannot read {}: {err}",
+            config.trusted_users.display()
+        ))),
+    }
+}
+
+fn report_repo(config: &Config) -> Result<u32, Error> {
+    match fs::read_to_string(&config.pacman_conf) {
+        Ok(text) => {
+            let include = text.lines().find_map(|line| {
+                let (key, value) = line.split_once('=')?;
+                if key.trim() != "Include" {
+                    return None;
+                }
+                let path = PathBuf::from(value.trim());
+                (path.file_name() == Some(std::ffi::OsStr::new("aurto"))).then_some(path)
+            });
+            let Some(include) = include else {
+                println!(
+                    "doctor: repo: {} does not include an aurto file",
+                    config.pacman_conf.display()
+                );
+                return Ok(1);
+            };
+
+            match fs::metadata(&include) {
+                Ok(meta) if !meta.is_file() => {
+                    println!("doctor: repo: {} is not a file", include.display());
+                    Ok(1)
+                }
+                Ok(_) => match fs::File::open(&include) {
+                    Ok(_) => {
+                        println!("doctor: repo: aurto include present");
+                        Ok(0)
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+                        println!("doctor: repo: {} is not readable", include.display());
+                        Ok(1)
+                    }
+                    Err(err) => Err(Error::failed(format!(
+                        "cannot read {}: {err}",
+                        include.display()
+                    ))),
+                },
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    println!(
+                        "doctor: repo: {} is missing (included by {})",
+                        include.display(),
+                        config.pacman_conf.display()
+                    );
+                    Ok(1)
+                }
+                Err(err) => Err(Error::failed(format!(
+                    "cannot inspect {}: {err}",
+                    include.display()
+                ))),
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("doctor: repo: {} is missing", config.pacman_conf.display());
+            Ok(1)
+        }
+        Err(err) => Err(Error::failed(format!(
+            "cannot read {}: {err}",
+            config.pacman_conf.display()
+        ))),
+    }
+}
+
+fn report_cache_dir(runner: &dyn CommandRunner, cache: &Path) -> Result<u32, Error> {
+    let meta = match fs::metadata(cache) {
+        Ok(meta) if meta.is_dir() => meta,
+        Ok(_) => {
+            println!("doctor: cache: {} is not a directory", cache.display());
+            return Ok(1);
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("doctor: cache: {} is missing", cache.display());
+            return Ok(1);
+        }
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot inspect {}: {err}",
+                cache.display()
+            )));
+        }
+    };
+
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o222 == 0 {
+        println!(
+            "doctor: cache: {} has mode {mode:o} and no write bit",
+            cache.display()
+        );
+        return Ok(1);
+    }
+
+    match alpm_identity(runner)? {
+        Some((uid, gids)) => {
+            if cache_writable_by(cache, uid, &gids)? {
+                println!(
+                    "doctor: cache: {} is writable by alpm (mode {mode:o})",
+                    cache.display()
+                );
+                Ok(0)
+            } else {
+                println!(
+                    "doctor: cache: {} is not writable by alpm (mode {mode:o})",
+                    cache.display()
+                );
+                Ok(1)
+            }
+        }
+        None => {
+            println!(
+                "doctor: cache: {} exists (mode {mode:o}); no alpm user to verify writability",
+                cache.display()
+            );
+            Ok(1)
+        }
+    }
+}
+
+/// pacman 7 downloads as `alpm`; resolve that account without touching it.
+fn alpm_identity(runner: &dyn CommandRunner) -> Result<Option<(u32, Vec<u32>)>, Error> {
+    let uid = runner.run("id", &["-u", "alpm"])?;
+    if uid.code != 0 {
+        return Ok(None);
+    }
+    let Some(uid) = uid.stdout.trim().parse::<u32>().ok() else {
+        return Ok(None);
+    };
+
+    let groups = runner.run("id", &["-G", "alpm"])?;
+    if groups.code != 0 {
+        return Ok(None);
+    }
+    let gids: Vec<u32> = groups
+        .stdout
+        .split_whitespace()
+        .filter_map(|gid| gid.parse::<u32>().ok())
+        .collect();
+    if gids.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some((uid, gids)))
+}
+
+/// Best effort, mode bits only: ACLs are not inspected.
+fn cache_writable_by(cache: &Path, uid: u32, gids: &[u32]) -> Result<bool, Error> {
+    // ancestors() is lexical, so a symlinked CacheDir would skip the real
+    // target's parents. Resolve the link before walking them.
+    let cache = fs::canonicalize(cache)
+        .map_err(|err| Error::failed(format!("cannot resolve {}: {err}", cache.display())))?;
+    for ancestor in cache.ancestors() {
+        let meta = fs::metadata(ancestor).map_err(|err| {
+            Error::failed(format!("cannot inspect {}: {err}", ancestor.display()))
+        })?;
+        let need_write = ancestor == cache.as_path();
+        if !identity_can(meta.mode(), meta.uid(), meta.gid(), uid, gids, need_write) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn identity_can(
+    mode: u32,
+    owner: u32,
+    group: u32,
+    uid: u32,
+    gids: &[u32],
+    need_write: bool,
+) -> bool {
+    let bits = if owner == uid {
+        (mode >> 6) & 0o7
+    } else if gids.contains(&group) {
+        (mode >> 3) & 0o7
+    } else {
+        mode & 0o7
+    };
+    let needed = if need_write { 0o3 } else { 0o1 };
+    bits & needed == needed
+}
+
+fn report_journald(config: &Config) -> Result<u32, Error> {
+    let files = journald_files(&config.journald_conf)?;
+    if files.is_empty() {
+        println!(
+            "doctor: journald: {} is missing",
+            config.journald_conf.display()
+        );
+        return Ok(1);
+    }
+
+    let mut settings = JournaldSettings::default();
+    for text in &files {
+        settings.apply(text);
+    }
+
+    let mut problems = 0;
+    if settings.persistent() {
+        println!("doctor: journald: Storage=persistent");
+    } else {
+        println!("doctor: journald: Storage is not persistent");
+        problems += 1;
+    }
+    if settings.capped() {
+        println!("doctor: journald: a size cap is set");
+    } else {
+        println!("doctor: journald: no size cap");
+        problems += 1;
+    }
+    Ok(problems)
+}
+
+/// The main file plus every `journald.conf.d/*.conf`, in the order systemd
+/// applies them. A missing main file or drop-in directory is not an error.
+fn journald_files(main: &Path) -> Result<Vec<String>, Error> {
+    let mut files = Vec::new();
+    match fs::read_to_string(main) {
+        Ok(text) => files.push(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot read {}: {err}",
+                main.display()
+            )));
+        }
+    }
+
+    let mut dropin_dir = main.as_os_str().to_owned();
+    dropin_dir.push(".d");
+    let dropin_dir = PathBuf::from(dropin_dir);
+    let entries = match fs::read_dir(&dropin_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot read {}: {err}",
+                dropin_dir.display()
+            )));
+        }
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "conf"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let text = fs::read_to_string(&path)
+            .map_err(|err| Error::failed(format!("cannot read {}: {err}", path.display())))?;
+        files.push(text);
+    }
+    Ok(files)
+}
+
+/// The effective `[Journal]` values after applying files in order.
+#[derive(Default)]
+struct JournaldSettings {
+    storage: Option<String>,
+    system_max_use: Option<String>,
+    runtime_max_use: Option<String>,
+}
+
+impl JournaldSettings {
+    fn apply(&mut self, text: &str) {
+        let mut in_journal = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_journal = line == "[Journal]";
+                continue;
+            }
+            if !in_journal {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim();
+                let value = value.trim();
+                match key {
+                    "Storage" => self.storage = Some(value.to_string()),
+                    "SystemMaxUse" => self.system_max_use = Some(value.to_string()),
+                    "RuntimeMaxUse" => self.runtime_max_use = Some(value.to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn persistent(&self) -> bool {
+        self.storage.as_deref() == Some("persistent")
+    }
+
+    fn capped(&self) -> bool {
+        [&self.system_max_use, &self.runtime_max_use]
+            .iter()
+            .any(|value| {
+                value.as_deref().is_some_and(|value| {
+                    let value = value.trim();
+                    !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("infinity")
+                })
+            })
+    }
+}
+
+fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
+    let installed = matches!(runner.run("snapper", &["--version"]), Ok(output) if output.code == 0);
+    if !installed {
+        println!("doctor: snapper: not installed");
+        return Ok(0);
+    }
+
+    let system_timers = runner.run("systemctl", &["list-timers"])?;
+    let mut problems = 0;
+    let timers_ok = ["snapper-timeline.timer", "snapper-cleanup.timer"]
+        .iter()
+        .all(|name| timer_is_scheduled(&system_timers.stdout, name));
+    if timers_ok {
+        println!("doctor: snapper: timers scheduled");
+    } else {
+        println!("doctor: snapper: timers missing");
+        problems += 1;
+    }
+
+    let root = config.snapper_config_dir.join("root");
+    match fs::read_to_string(&root) {
+        Ok(text) => {
+            let ranges = ["SPACE_LIMIT", "FREE_LIMIT"]
+                .iter()
+                .all(|key| snapper_limit_is_range(&text, key));
+            if ranges {
+                println!("doctor: snapper: limits are ranges");
+            } else {
+                println!("doctor: snapper: SPACE_LIMIT and FREE_LIMIT must be ranges");
+                problems += 1;
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("doctor: snapper: {} is missing", root.display());
+            problems += 1;
+        }
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot read {}: {err}",
+                root.display()
+            )));
+        }
+    }
+
+    Ok(problems)
+}
+
+fn snapper_limit_is_range(text: &str, key: &str) -> bool {
+    text.lines().any(|line| {
+        let Some((name, value)) = line.trim().split_once('=') else {
+            return false;
+        };
+        name.trim() == key && value.trim().contains('-')
+    })
+}
+
+/// `list-timers` also lists installed but inactive units, with `n/a` in NEXT.
+fn timer_is_scheduled(text: &str, name: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        line.contains(name) && !line.starts_with("n/a")
+    })
+}
+
+fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<u32, Error> {
+    let label = crate::util::path_str(path)?;
+    let output = runner.run("df", &["-B1", "--output=avail", label])?;
+    if output.code != 0 {
+        return Err(Error::failed(format!(
+            "df failed for {label}: {}",
+            output.stderr.trim()
+        )));
+    }
+
+    let available = output
+        .stdout
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().parse::<u64>().ok())
+        .ok_or_else(|| Error::failed(format!("cannot parse df output for {label}")))?;
+
+    if available < floor {
+        println!(
+            "doctor: disk {label}: {} free, below the {} floor",
+            human_bytes(available),
+            human_bytes(floor)
+        );
+        Ok(1)
+    } else {
+        println!("doctor: disk {label}: {} free", human_bytes(available));
+        Ok(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::fs;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::{
+        JournaldSettings, cache_writable_by, identity_can, report_journald, report_snapper,
+        report_sudoers_via_sudo, run_with, snapper_limit_is_range, sudo_list_ok, sudoers_rule_ok,
+        timer_is_scheduled,
+    };
+    use crate::config::Config;
+    use crate::error::Error;
+    use crate::runner::{CommandOutput, FakeRunner};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("aur-prefetch-doctor-{}-{id}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn test_config(dir: &Path) -> Config {
+        let mut map: HashMap<String, String> = HashMap::new();
+        for (key, value) in [
+            ("AUR_PREFETCH_STATE", dir.join("state.json")),
+            ("AUR_PREFETCH_PACMAN_LOCK", dir.join("db.lck")),
+            ("AUR_PREFETCH_PACMAN_LOG", dir.join("pacman.log")),
+            ("AUR_PREFETCH_PACMAN_CONF", dir.join("pacman.conf")),
+            ("AUR_PREFETCH_YAY_CACHE_DIR", dir.join("yay")),
+            ("AUR_PREFETCH_TRUSTED_USERS", dir.join("trusted-users")),
+            ("AUR_PREFETCH_SUDOERS", dir.join("sudoers")),
+            ("AUR_PREFETCH_JOURNALD_CONF", dir.join("journald.conf")),
+            ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", dir.join("snapper")),
+        ] {
+            map.insert(key.to_string(), value.to_string_lossy().into_owned());
+        }
+        map.insert(
+            "AUR_PREFETCH_MIN_FREE_BYTES".to_string(),
+            "1048576".to_string(),
+        );
+
+        Config::from_lookup(move |name| map.get(name).cloned()).expect("config")
+    }
+
+    fn ok(stdout: &str) -> CommandOutput {
+        CommandOutput {
+            code: 0,
+            stdout: stdout.to_string(),
+            stderr: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_missing_setup_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+
+        runner.push_output(ok(""));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    fn complete_setup(config: &Config, dir: &Path) {
+        fs::write(
+            &config.sudoers_file,
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+        )
+        .expect("sudoers");
+        fs::write(&config.trusted_users, "maintainer\n").expect("trust");
+        let aurto = dir.join("aurto");
+        fs::write(
+            &config.pacman_conf,
+            format!("[options]\nInclude = {}\n", aurto.display()),
+        )
+        .expect("pacman.conf");
+        fs::write(&aurto, "[aurto]\nServer = file:///srv/empty-repo\n").expect("aurto include");
+        fs::write(
+            &config.journald_conf,
+            "[Journal]\nStorage=persistent\nSystemMaxUse=500M\n",
+        )
+        .expect("journald");
+        fs::create_dir_all(dir.join("cache")).expect("cache dir");
+    }
+
+    fn queue_happy(runner: &FakeRunner, dir: &Path, user: &str, available: &str) {
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok(&format!("{user}\n")));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
+        runner.push_output(ok(&format!("{}\n", meta.uid())));
+        runner.push_output(ok(&format!("{}\n", meta.gid())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok(available));
+        runner.push_output(ok(available));
+    }
+
+    #[test]
+    fn a_complete_setup_exits_zero() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "alice", "10737418240\n");
+
+        run_with(&config, &runner).expect("doctor");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn low_disk_blocks_even_when_the_setup_is_complete() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "alice", "1000\n");
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_missing_aurto_include_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        fs::remove_file(dir.join("aurto")).expect("remove aurto include");
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "alice", "10737418240\n");
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn snapper_installed_without_timers_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
+        runner.push_output(ok(&format!("{}\n", meta.uid())));
+        runner.push_output(ok(&format!("{}\n", meta.gid())));
+        runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(""));
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_wildcard_sudoers_rule_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        fs::write(&config.sudoers_file, "alice ALL=(ALL) NOPASSWD: ALL\n").expect("sudoers");
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "alice", "10737418240\n");
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_rule_for_another_user_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "bob", "10737418240\n");
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unreadable_sudoers_is_verified_with_sudo_l() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(ok(
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+        ));
+
+        assert_eq!(
+            report_sudoers_via_sudo(&config, &runner, false).expect("sudo fallback"),
+            0
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_cache_without_a_write_bit_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        let cache = dir.join("cache");
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o555)).expect("chmod cache");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_cache_not_writable_by_alpm_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        runner.push_output(ok("999999\n"));
+        runner.push_output(ok("999999\n"));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn the_root_disk_is_checked_when_the_cache_dir_is_missing() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        let cache = dir.join("cache");
+        fs::remove_dir_all(&cache).expect("remove cache dir");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
+        runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("1000\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+        let df_paths: Vec<String> = runner
+            .calls()
+            .into_iter()
+            .filter(|(program, _)| program == "df")
+            .map(|(_, args)| args.last().cloned().unwrap_or_default())
+            .collect();
+        assert_eq!(df_paths, vec!["/".to_string()]);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_missing_alpm_user_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let mut no_alpm = ok("");
+        no_alpm.code = 1;
+        runner.push_output(no_alpm);
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_sudoers_file_must_contain_only_the_exact_rule() {
+        assert!(sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            "alice"
+        ));
+        assert!(!sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\nalice ALL=(ALL) NOPASSWD: ALL\n",
+            "alice"
+        ));
+        assert!(!sudoers_rule_ok(
+            "%wheel ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            "alice"
+        ));
+        assert!(!sudoers_rule_ok(
+            "#include /etc/sudoers.d/other\nalice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            "alice"
+        ));
+        assert!(!sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm, /bin/sh\n",
+            "alice"
+        ));
+    }
+
+    #[test]
+    fn sudo_l_output_rejects_wildcard_runas() {
+        assert!(sudo_list_ok(
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+        ));
+        assert!(!sudo_list_ok(
+            "    (ALL) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+        ));
+        assert!(!sudo_list_ok(
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n    (ALL : ALL) ALL\n"
+        ));
+    }
+
+    #[test]
+    fn journald_accepts_spaces_around_each_equals() {
+        let mut settings = JournaldSettings::default();
+        settings.apply("[Journal]\nStorage = persistent\nSystemMaxUse = 500M\n");
+        assert!(settings.persistent());
+        assert!(settings.capped());
+    }
+
+    #[test]
+    fn journald_zero_and_infinity_are_not_caps() {
+        let mut settings = JournaldSettings::default();
+        settings.apply("[Journal]\nStorage=persistent\nSystemMaxUse=0\nRuntimeMaxUse=infinity\n");
+        assert!(!settings.capped());
+    }
+
+    #[test]
+    fn snapper_limits_accept_spaces_around_equals() {
+        assert!(snapper_limit_is_range(
+            "SPACE_LIMIT = \"0.1-0.5\"\n",
+            "SPACE_LIMIT"
+        ));
+        assert!(!snapper_limit_is_range(
+            "SPACE_LIMIT = 0.5\n",
+            "SPACE_LIMIT"
+        ));
+    }
+
+    #[test]
+    fn inactive_timers_are_not_scheduled() {
+        assert!(timer_is_scheduled(
+            "Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer",
+            "aur-prefetch.timer"
+        ));
+        assert!(!timer_is_scheduled(
+            "n/a                n/a       aur-prefetch.timer",
+            "aur-prefetch.timer"
+        ));
+    }
+
+    #[test]
+    fn inactive_snapper_timers_block() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper dir");
+        fs::write(
+            config.snapper_config_dir.join("root"),
+            "SPACE_LIMIT=0.1-0.5\nFREE_LIMIT=0.1-0.5\n",
+        )
+        .expect("root config");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(
+            "n/a n/a snapper-timeline.timer\nn/a n/a snapper-cleanup.timer\n",
+        ));
+        assert_eq!(
+            report_snapper(&config, &runner).expect("snapper"),
+            1,
+            "inactive snapper timers must not pass"
+        );
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(
+            "Tue 2026-11-11 00:00:00 UTC snapper-timeline.timer\nTue 2026-11-11 00:00:00 UTC snapper-cleanup.timer\n",
+        ));
+        assert_eq!(
+            report_snapper(&config, &runner).expect("snapper"),
+            0,
+            "active snapper timers pass"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_snapper_read_error_is_an_execution_error() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::create_dir_all(config.snapper_config_dir.join("root")).expect("root dir");
+        let runner = FakeRunner::new();
+
+        assert!(matches!(
+            report_snapper(&config, &runner),
+            Err(Error::Failed(_))
+        ));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn journald_dropins_override_the_main_file() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let dropins = dir.join("journald.conf.d");
+        fs::create_dir_all(&dropins).expect("drop-in dir");
+        fs::write(
+            &config.journald_conf,
+            "[Journal]\nStorage=volatile\nSystemMaxUse=1G\n",
+        )
+        .expect("main file");
+        fs::write(
+            dropins.join("50-storage.conf"),
+            "[Journal]\nStorage = persistent\nSystemMaxUse = 500M\n",
+        )
+        .expect("drop-in");
+
+        assert_eq!(
+            report_journald(&config).expect("journald"),
+            0,
+            "the drop-in sets persistence and the cap"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn cache_writable_by_checks_the_symlink_target_ancestors() {
+        // /tmp is world-traversable, so only the symlink target's parent can
+        // deny alpm; the scratch temp dir may sit under a private ancestor.
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = PathBuf::from("/tmp").join(format!(
+            "aur-prefetch-doctor-symlink-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("test dir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("open test dir");
+        let real = dir.join("real");
+        fs::create_dir_all(real.join("cache")).expect("real cache");
+        fs::set_permissions(real.join("cache"), fs::Permissions::from_mode(0o777))
+            .expect("open the cache");
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).expect("lock the parent");
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(real.join("cache"), &link).expect("symlink");
+
+        assert!(
+            !cache_writable_by(&link, 979, &[979]).expect("cache check"),
+            "the real parent has no other-execute bit, so alpm cannot traverse it"
+        );
+
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).expect("restore");
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn mode_bits_decide_alpm_access() {
+        // 0755 root:root, alpm is neither owner nor group.
+        assert!(!identity_can(0o755, 0, 0, 979, &[979], true));
+        assert!(identity_can(0o755, 0, 0, 979, &[979], false));
+        // 0775 alpm:alpm.
+        assert!(identity_can(0o775, 979, 979, 979, &[979], true));
+        // 0757, alpm reaches it through other.
+        assert!(identity_can(0o757, 0, 0, 979, &[979], true));
+    }
 }

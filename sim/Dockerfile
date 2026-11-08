@@ -26,12 +26,14 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
     && printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n' > /etc/sudoers.d/sim \
     && chmod 0440 /etc/sudoers.d/sim \
     && visudo -cf /etc/sudoers.d/sim \
-    && mkdir -p /etc/sim \
+    && mkdir -p /etc/sim /etc/pacman.d \
+    && printf '[aurto]\nServer = file:///srv/empty-repo\n' > /etc/pacman.d/aurto \
     && touch /var/log/sim-yay.log /var/log/sim-yay-build.log \
         /var/log/sim-systemctl.log /var/log/sim-journalctl.log \
         /var/log/sim-loginctl.log /var/log/sim-aurto.log \
         /var/log/sim-paccache.log /var/log/sim-pacdiff.log \
         /var/log/sim-sudo.log \
+        /var/log/sim-snapper.log \
     && chmod 0666 /var/log/sim-*.log
 
 # The install scenario runs as a normal user and cannot prompt for a password.
@@ -56,8 +58,8 @@ COPY sim/fixtures /usr/local/lib/sim/fixtures
 RUN chmod 755 /usr/local/bin/yay /usr/local/bin/make-repo.sh \
         /usr/local/bin/systemctl /usr/local/bin/journalctl \
         /usr/local/bin/loginctl /usr/local/bin/aurto \
-        /usr/local/bin/paccache /usr/local/bin/pacdiff \
-        /usr/local/bin/sudo \
+        /usr/local/bin/paccache /usr/local/bin/pacdiff /usr/local/bin/sudo \
+        /usr/local/bin/snapper \
     && /usr/local/bin/make-repo.sh
 
 COPY --from=builder /src/target/release/aur-prefetch /usr/local/bin/aur-prefetch
