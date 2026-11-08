@@ -64,9 +64,25 @@ pub fn run_with(
             )));
         }
     };
-    let (aur, aur_available) = match runner.run("yay", &["-Qua"]) {
-        Ok(output) if output.code == 0 || output.code == 1 => (lines(&output.stdout), true),
-        _ => (Vec::new(), false),
+    let aur = match runner.run("yay", &["-Qua"]) {
+        Ok(output) if output.code == 0 || output.code == 1 => lines(&output.stdout),
+        Ok(output) => {
+            let detail = output.stderr.trim();
+            let suffix = if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            };
+            return Err(Error::blocked(format!(
+                "yay -Qua exited {}; cannot list AUR updates, so install will not run{suffix}",
+                output.code
+            )));
+        }
+        Err(err) => {
+            return Err(Error::blocked(format!(
+                "yay -Qua could not run ({err}); cannot list AUR updates, so install will not run"
+            )));
+        }
     };
 
     println!(
@@ -77,10 +93,6 @@ pub fn run_with(
     for line in official.iter().chain(aur.iter()) {
         println!("  {line}");
     }
-    if !aur_available {
-        println!("install: AUR list unavailable (yay missing or failed)");
-    }
-
     let mut state = State::load(&config.state_file)?;
     println!(
         "install: read https://archlinux.org/news/ since the last install ({})",
@@ -101,11 +113,8 @@ pub fn run_with(
         return Err(Error::failed(format!("yay -Syuu exited {code}")));
     }
 
-    state.last_install_unix = Some(now_unix()?);
-    if let Err(err) = state.save(&config.state_file) {
-        eprintln!(
-            "install: warning: the upgrade finished but the install time was not saved: {err}"
-        );
+    if let Some(warning) = record_install(&mut state, config, now_unix()) {
+        eprintln!("install: warning: {warning}");
     }
 
     println!("install: done");
@@ -194,6 +203,27 @@ fn now_unix() -> Result<u64, Error> {
         .map_err(|err| Error::failed(format!("system clock is before the epoch: {err}")))
 }
 
+/// Record a completed upgrade. Returns a warning instead of failing the command:
+/// the upgrade already happened, and pacman.log remains the fallback.
+fn record_install(state: &mut State, config: &Config, now: Result<u64, Error>) -> Option<String> {
+    let time = match now {
+        Ok(time) => time,
+        Err(err) => {
+            return Some(format!(
+                "the upgrade finished but the install time was not recorded: {err}"
+            ));
+        }
+    };
+
+    state.last_install_unix = Some(time);
+    state.save(&config.state_file).err().map(|err| {
+        format!(
+            "the upgrade finished but {} was not updated: {err}",
+            config.state_file.display()
+        )
+    })
+}
+
 /// GNU `id -u` prints the effective UID, unlike `/proc/self` metadata, which
 /// reports the real UID. That difference matters under `sudo`.
 fn effective_uid(runner: &dyn CommandRunner) -> Result<u32, Error> {
@@ -278,7 +308,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Options, effective_uid, format_unix_utc, install_since, run_with};
+    use super::{Options, effective_uid, format_unix_utc, install_since, record_install, run_with};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -476,6 +506,69 @@ mod tests {
         run_with(&config, &runner, options(true, false, false))
             .expect("a completed upgrade must succeed even if state cannot be saved");
         assert!(ran_yay(&runner));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unavailable_aur_list_blocks_before_the_upgrade() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(ok(""));
+        runner.push_output(CommandOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: "AUR RPC error".to_string(),
+        });
+
+        let result = run_with(&config, &runner, options(true, false, false));
+
+        let error = result.expect_err("an unavailable AUR list must block");
+        assert!(matches!(error, Error::Blocked(_)));
+        assert_eq!(error.exit_code(), 1);
+        let message = error.to_string();
+        assert!(message.contains("yay -Qua"), "message was: {message}");
+        assert!(
+            !ran_yay(&runner),
+            "the upgrade must not run without the AUR list"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_clock_error_after_install_is_a_warning_not_an_error() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let mut state = State::default();
+
+        let warning = record_install(
+            &mut state,
+            &config,
+            Err(Error::failed("system clock is before the epoch")),
+        )
+        .expect("the clock error must become a warning");
+
+        assert!(warning.contains("not recorded"), "warning was: {warning}");
+        assert_eq!(state.last_install_unix, None);
+        assert!(!config.state_file.exists(), "nothing may be written");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn record_install_names_the_state_path_when_saving_fails() {
+        let dir = temp_dir();
+        let mut config = test_config(&dir);
+        config.state_file = PathBuf::from("/proc/self/aur-prefetch-state.json");
+        let mut state = State::default();
+
+        let warning = record_install(&mut state, &config, Ok(42))
+            .expect("the save error must become a warning");
+
+        assert!(warning.contains("not updated"), "warning was: {warning}");
+        assert_eq!(state.last_install_unix, Some(42));
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
