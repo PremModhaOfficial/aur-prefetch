@@ -17,9 +17,9 @@ pub fn run(apply: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
     if apply {
         let euid = SystemRunner.run("id", &["-u"])?;
-        if euid.stdout.trim() != "0" {
+        if euid.stdout.trim() == "0" && std::env::var("SUDO_USER").is_ok() {
             return Err(Error::blocked(
-                "init --apply needs root to write /etc/sudoers.d; run `sudo aur-prefetch init --apply`",
+                "run `aur-prefetch init --apply` as your user, not with sudo; it prompts for sudo only to install the sudoers rule",
             ));
         }
     }
@@ -48,6 +48,13 @@ pub fn run(apply: bool) -> Result<(), Error> {
             user: &user,
         },
     )
+}
+
+fn now_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or(0)
 }
 
 fn valid_user(name: &str) -> bool {
@@ -98,7 +105,11 @@ pub fn run_with(
             .map_err(|err| Error::failed(format!("cannot create {}: {err}", parent.display())))?;
     }
 
-    let temp = config.sudoers_file.with_file_name("aur-prefetch.tmp");
+    let temp = std::env::temp_dir().join(format!(
+        "aur-prefetch-sudoers-{}-{}",
+        std::process::id(),
+        now_nanos()
+    ));
     fs::write(&temp, &sudoers)
         .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.display())))?;
     let check = runner.run("visudo", &["-cf", path_str(&temp)?])?;
@@ -109,8 +120,6 @@ pub fn run_with(
             check.stderr.trim()
         )));
     }
-    fs::remove_file(&temp)
-        .map_err(|err| Error::failed(format!("cannot remove {}: {err}", temp.display())))?;
 
     fs::create_dir_all(unit_dir)
         .map_err(|err| Error::failed(format!("cannot create {}: {err}", unit_dir.display())))?;
@@ -118,20 +127,40 @@ pub fn run_with(
         .map_err(|err| Error::failed(format!("cannot write {}: {err}", service_path.display())))?;
     fs::write(&timer_path, timer)
         .map_err(|err| Error::failed(format!("cannot write {}: {err}", timer_path.display())))?;
-    fs::write(&config.sudoers_file, sudoers).map_err(|err| {
-        Error::failed(format!(
-            "cannot write {}: {err}",
-            config.sudoers_file.display()
-        ))
-    })?;
-    fs::set_permissions(&config.sudoers_file, fs::Permissions::from_mode(0o440)).map_err(
-        |err| {
-            Error::failed(format!(
-                "cannot set mode on {}: {err}",
+
+    let installed = fs::write(&config.sudoers_file, &sudoers).and_then(|()| {
+        fs::set_permissions(&config.sudoers_file, fs::Permissions::from_mode(0o440))
+    });
+    match installed {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            let code = runner.run_interactive(
+                "sudo",
+                &[
+                    "install",
+                    "-m",
+                    "0440",
+                    path_str(&temp)?,
+                    path_str(&config.sudoers_file)?,
+                ],
+            )?;
+            if code != 0 {
+                let _ = fs::remove_file(&temp);
+                return Err(Error::failed(
+                    "sudo could not install the sudoers rule; run `sudo visudo -f /etc/sudoers.d/aur-prefetch` manually",
+                ));
+            }
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&temp);
+            return Err(Error::failed(format!(
+                "cannot install {}: {err}",
                 config.sudoers_file.display()
-            ))
-        },
-    )?;
+            )));
+        }
+    }
+    fs::remove_file(&temp)
+        .map_err(|err| Error::failed(format!("cannot remove {}: {err}", temp.display())))?;
 
     let reload = runner.run("systemctl", &["--user", "daemon-reload"])?;
     if reload.code != 0 {

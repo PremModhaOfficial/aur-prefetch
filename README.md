@@ -32,7 +32,7 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 
 ## Commands
 
-- `aur-prefetch init [--apply]` — print, or with root write, the user service, timer, and exact sudoers rule. Never runs `aurto`
+- `aur-prefetch init [--apply]` — print, or with `--apply` write, the user service, timer, and exact sudoers rule. Run it as your user; it prompts for sudo only to install the rule, and never runs `aurto`
 - `aur-prefetch check` — pending updates, disk, lock, caches, timer status
 - `aur-prefetch fetch` — free-space gate, `pacman -Syuw` only
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
