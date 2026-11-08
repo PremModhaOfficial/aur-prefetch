@@ -24,7 +24,7 @@ assert_true "sudoers written" test -f /etc/sudoers.d/aur-prefetch
 assert_true "service written" test -f /root/.config/systemd/user/aur-prefetch.service
 assert_true "timer written" test -f /root/.config/systemd/user/aur-prefetch.timer
 assert_true "visudo accepts the generated rule" visudo -cf /etc/sudoers.d/aur-prefetch
-assert_contains "$(cat /root/.config/systemd/user/aur-prefetch.service)" "ExecStart=/usr/local/bin/aur-prefetch fetch" "the unit calls fetch"
+assert_contains "$(cat /root/.config/systemd/user/aur-prefetch.service)" 'ExecStart="/usr/local/bin/aur-prefetch" fetch' "the unit quotes the path and calls fetch"
 assert_contains "$(cat /var/log/sim-systemctl.log)" "daemon-reload" "systemctl reloaded"
 assert_contains "$(cat /var/log/sim-systemctl.log)" "enable" "the timer was enabled"
 assert_false "aurto was never run" bash -c 'test -s /var/log/sim-aurto.log'

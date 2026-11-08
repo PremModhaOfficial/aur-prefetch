@@ -390,6 +390,21 @@ mod tests {
             "init must never run aurto"
         );
 
+        let leftovers: Vec<_> = fs::read_dir(config.sudoers_file.parent().expect("sudoers dir"))
+            .expect("read sudoers dir")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".aur-prefetch-sudoers")
+            })
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the atomic rename must not leave a staged rule behind"
+        );
+
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 
@@ -497,14 +512,41 @@ mod tests {
         run_with(&config, &runner, setup(true)).expect("init");
 
         let calls = runner.calls();
-        assert!(
-            calls.iter().any(|(program, args)| program == "sudo"
-                && args.first().map(String::as_str) == Some("install")),
-            "the rule must be staged with sudo"
+        let sudo_calls: Vec<_> = calls
+            .iter()
+            .filter(|(program, _)| program == "sudo")
+            .collect();
+        assert_eq!(
+            sudo_calls.len(),
+            2,
+            "init must sudo exactly twice: {sudo_calls:?}"
         );
+
+        let install = &sudo_calls[0].1;
+        assert_eq!(&install[..3], ["install", "-m", "0440"]);
+        let temp = Path::new(&install[3]);
         assert!(
-            calls.iter().any(|(program, args)| program == "sudo"
-                && args.first().map(String::as_str) == Some("mv")),
+            temp.file_name()
+                .map(|name| name.to_string_lossy().starts_with("aur-prefetch-sudoers-"))
+                .unwrap_or(false),
+            "the validated copy comes from a private temp file: {}",
+            temp.display()
+        );
+        let staged = &install[4];
+        let staged_prefix = format!("{}/.aur-prefetch-sudoers-install-", sudoers_dir.display());
+        assert!(
+            staged.starts_with(&staged_prefix),
+            "the rule is staged in the same directory: {staged}"
+        );
+
+        let mv = &sudo_calls[1].1;
+        assert_eq!(
+            mv,
+            &vec![
+                "mv".to_string(),
+                staged.clone(),
+                config.sudoers_file.display().to_string()
+            ],
             "a same-directory mv must put the rule in place"
         );
 
