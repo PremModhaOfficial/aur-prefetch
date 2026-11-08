@@ -84,9 +84,7 @@ pub fn run_with(
     let mut state = State::load(&config.state_file)?;
     println!(
         "install: read https://archlinux.org/news/ since the last install ({})",
-        state
-            .last_install_unix
-            .map_or_else(|| "never".to_string(), |time| format!("{time} (unix)"))
+        install_since(&state, &config.pacman_log)
     );
 
     if !options.stdin_is_tty && !options.yes {
@@ -217,6 +215,29 @@ fn effective_uid(runner: &dyn CommandRunner) -> Result<u32, Error> {
     })
 }
 
+/// What to tell the user to read news since. The state file wins; on a first
+/// run, fall back to the last install or upgrade in pacman.log (D4).
+fn install_since(state: &State, pacman_log: &std::path::Path) -> String {
+    if let Some(time) = state.last_install_unix {
+        return format!("{time} (unix)");
+    }
+
+    last_log_install(pacman_log)
+        .map(|stamp| format!("{stamp} (from pacman.log)"))
+        .unwrap_or_else(|| "never".to_string())
+}
+
+fn last_log_install(path: &std::path::Path) -> Option<String> {
+    let log = fs::read_to_string(path).ok()?;
+    let line = log
+        .lines()
+        .rev()
+        .find(|line| line.contains("[ALPM] installed") || line.contains("[ALPM] upgraded"))?;
+    let rest = line.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    Some(rest[..end].to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -224,10 +245,11 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Options, effective_uid, run_with};
+    use super::{Options, effective_uid, install_since, run_with};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
+    use crate::state::State;
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -357,6 +379,47 @@ mod tests {
         let error = effective_uid(&runner).expect_err("a non-numeric id must fail");
         assert!(matches!(error, Error::Failed(_)));
         assert!(error.to_string().contains("root"), "message was: {error}");
+    }
+
+    #[test]
+    fn install_since_prefers_the_state_timestamp() {
+        let state = State {
+            last_install_unix: Some(42),
+            ..State::default()
+        };
+
+        assert_eq!(
+            install_since(&state, Path::new("/nonexistent")),
+            "42 (unix)"
+        );
+    }
+
+    #[test]
+    fn install_since_falls_back_to_the_last_log_install() {
+        let dir = temp_dir();
+        let log = dir.join("pacman.log");
+        fs::write(
+            &log,
+            "[2026-10-03T18:30:02+0000] [ALPM] upgraded glibc (2.41-2 -> 2.41-3)\n\
+             [2026-10-03T18:30:03+0000] [ALPM] installed linux (6.17.2.arch1-1)\n\
+             [2026-10-05T09:00:00+0000] [PACMAN] Running 'pacman -Syuw --noconfirm'\n",
+        )
+        .expect("write log");
+
+        assert_eq!(
+            install_since(&State::default(), &log),
+            "2026-10-03T18:30:03+0000 (from pacman.log)"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn install_since_without_state_or_log_says_never() {
+        assert_eq!(
+            install_since(&State::default(), Path::new("/nonexistent/pacman.log")),
+            "never"
+        );
     }
 
     #[test]

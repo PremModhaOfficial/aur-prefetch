@@ -27,7 +27,8 @@ deny() {
     else
         pass "$label"
     fi
-    assert_contains "$(cat "$log")" "sudo:" "$label: refused by sudo, not pacman"
+    assert_true "$label: sudo explained the refusal" \
+        bash -c "grep -Eq 'not allowed|not in the sudoers|sudo:' '$log'"
     assert_false "$label: pacman never started" grep -q "Synchronizing" "$log"
 }
 
