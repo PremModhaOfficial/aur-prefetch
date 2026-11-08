@@ -13,6 +13,7 @@ pub struct Options {
     pub yes: bool,
     pub force: bool,
     pub stdin_is_tty: bool,
+    pub euid: u32,
 }
 
 pub fn run(yes: bool, force: bool) -> Result<(), Error> {
@@ -24,6 +25,7 @@ pub fn run(yes: bool, force: bool) -> Result<(), Error> {
             yes,
             force,
             stdin_is_tty: std::io::stdin().is_terminal(),
+            euid: current_euid()?,
         },
     )
 }
@@ -33,6 +35,12 @@ pub fn run_with(
     runner: &dyn CommandRunner,
     options: Options,
 ) -> Result<(), Error> {
+    if options.euid == 0 {
+        return Err(Error::blocked(
+            "install must run as the user, not root: yay and PKGBUILDs must never run as root",
+        ));
+    }
+
     check_lock(config, runner)?;
 
     let pacman = path_str(&config.pacman)?;
@@ -182,6 +190,18 @@ fn now_unix() -> Result<u64, Error> {
         .map_err(|err| Error::failed(format!("system clock is before the epoch: {err}")))
 }
 
+fn current_euid() -> Result<u32, Error> {
+    use std::os::unix::fs::MetadataExt;
+
+    fs::metadata("/proc/self")
+        .map(|metadata| metadata.uid())
+        .map_err(|err| {
+            Error::failed(format!(
+                "cannot read /proc/self to determine the effective user: {err}"
+            ))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -231,6 +251,7 @@ mod tests {
             yes,
             force,
             stdin_is_tty,
+            euid: 1000,
         }
     }
 
@@ -257,6 +278,32 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Blocked(_))));
         assert!(!ran_yay(&runner), "yay must not run behind the gate");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn root_blocks_before_any_command_runs() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+
+        let result = run_with(
+            &config,
+            &runner,
+            Options {
+                yes: true,
+                force: true,
+                stdin_is_tty: true,
+                euid: 0,
+            },
+        );
+
+        let error = result.expect_err("install as root must refuse");
+        assert!(matches!(error, Error::Blocked(_)));
+        assert_eq!(error.exit_code(), 1);
+        assert!(error.to_string().contains("root"), "message was: {error}");
+        assert!(runner.calls().is_empty(), "no command may run as root");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

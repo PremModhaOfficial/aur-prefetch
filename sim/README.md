@@ -65,6 +65,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `17-install-noop.sh` | `install` on a current repo exits 0, changes nothing, and builds nothing |
 | `18-yay-build-loud.sh` | a direct yay build and `install` both surface the AUR failure loudly; install exits 2 and does not report success |
 | `19-installer-sudo-scope.sh` | `installer` may run only `/usr/local/bin/sim-upgrade` through sudo; direct pacman argv and helper arguments are refused |
+| `20-install-root-refuses.sh` | `install` run as root exits 1, runs no command, and leaves `/usr` unchanged |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
