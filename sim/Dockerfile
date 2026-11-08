@@ -34,12 +34,15 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
         /var/log/sim-sudo.log \
     && chmod 0666 /var/log/sim-*.log
 
-# Sim-only: the install scenario needs yay's one escalation to succeed without
-# a password prompt. Scope it to the exact argv the fake yay passes, with no
-# wildcard, so a regression cannot escalate anything else. Scenario 19 asserts
-# that no other command is accepted. `init` never writes this rule.
+# The install scenario runs as a normal user and cannot prompt for a password.
+# A real yay escalates for its repo upgrade; the simulation gives it exactly one
+# allowed command. The helper takes no arguments and always performs
+# `pacman -Syu --noconfirm`, and the sudoers rule names only that helper, not
+# pacman itself, so the harness cannot accept a direct pacman escalation.
+COPY sim/sim-upgrade /usr/local/bin/sim-upgrade
 RUN useradd --create-home --shell /bin/bash installer \
-    && printf 'installer ALL=(root) NOPASSWD: /usr/bin/pacman -Syu --noconfirm\n' >> /etc/sudoers.d/sim \
+    && chmod 755 /usr/local/bin/sim-upgrade \
+    && printf 'installer ALL=(root) NOPASSWD: /usr/local/bin/sim-upgrade\n' >> /etc/sudoers.d/sim \
     && visudo -cf /etc/sudoers.d/sim
 
 # Replace mirrors with the offline sim repo. Done after the builder stage so

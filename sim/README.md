@@ -24,13 +24,13 @@ Requires Docker or Podman. The container runs with `--network none`.
 - An empty download cache
 - `builder`, a non-root user whose only passwordless sudo command is
   `/usr/bin/pacman -Syuw --noconfirm`
-- `installer`, a sim-only user whose only rule is
-  `/usr/bin/pacman -Syu --noconfirm`, so yay's upgrade path can complete.
-  The rule is the exact argv with no wildcard; scenario 19 proves everything
-  else is refused
+- `installer`, a sim-only user whose only sudoers rule is
+  `/usr/local/bin/sim-upgrade`. The helper takes no arguments and always
+  performs exactly `pacman -Syu --noconfirm`; no direct pacman argv is allowed
+  through sudo, and scenario 19 proves the rule is exactly that narrow
 - `/usr/local/bin/yay`, a fake helper that logs every call to
-  `/var/log/sim-yay.log`, escalates through `sudo -n pacman`, and fails with
-  exit 97 if asked to build from the AUR or exit 98 if run as root
+  `/var/log/sim-yay.log`, upgrades through `sudo -n sim-upgrade`, and fails
+  with exit 97 if asked to build from the AUR or exit 98 if run as root
 - `/usr/local/bin/sudo`, a proxy that logs the exact argv to
   `/var/log/sim-sudo.log` and then execs the real sudo, so a scenario can prove
   which escalations actually happened
@@ -63,8 +63,8 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
 | `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |
 | `17-install-noop.sh` | `install` on a current repo exits 0, changes nothing, and builds nothing |
-| `18-yay-build-loud.sh` | the AUR build path exits non-zero with a loud message instead of passing silently |
-| `19-installer-sudo-scope.sh` | `installer` may escalate only yay's exact `pacman -Syu --noconfirm` argv; every other command and argument list is refused |
+| `18-yay-build-loud.sh` | a direct yay build and `install` both surface the AUR failure loudly; install exits 2 and does not report success |
+| `19-installer-sudo-scope.sh` | `installer` may run only `/usr/local/bin/sim-upgrade` through sudo; direct pacman argv and helper arguments are refused |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

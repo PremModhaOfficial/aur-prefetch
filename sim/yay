@@ -26,9 +26,14 @@ case "${1:-}" in
         ;;
     -Syu | -Syuu | -Syyu | -Syyuu)
         # yay's extra "u" means "also upgrade VCS packages". For repo packages
-        # the observable effect is pacman -Syu, and yay escalates through sudo
-        # rather than running pacman itself.
-        exec sudo -n pacman -Syu --noconfirm
+        # the observable effect is pacman -Syu. A real yay escalates through
+        # sudo; the simulation allows exactly one helper through sudoers.
+        if [[ -f /etc/sim/yay-syuu-fail ]]; then
+            printf '%s\n' "$*" >>"$build_log"
+            echo "sim: AUR build path is not simulated (argv: $*)" >&2
+            exit 97
+        fi
+        exec sudo -n /usr/local/bin/sim-upgrade
         ;;
     *)
         printf '%s\n' "$*" >>"$build_log"

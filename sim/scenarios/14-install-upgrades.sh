@@ -19,8 +19,8 @@ assert_eq "$(installed_version)" "2.0.0-1" "the pending package was installed"
 assert_ne "$(usr_state)" "$before_usr" "/usr changed"
 assert_contains "$(yay_log)" "-Syuu" "yay was asked for the full upgrade"
 assert_false "install ran no AUR build" yay_built_something
-assert_eq "$(sudo_log)" "-n pacman -Syu --noconfirm" \
-    "yay's upgrade was the only escalation through sudo"
+assert_eq "$(sudo_log)" "-n /usr/local/bin/sim-upgrade" \
+    "yay's only escalation is the scoped sim helper"
 assert_contains "$(cat "$log")" "sudo pacdiff" "the pacdiff follow-up was printed"
 
 finish

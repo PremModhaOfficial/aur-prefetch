@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Sim-only stand-in for the sudo escalation a real yay performs.
+#
+# The simulation cannot prompt for a password. sudoers lets `installer` run
+# exactly this file, and the file accepts no arguments and always performs the
+# one upgrade install needs. Nothing else about pacman is allowed through sudo.
+set -euo pipefail
+
+if (($# != 0)); then
+    echo "sim-upgrade: takes no arguments (got: $*)" >&2
+    exit 64
+fi
+
+exec /usr/bin/pacman -Syu --noconfirm
