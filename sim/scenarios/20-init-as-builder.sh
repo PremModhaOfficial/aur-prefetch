@@ -58,6 +58,7 @@ assert_eq "$(find /etc/sudoers.d -maxdepth 1 -name '.aur-prefetch-sudoers*' | wc
 assert_true "the service landed in builder's config" test -f /home/builder/.config/systemd/user/aur-prefetch.service
 assert_true "the timer landed in builder's config" test -f /home/builder/.config/systemd/user/aur-prefetch.timer
 assert_contains "$(cat /home/builder/.config/systemd/user/aur-prefetch.service)" 'ExecStart="/usr/local/bin/aur-prefetch" fetch' "ExecStart is quoted"
+assert_eq "$(find /home/builder/.config/systemd/user -maxdepth 1 -name '.*' | wc -l | tr -d ' ')" "0" "no hidden unit temp remains"
 
 sudo_log=$(tr '\n' ' ' </var/log/sim-sudo.log 2>/dev/null | tr -s ' ' || true)
 assert_contains "$sudo_log" "COMMAND=/usr/bin/install -m 0440 /tmp/aur-prefetch-sudoers-" "the rule was staged with the exact install argv"

@@ -1,6 +1,6 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::Error;
@@ -57,6 +57,28 @@ fn now_nanos() -> u128 {
         .unwrap_or(0)
 }
 
+/// Deletes its path on drop, so a spawn error cannot leave a rendered rule or
+/// a half-written unit behind.
+struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 fn valid_user(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
@@ -102,12 +124,8 @@ pub fn run_with(
 
     install_sudoers(config, runner, &sudoers)?;
 
-    fs::create_dir_all(unit_dir)
-        .map_err(|err| Error::failed(format!("cannot create {}: {err}", unit_dir.display())))?;
-    fs::write(&service_path, service)
-        .map_err(|err| Error::failed(format!("cannot write {}: {err}", service_path.display())))?;
-    fs::write(&timer_path, timer)
-        .map_err(|err| Error::failed(format!("cannot write {}: {err}", timer_path.display())))?;
+    write_atomic(&service_path, &service)?;
+    write_atomic(&timer_path, &timer)?;
 
     let reload = runner.run("systemctl", &["--user", "daemon-reload"])?;
     if reload.code != 0 {
@@ -229,23 +247,59 @@ fn validate_and_rename(
     })
 }
 
+fn write_atomic(path: &Path, contents: &str) -> Result<(), Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::failed(format!("{} has no parent directory", path.display())))?;
+    fs::create_dir_all(parent)
+        .map_err(|err| Error::failed(format!("cannot create {}: {err}", parent.display())))?;
+
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "unit".to_string());
+    let temp =
+        TempFile::new(parent.join(format!(".{name}.{}-{}", std::process::id(), now_nanos())));
+    fs::write(temp.path(), contents)
+        .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.path().display())))?;
+
+    fs::rename(temp.path(), path).map_err(|err| {
+        Error::failed(format!(
+            "cannot move the unit into {}: {err}",
+            path.display()
+        ))
+    })
+}
+
 fn install_sudoers_with_sudo(
     runner: &dyn CommandRunner,
     sudoers: &str,
     target: &Path,
     parent: &Path,
 ) -> Result<(), Error> {
-    let temp = std::env::temp_dir().join(format!(
+    install_sudoers_with_sudo_in(runner, sudoers, target, parent, &std::env::temp_dir())
+}
+
+fn install_sudoers_with_sudo_in(
+    runner: &dyn CommandRunner,
+    sudoers: &str,
+    target: &Path,
+    parent: &Path,
+    temp_dir: &Path,
+) -> Result<(), Error> {
+    let temp = TempFile::new(temp_dir.join(format!(
         "aur-prefetch-sudoers-{}-{}",
         std::process::id(),
         now_nanos()
-    ));
-    fs::write(&temp, sudoers)
-        .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.display())))?;
+    )));
+    fs::write(temp.path(), sudoers)
+        .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.path().display())))?;
 
-    let check = runner.run("visudo", &["-cf", path_str(&temp)?])?;
+    // `visudo -cf` is a syntax check, so it runs as the invoking user. It is
+    // the only option before the rule exists; validating after the write is
+    // too late. Scenario 20 proves this path as the unprivileged builder.
+    let check = runner.run("visudo", &["-cf", path_str(temp.path())?])?;
     if check.code != 0 {
-        let _ = fs::remove_file(&temp);
         return Err(Error::failed(format!(
             "visudo rejected the sudoers rule: {}",
             check.stderr.trim()
@@ -263,11 +317,10 @@ fn install_sudoers_with_sudo(
             "install",
             "-m",
             "0440",
-            path_str(&temp)?,
+            path_str(temp.path())?,
             path_str(&staged)?,
         ],
     )?;
-    let _ = fs::remove_file(&temp);
     if code != 0 {
         return Err(Error::failed(
             "sudo could not stage the sudoers rule; run `sudo visudo -f /etc/sudoers.d/aur-prefetch` manually",
@@ -292,10 +345,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Setup, render_service, run_with};
+    use super::{Setup, install_sudoers_with_sudo_in, render_service, run_with, write_atomic};
     use crate::config::Config;
     use crate::error::Error;
-    use crate::runner::{CommandOutput, FakeRunner};
+    use crate::runner::{CommandOutput, CommandRunner, FakeRunner};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -347,6 +400,18 @@ mod tests {
         runner.push_output(ok(""));
     }
 
+    struct ErrorRunner;
+
+    impl CommandRunner for ErrorRunner {
+        fn run(&self, program: &str, _args: &[&str]) -> Result<CommandOutput, Error> {
+            Err(Error::failed(format!("cannot run {program}")))
+        }
+
+        fn run_interactive(&self, program: &str, _args: &[&str]) -> Result<i32, Error> {
+            Err(Error::failed(format!("cannot run {program}")))
+        }
+    }
+
     #[test]
     fn apply_writes_units_and_a_validated_sudoers_rule() {
         let dir = temp_dir();
@@ -363,6 +428,11 @@ mod tests {
         let timer = fs::read_to_string(units.join("aur-prefetch.timer")).expect("timer file");
         assert!(timer.contains("OnCalendar=daily"));
         assert!(timer.contains("Persistent=true"));
+        assert_eq!(
+            fs::read_dir(units).expect("units dir").count(),
+            2,
+            "an atomic write must leave only the two units"
+        );
 
         let sudoers = fs::read_to_string(&config.sudoers_file).expect("sudoers file");
         assert!(sudoers.contains("alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm"));
@@ -551,6 +621,56 @@ mod tests {
         );
 
         fs::set_permissions(&sudoers_dir, fs::Permissions::from_mode(0o755)).expect("restore");
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_spawn_error_removes_the_temp_rule() {
+        let dir = temp_dir();
+        let temp = dir.join("tmp");
+        fs::create_dir_all(&temp).expect("temp dir");
+        let parent = dir.join("sudoers.d");
+        fs::create_dir_all(&parent).expect("sudoers dir");
+        let target = parent.join("aur-prefetch");
+
+        let result = install_sudoers_with_sudo_in(
+            &ErrorRunner,
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            &target,
+            &parent,
+            &temp,
+        );
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        assert_eq!(
+            fs::read_dir(&temp).expect("read temp dir").count(),
+            0,
+            "a spawn error must not leave the rendered rule in the temp dir"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_failed_unit_rename_leaves_no_partial_file() {
+        let dir = temp_dir();
+        let target = dir.join("aur-prefetch.service");
+        fs::create_dir_all(&target).expect("make the target a directory");
+
+        let result = write_atomic(&target, "[Service]\n");
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        let entries: Vec<_> = fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(
+            entries,
+            vec![std::ffi::OsString::from("aur-prefetch.service")],
+            "a failed rename must leave neither a temp file nor a partial unit"
+        );
+
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 }
