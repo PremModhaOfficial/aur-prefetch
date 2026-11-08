@@ -51,6 +51,26 @@ state and the first concrete move.
   line, then stop.
 - If blocked, state exactly what blocks you once. Do not loop.
 
+## Agent review surface
+
+The PR review is a machine surface first, human second. Read it, decide, act.
+
+- **Trigger:** PR open, reopen, or ready-for-review. One review per PR. No
+  review on push.
+- **Commands** (PR comment): `/review`, `/describe`, `/improve`, `/ask <q>`.
+  Only OWNER, MEMBER, COLLABORATOR; anyone else is ignored.
+- **Output:** inline `file:line` findings, a typed risk level, and a merge
+  verdict: `no_concerns_found`, `needs_review`, or `changes_required`.
+- **State:** one persistent comment, updated in place. Do not reconstruct a
+  thread.
+- **Authority:** the bot advises. `CI` and `Sim` are the gates. A merge verdict
+  is input to a human decision, not permission to merge.
+- **Failure:** a review that could not run fails the `Review` check. A red
+  `Review` means "no review happened", not "no findings".
+- **Policy:** `.pr_agent.toml`; rules load from `main`, so a PR cannot rewrite
+  the rules it is judged by.
+- **Decisions and measurements:** `.github/PR-AGENT.md`.
+
 ## Layout
 
 | Path | Role |
@@ -63,6 +83,9 @@ state and the first concrete move.
 | `sim/` | Arch simulation harness (see `sim/README.md`) |
 | `.github/workflows/ci.yml` | Build, lint, test, audit |
 | `.github/workflows/sim.yml` | Arch container scenarios |
+| `.github/workflows/pr-agent.yml` | Agentic PR review |
+| `.pr_agent.toml` | Review policy |
+| `.github/PR-AGENT.md` | Review decisions and measurements |
 
 ## Current status
 

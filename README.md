@@ -80,6 +80,7 @@ remain the merge gate; this is the review layer on top.
   <https://commandcode.ai/docs/studio#api-keys> and run
   `gh secret set COMMAND_CODE_API_KEY`.
 - Commands: `/describe`, `/review`, `/improve` (manual), `/ask <question>`.
+- Agent contract: [`AGENTS.md`](AGENTS.md) → "Agent review surface".
 - A review that cannot run fails the check. It never reports green.
 - Fork PRs are skipped because GitHub does not expose secrets to them.
 
