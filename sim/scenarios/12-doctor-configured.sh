@@ -4,6 +4,8 @@ source /usr/local/lib/sim/lib.sh
 
 echo "scenario: doctor passes on a configured system"
 
+printf '1\n' >/etc/sim/snapper.exit
+
 mkdir -p /etc/aurto
 # pacman 7 downloads as alpm; the configured cache must be writable by it.
 chown alpm:alpm /var/cache/pacman/pkg

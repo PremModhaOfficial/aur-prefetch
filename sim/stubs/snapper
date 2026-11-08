@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Sim stub: records argv, then replays a configured response.
+#
+# Scenarios control the response with files in /etc/sim:
+#   snapper.out   stdout
+#   snapper.err   stderr
+#   snapper.exit  exit status
+set -uo pipefail
+
+tool=${0##*/}
+printf '%s\n' "$*" >>"/var/log/sim-$tool.log"
+
+[[ -f "/etc/sim/$tool.out" ]] && cat "/etc/sim/$tool.out"
+[[ -f "/etc/sim/$tool.err" ]] && cat "/etc/sim/$tool.err" >&2
+if [[ -f "/etc/sim/$tool.exit" ]]; then
+    exit "$(cat "/etc/sim/$tool.exit")"
+fi
+exit 0

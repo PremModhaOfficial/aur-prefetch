@@ -175,7 +175,8 @@ Read-only setup audit.
 - [x] Disk floor.
 
 Done when: each broken setup has a scenario that reports it, not just a missing
-file.
+file. Scenarios 11-12 and 21-24 cover the missing setup, a configured system, a
+wildcard sudoers grant, the disk floor, snapper timers, and cache permissions.
 
 ### 3.4 `clean`
 

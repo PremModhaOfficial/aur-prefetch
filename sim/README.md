@@ -36,7 +36,8 @@ Requires Docker or Podman. The container runs with `--network none`.
   `/var/log/sim-sudo.log` and then execs the real sudo, so a scenario can prove
   which escalations actually happened
 - Stubs for `systemctl`, `journalctl`, `loginctl`, `aurto`, `paccache`, and
-  `pacdiff`. Each logs argv to `/var/log/sim-<tool>.log`; a scenario sets the
+  `pacdiff`, plus `snapper` for the optional doctor checks. Each logs argv to
+  `/var/log/sim-<tool>.log`; a scenario sets the
   reply with `/etc/sim/<tool>.out`, `.err`, and `.exit`. `paccache` forwards to
   the real tool; `pacdiff` never runs for real.
 - Pacman config fixtures for default, multiple, empty, and moved `CacheDir`
@@ -63,7 +64,6 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `11-doctor-missing-setup.sh` | `doctor` exits 1 and names the timer, sudoers, trust, and repo problems |
 | `12-doctor-configured.sh` | `doctor` exits 0 on a configured container |
 | `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
-| `13-check-missing-cache-dir.sh` | a missing `CacheDir` makes `check` exit 1 instead of failing on `df` |
 | `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
 | `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |
 | `16-init-setup.sh` | `init` renders without writing, applies with `visudo` approval, and never runs `aurto` |
@@ -71,6 +71,11 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `18-yay-build-loud.sh` | a direct yay build and `install` both surface the AUR failure loudly; install exits 2 and does not report success |
 | `19-installer-sudo-scope.sh` | `installer` may run only `/usr/local/bin/sim-upgrade` through sudo; direct pacman argv and helper arguments are refused |
 | `20-init-as-builder.sh` | `init --apply` as `builder` escalates only `visudo`, `install`, and `mv` with the recorded argv, writes a `builder` rule, and refuses to run under `sudo`; the fixture grants no wildcard sudo |
+| `21-doctor-wildcard-sudoers.sh` | a broader sudoers grant is not accepted as the exact rule |
+| `22-doctor-low-disk.sh` | a disk floor larger than the filesystem makes `doctor` exit 1 |
+| `23-doctor-snapper-timers.sh` | snapper without scheduled timers makes `doctor` exit 1 |
+| `24-doctor-cache-permissions.sh` | a cache the `alpm` user cannot write makes `doctor` exit 1 |
+| `25-check-missing-cache-dir.sh` | a missing `CacheDir` makes `check` exit 1 instead of failing on `df` |
 | `26-install-root-refuses.sh` | `install` exits 1 with no command run and `/usr` unchanged for plain root and for the sudo shape (real UID user, effective UID root) |
 | `29-init-visudo-root.sh` | root `visudo -cf` accepts the user-owned temp rule that `init` validates through sudo |
 

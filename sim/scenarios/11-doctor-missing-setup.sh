@@ -4,6 +4,8 @@ source /usr/local/lib/sim/lib.sh
 
 echo "scenario: doctor reports a missing setup"
 
+printf '1\n' >/etc/sim/snapper.exit
+
 log=$(mktemp)
 before_usr=$(usr_state)
 before_cache=$(cache_files)

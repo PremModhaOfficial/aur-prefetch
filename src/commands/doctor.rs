@@ -55,17 +55,26 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
 
 fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
     match fs::read_to_string(&config.sudoers_file) {
-        Ok(text) if sudoers_rule_ok(&text) => {
-            println!("doctor: sudoers: exact rule present");
-            Ok(0)
-        }
-        Ok(_) => {
-            println!(
-                "doctor: sudoers: {} has no exact pacman -Syuw rule",
-                config.sudoers_file.display()
-            );
-            Ok(1)
-        }
+        Ok(text) => match current_user(runner)? {
+            Some(user) if sudoers_rule_ok(&text, &user) => {
+                println!("doctor: sudoers: exact rule present for {user}");
+                Ok(0)
+            }
+            Some(user) => {
+                println!(
+                    "doctor: sudoers: {} has no exact pacman -Syuw rule for {user}",
+                    config.sudoers_file.display()
+                );
+                Ok(1)
+            }
+            None => {
+                println!(
+                    "doctor: sudoers: cannot determine the current user to verify {}",
+                    config.sudoers_file.display()
+                );
+                Ok(1)
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             println!(
                 "doctor: sudoers: {} is missing",
@@ -108,14 +117,21 @@ fn sudo_list_ok(text: &str) -> bool {
             exact = true;
             continue;
         }
-        if line.contains("NOPASSWD:") || line.contains("pacman -Syuw") {
+        // Any other rule entry is a wider grant. Informational lines from
+        // `sudo -l` (`User alice may run...`, `Matching Defaults...`) contain
+        // no parentheses.
+        if line.contains("NOPASSWD:")
+            || line.contains("pacman -Syuw")
+            || line.starts_with('(')
+            || line.ends_with(" ALL")
+        {
             return false;
         }
     }
     exact
 }
 
-fn sudoers_rule_ok(text: &str) -> bool {
+fn sudoers_rule_ok(text: &str, user: &str) -> bool {
     const SUFFIX: &str = " ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm";
 
     let mut rule = None;
@@ -144,10 +160,20 @@ fn sudoers_rule_ok(text: &str) -> bool {
     let Some(principal) = rule.strip_suffix(SUFFIX) else {
         return false;
     };
-    !principal.is_empty()
-        && principal
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+    principal == user
+}
+
+fn current_user(runner: &dyn CommandRunner) -> Result<Option<String>, Error> {
+    let output = runner.run("id", &["-un"])?;
+    if output.code != 0 {
+        return Ok(None);
+    }
+    let name = output.stdout.trim();
+    if name.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(name.to_string()))
+    }
 }
 
 fn report_trust(config: &Config) -> Result<u32, Error> {
@@ -253,10 +279,10 @@ fn report_cache_dir(runner: &dyn CommandRunner, cache: &Path) -> Result<u32, Err
         }
         None => {
             println!(
-                "doctor: cache: {} exists (mode {mode:o}); no alpm user, writability not applicable",
+                "doctor: cache: {} exists (mode {mode:o}); no alpm user to verify writability",
                 cache.display()
             );
-            Ok(0)
+            Ok(1)
         }
     }
 }
@@ -367,11 +393,13 @@ fn journald_settings(text: &str) -> (bool, bool) {
         if !in_journal {
             continue;
         }
-        if line == "Storage=persistent" {
-            persistent = true;
-        }
         if let Some((key, value)) = line.split_once('=') {
-            if (key == "SystemMaxUse" || key == "RuntimeMaxUse") && !value.trim().is_empty() {
+            let key = key.trim();
+            let value = value.trim();
+            if key == "Storage" && value == "persistent" {
+                persistent = true;
+            }
+            if (key == "SystemMaxUse" || key == "RuntimeMaxUse") && !value.is_empty() {
                 capped = true;
             }
         }
@@ -462,7 +490,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{identity_can, run_with, sudo_list_ok, sudoers_rule_ok};
+    use super::{identity_can, journald_settings, run_with, sudo_list_ok, sudoers_rule_ok};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -549,8 +577,9 @@ mod tests {
         fs::create_dir_all(dir.join("cache")).expect("cache dir");
     }
 
-    fn queue_happy(runner: &FakeRunner, dir: &Path, available: &str) {
+    fn queue_happy(runner: &FakeRunner, dir: &Path, user: &str, available: &str) {
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok(&format!("{user}\n")));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
         let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
         runner.push_output(ok(&format!("{}\n", meta.uid())));
@@ -569,7 +598,7 @@ mod tests {
         complete_setup(&config, &dir);
 
         let runner = FakeRunner::new();
-        queue_happy(&runner, &dir, "10737418240\n");
+        queue_happy(&runner, &dir, "alice", "10737418240\n");
 
         run_with(&config, &runner).expect("doctor");
 
@@ -583,7 +612,7 @@ mod tests {
         complete_setup(&config, &dir);
 
         let runner = FakeRunner::new();
-        queue_happy(&runner, &dir, "1000\n");
+        queue_happy(&runner, &dir, "alice", "1000\n");
 
         let result = run_with(&config, &runner);
 
@@ -600,6 +629,7 @@ mod tests {
 
         let runner = FakeRunner::new();
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
         let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
         runner.push_output(ok(&format!("{}\n", meta.uid())));
@@ -624,7 +654,23 @@ mod tests {
         fs::write(&config.sudoers_file, "alice ALL=(ALL) NOPASSWD: ALL\n").expect("sudoers");
 
         let runner = FakeRunner::new();
-        queue_happy(&runner, &dir, "10737418240\n");
+        queue_happy(&runner, &dir, "alice", "10737418240\n");
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_rule_for_another_user_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "bob", "10737418240\n");
 
         let result = run_with(&config, &runner);
 
@@ -671,6 +717,7 @@ mod tests {
 
         let runner = FakeRunner::new();
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
         let mut not_installed = ok("");
         not_installed.code = 1;
@@ -693,6 +740,7 @@ mod tests {
 
         let runner = FakeRunner::new();
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
         runner.push_output(ok("999999\n"));
         runner.push_output(ok("999999\n"));
@@ -719,6 +767,7 @@ mod tests {
 
         let runner = FakeRunner::new();
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
         runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
         let mut not_installed = ok("");
         not_installed.code = 1;
@@ -740,21 +789,52 @@ mod tests {
     }
 
     #[test]
+    fn a_missing_alpm_user_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok("alice\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let mut no_alpm = ok("");
+        no_alpm.code = 1;
+        runner.push_output(no_alpm);
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
     fn a_sudoers_file_must_contain_only_the_exact_rule() {
         assert!(sudoers_rule_ok(
-            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            "alice"
         ));
         assert!(!sudoers_rule_ok(
-            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\nalice ALL=(ALL) NOPASSWD: ALL\n"
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\nalice ALL=(ALL) NOPASSWD: ALL\n",
+            "alice"
         ));
         assert!(!sudoers_rule_ok(
-            "%wheel ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+            "%wheel ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            "alice"
         ));
         assert!(!sudoers_rule_ok(
-            "#include /etc/sudoers.d/other\nalice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+            "#include /etc/sudoers.d/other\nalice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            "alice"
         ));
         assert!(!sudoers_rule_ok(
-            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm, /bin/sh\n"
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm, /bin/sh\n",
+            "alice"
         ));
     }
 
@@ -766,6 +846,17 @@ mod tests {
         assert!(!sudo_list_ok(
             "    (ALL) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
         ));
+        assert!(!sudo_list_ok(
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n    (ALL : ALL) ALL\n"
+        ));
+    }
+
+    #[test]
+    fn journald_accepts_spaces_around_each_equals() {
+        assert_eq!(
+            journald_settings("[Journal]\nStorage = persistent\nSystemMaxUse = 500M\n"),
+            (true, true)
+        );
     }
 
     #[test]
