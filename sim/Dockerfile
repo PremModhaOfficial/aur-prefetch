@@ -42,7 +42,7 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
 COPY sim/sim-upgrade /usr/local/bin/sim-upgrade
 RUN useradd --create-home --shell /bin/bash installer \
     && chmod 755 /usr/local/bin/sim-upgrade \
-    && printf 'installer ALL=(root) NOPASSWD: /usr/local/bin/sim-upgrade\n' >> /etc/sudoers.d/sim \
+    && printf 'installer ALL=(root) NOPASSWD: /usr/local/bin/sim-upgrade ""\n' >> /etc/sudoers.d/sim \
     && visudo -cf /etc/sudoers.d/sim
 
 # Replace mirrors with the offline sim repo. Done after the builder stage so

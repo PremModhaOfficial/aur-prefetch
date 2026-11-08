@@ -102,7 +102,11 @@ pub fn run_with(
     }
 
     state.last_install_unix = Some(now_unix()?);
-    state.save(&config.state_file)?;
+    if let Err(err) = state.save(&config.state_file) {
+        eprintln!(
+            "install: warning: the upgrade finished but the install time was not saved: {err}"
+        );
+    }
 
     println!("install: done");
     println!("install: next: sudo pacdiff");
@@ -219,12 +223,41 @@ fn effective_uid(runner: &dyn CommandRunner) -> Result<u32, Error> {
 /// run, fall back to the last install or upgrade in pacman.log (D4).
 fn install_since(state: &State, pacman_log: &std::path::Path) -> String {
     if let Some(time) = state.last_install_unix {
-        return format!("{time} (unix)");
+        return format_unix_utc(time);
     }
 
     last_log_install(pacman_log)
         .map(|stamp| format!("{stamp} (from pacman.log)"))
         .unwrap_or_else(|| "never".to_string())
+}
+
+fn format_unix_utc(seconds: u64) -> String {
+    let days = (seconds / 86_400) as i64;
+    let remainder = seconds % 86_400;
+    let (year, month, day) = civil_from_days(days);
+    let hour = remainder / 3_600;
+    let minute = (remainder % 3_600) / 60;
+    let second = remainder % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}+0000")
+}
+
+/// Howard Hinnant's days-from-civil inverse. Days are counted from 1970-01-01.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = (z - era * 146_097) as u64;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era as i64 + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_prime + 2) / 5 + 1) as u32;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    } as u32;
+    (year + i64::from(month <= 2), month, day)
 }
 
 fn last_log_install(path: &std::path::Path) -> Option<String> {
@@ -245,7 +278,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Options, effective_uid, install_since, run_with};
+    use super::{Options, effective_uid, format_unix_utc, install_since, run_with};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -390,8 +423,14 @@ mod tests {
 
         assert_eq!(
             install_since(&state, Path::new("/nonexistent")),
-            "42 (unix)"
+            "1970-01-01T00:00:42+0000"
         );
+    }
+
+    #[test]
+    fn format_unix_utc_matches_the_pacman_log_shape() {
+        assert_eq!(format_unix_utc(0), "1970-01-01T00:00:00+0000");
+        assert_eq!(format_unix_utc(1_700_000_000), "2023-11-14T22:13:20+0000");
     }
 
     #[test]
@@ -420,6 +459,25 @@ mod tests {
             install_since(&State::default(), Path::new("/nonexistent/pacman.log")),
             "never"
         );
+    }
+
+    #[test]
+    fn a_state_save_failure_does_not_turn_a_successful_install_into_an_error() {
+        let dir = temp_dir();
+        let mut config = test_config(&dir);
+        fs::write(&config.trusted_users, "maintainer\n").expect("trust file");
+        // /proc/self accepts reads but not file creation, so load sees a
+        // missing state and save fails without relying on test permissions.
+        config.state_file = PathBuf::from("/proc/self/aur-prefetch-state.json");
+        let runner = FakeRunner::new();
+        queue_lists(&runner, "");
+        runner.push_interactive(0);
+
+        run_with(&config, &runner, options(true, false, false))
+            .expect("a completed upgrade must succeed even if state cannot be saved");
+        assert!(ran_yay(&runner));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 
     #[test]

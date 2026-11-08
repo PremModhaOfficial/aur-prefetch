@@ -25,9 +25,10 @@ Requires Docker or Podman. The container runs with `--network none`.
 - `builder`, a non-root user whose only passwordless sudo command is
   `/usr/bin/pacman -Syuw --noconfirm`
 - `installer`, a sim-only user whose only sudoers rule is
-  `/usr/local/bin/sim-upgrade`. The helper takes no arguments and always
-  performs exactly `pacman -Syu --noconfirm`; no direct pacman argv is allowed
-  through sudo, and scenario 19 proves the rule is exactly that narrow
+  `/usr/local/bin/sim-upgrade ""`, so the command and an empty argument list
+  are both pinned. The helper always performs exactly `pacman -Syu
+  --noconfirm`; no direct pacman argv is allowed through sudo, and scenario 19
+  proves the rule is exactly that narrow
 - `/usr/local/bin/yay`, a fake helper that logs every call to
   `/var/log/sim-yay.log`, upgrades through `sudo -n sim-upgrade`, and fails
   with exit 97 if asked to build from the AUR or exit 98 if run as root

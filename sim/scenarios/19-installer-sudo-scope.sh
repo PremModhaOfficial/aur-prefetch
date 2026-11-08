@@ -6,12 +6,12 @@
 # runs `pacman -Syu --noconfirm`. No direct pacman argv is allowed through sudo.
 source /usr/local/lib/sim/lib.sh
 
-echo "scenario: installer may escalate only the sim-upgrade helper"
+echo "scenario: installer may escalate only the sim-upgrade helper with no arguments"
 
 rule=$(grep '^installer ' /etc/sudoers.d/sim)
 assert_eq "$rule" \
-    "installer ALL=(root) NOPASSWD: /usr/local/bin/sim-upgrade" \
-    "the installer rule names only the helper, with no wildcard"
+    'installer ALL=(root) NOPASSWD: /usr/local/bin/sim-upgrade ""' \
+    "the installer rule names only the helper and pins an empty argument list"
 
 helper=/usr/local/bin/sim-upgrade
 assert_true "the scoped helper exists" test -x "$helper"
@@ -37,12 +37,14 @@ deny "installer cannot run a direct pacman upgrade" /usr/bin/pacman -Syu --nocon
 deny "installer cannot run fetch's pacman argv" /usr/bin/pacman -Syuw --noconfirm
 deny "installer cannot run another pacman action" /usr/bin/pacman -Sy
 
-# The helper itself rejects arguments, so the allowed rule cannot be widened.
+# The empty argument list in sudoers makes sudo refuse extra arguments. The
+# helper's own check is defence in depth and stays reachable if sudoers drifts.
 if runuser -u installer -- sudo -n /usr/local/bin/sim-upgrade extra >"$log" 2>&1; then
     fail "the helper accepted arguments"
 else
     pass "the helper refuses arguments"
 fi
-assert_contains "$(cat "$log")" "takes no arguments" "the helper explains the refusal"
+assert_true "sudo refused the extra arguments" \
+    bash -c "grep -Eq 'not allowed|not in the sudoers|sudo:' '$log'"
 
 finish
