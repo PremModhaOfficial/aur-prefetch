@@ -84,7 +84,7 @@ pub fn run_with(
         .ok_or_else(|| Error::failed("HOME is not set; cannot locate the user unit directory"))?;
     let service_path = unit_dir.join("aur-prefetch.service");
     let timer_path = unit_dir.join("aur-prefetch.timer");
-    let service = render_service(setup.exe);
+    let service = render_service(setup.exe)?;
     let timer = render_timer();
     let sudoers = render_sudoers(setup.user);
 
@@ -100,26 +100,7 @@ pub fn run_with(
         return Ok(());
     }
 
-    if let Some(parent) = config.sudoers_file.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| Error::failed(format!("cannot create {}: {err}", parent.display())))?;
-    }
-
-    let temp = std::env::temp_dir().join(format!(
-        "aur-prefetch-sudoers-{}-{}",
-        std::process::id(),
-        now_nanos()
-    ));
-    fs::write(&temp, &sudoers)
-        .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.display())))?;
-    let check = runner.run("visudo", &["-cf", path_str(&temp)?])?;
-    if check.code != 0 {
-        let _ = fs::remove_file(&temp);
-        return Err(Error::failed(format!(
-            "visudo rejected the sudoers rule: {}",
-            check.stderr.trim()
-        )));
-    }
+    install_sudoers(config, runner, &sudoers)?;
 
     fs::create_dir_all(unit_dir)
         .map_err(|err| Error::failed(format!("cannot create {}: {err}", unit_dir.display())))?;
@@ -127,40 +108,6 @@ pub fn run_with(
         .map_err(|err| Error::failed(format!("cannot write {}: {err}", service_path.display())))?;
     fs::write(&timer_path, timer)
         .map_err(|err| Error::failed(format!("cannot write {}: {err}", timer_path.display())))?;
-
-    let installed = fs::write(&config.sudoers_file, &sudoers).and_then(|()| {
-        fs::set_permissions(&config.sudoers_file, fs::Permissions::from_mode(0o440))
-    });
-    match installed {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            let code = runner.run_interactive(
-                "sudo",
-                &[
-                    "install",
-                    "-m",
-                    "0440",
-                    path_str(&temp)?,
-                    path_str(&config.sudoers_file)?,
-                ],
-            )?;
-            if code != 0 {
-                let _ = fs::remove_file(&temp);
-                return Err(Error::failed(
-                    "sudo could not install the sudoers rule; run `sudo visudo -f /etc/sudoers.d/aur-prefetch` manually",
-                ));
-            }
-        }
-        Err(err) => {
-            let _ = fs::remove_file(&temp);
-            return Err(Error::failed(format!(
-                "cannot install {}: {err}",
-                config.sudoers_file.display()
-            )));
-        }
-    }
-    fs::remove_file(&temp)
-        .map_err(|err| Error::failed(format!("cannot remove {}: {err}", temp.display())))?;
 
     let reload = runner.run("systemctl", &["--user", "daemon-reload"])?;
     if reload.code != 0 {
@@ -188,11 +135,29 @@ pub fn run_with(
     Ok(())
 }
 
-fn render_service(exe: &Path) -> String {
-    format!(
+fn render_service(exe: &Path) -> Result<String, Error> {
+    Ok(format!(
         "[Unit]\nDescription=Prefetch packages\n[Service]\nType=oneshot\nExecStart={} fetch\n",
-        exe.display()
-    )
+        systemd_quote_path(exe)?
+    ))
+}
+
+/// Quote a path for ExecStart and escape systemd's `%` and `$` expansions.
+fn systemd_quote_path(path: &Path) -> Result<String, Error> {
+    let raw = path_str(path)?;
+    let mut quoted = String::with_capacity(raw.len() + 2);
+    quoted.push('"');
+    for character in raw.chars() {
+        match character {
+            '\\' => quoted.push_str("\\\\"),
+            '"' => quoted.push_str("\\\""),
+            '%' => quoted.push_str("%%"),
+            '$' => quoted.push_str("$$"),
+            _ => quoted.push(character),
+        }
+    }
+    quoted.push('"');
+    Ok(quoted)
 }
 
 fn render_timer() -> String {
@@ -203,6 +168,122 @@ fn render_sudoers(user: &str) -> String {
     format!("{user} ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n")
 }
 
+fn install_sudoers(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    sudoers: &str,
+) -> Result<(), Error> {
+    let parent = config.sudoers_file.parent().ok_or_else(|| {
+        Error::failed(format!(
+            "{} has no parent directory",
+            config.sudoers_file.display()
+        ))
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|err| Error::failed(format!("cannot create {}: {err}", parent.display())))?;
+
+    let staged = parent.join(format!(
+        ".aur-prefetch-sudoers-{}-{}",
+        std::process::id(),
+        now_nanos()
+    ));
+
+    match fs::write(&staged, sudoers) {
+        Ok(()) => {
+            let result = validate_and_rename(runner, &staged, &config.sudoers_file);
+            if result.is_err() {
+                let _ = fs::remove_file(&staged);
+            }
+            result
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            install_sudoers_with_sudo(runner, sudoers, &config.sudoers_file, parent)
+        }
+        Err(err) => Err(Error::failed(format!(
+            "cannot stage the sudoers rule at {}: {err}",
+            staged.display()
+        ))),
+    }
+}
+
+fn validate_and_rename(
+    runner: &dyn CommandRunner,
+    staged: &Path,
+    target: &Path,
+) -> Result<(), Error> {
+    let check = runner.run("visudo", &["-cf", path_str(staged)?])?;
+    if check.code != 0 {
+        return Err(Error::failed(format!(
+            "visudo rejected the sudoers rule: {}",
+            check.stderr.trim()
+        )));
+    }
+
+    fs::set_permissions(staged, fs::Permissions::from_mode(0o440))
+        .map_err(|err| Error::failed(format!("cannot set mode on {}: {err}", staged.display())))?;
+    fs::rename(staged, target).map_err(|err| {
+        Error::failed(format!(
+            "cannot move the validated rule into {}: {err}",
+            target.display()
+        ))
+    })
+}
+
+fn install_sudoers_with_sudo(
+    runner: &dyn CommandRunner,
+    sudoers: &str,
+    target: &Path,
+    parent: &Path,
+) -> Result<(), Error> {
+    let temp = std::env::temp_dir().join(format!(
+        "aur-prefetch-sudoers-{}-{}",
+        std::process::id(),
+        now_nanos()
+    ));
+    fs::write(&temp, sudoers)
+        .map_err(|err| Error::failed(format!("cannot write {}: {err}", temp.display())))?;
+
+    let check = runner.run("visudo", &["-cf", path_str(&temp)?])?;
+    if check.code != 0 {
+        let _ = fs::remove_file(&temp);
+        return Err(Error::failed(format!(
+            "visudo rejected the sudoers rule: {}",
+            check.stderr.trim()
+        )));
+    }
+
+    let staged = parent.join(format!(
+        ".aur-prefetch-sudoers-install-{}-{}",
+        std::process::id(),
+        now_nanos()
+    ));
+    let code = runner.run_interactive(
+        "sudo",
+        &[
+            "install",
+            "-m",
+            "0440",
+            path_str(&temp)?,
+            path_str(&staged)?,
+        ],
+    )?;
+    let _ = fs::remove_file(&temp);
+    if code != 0 {
+        return Err(Error::failed(
+            "sudo could not stage the sudoers rule; run `sudo visudo -f /etc/sudoers.d/aur-prefetch` manually",
+        ));
+    }
+
+    let code = runner.run_interactive("sudo", &["mv", path_str(&staged)?, path_str(target)?])?;
+    if code != 0 {
+        let _ = runner.run_interactive("sudo", &["rm", "-f", path_str(&staged)?]);
+        return Err(Error::failed(
+            "sudo could not move the sudoers rule into place; run `sudo visudo -f /etc/sudoers.d/aur-prefetch` manually",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -211,7 +292,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Setup, run_with};
+    use super::{Setup, render_service, run_with};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -277,7 +358,7 @@ mod tests {
 
         let units = config.user_unit_dir.as_ref().expect("unit dir");
         let service = fs::read_to_string(units.join("aur-prefetch.service")).expect("service file");
-        assert!(service.contains("ExecStart=/usr/local/bin/aur-prefetch fetch"));
+        assert!(service.contains("ExecStart=\"/usr/local/bin/aur-prefetch\" fetch"));
 
         let timer = fs::read_to_string(units.join("aur-prefetch.timer")).expect("timer file");
         assert!(timer.contains("OnCalendar=daily"));
@@ -388,6 +469,46 @@ mod tests {
         assert!(matches!(result, Err(Error::Failed(_))));
         assert_eq!(result.unwrap_err().exit_code(), 2);
 
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn exec_start_quotes_paths_and_escapes_specifiers() {
+        let service = render_service(Path::new("/home/alice/My Projects/aur-prefetch%20$HOME"))
+            .expect("service");
+
+        assert!(
+            service.contains("ExecStart=\"/home/alice/My Projects/aur-prefetch%%20$$HOME\" fetch"),
+            "spaces must be quoted and % and $ escaped: {service}"
+        );
+    }
+
+    #[test]
+    fn a_read_only_sudoers_dir_uses_sudo_and_a_final_move() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let sudoers_dir = dir.join("sudoers.d");
+        fs::create_dir_all(&sudoers_dir).expect("sudoers dir");
+        fs::set_permissions(&sudoers_dir, fs::Permissions::from_mode(0o555)).expect("chmod");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("")); // visudo accepts the staged copy in /tmp
+
+        run_with(&config, &runner, setup(true)).expect("init");
+
+        let calls = runner.calls();
+        assert!(
+            calls.iter().any(|(program, args)| program == "sudo"
+                && args.first().map(String::as_str) == Some("install")),
+            "the rule must be staged with sudo"
+        );
+        assert!(
+            calls.iter().any(|(program, args)| program == "sudo"
+                && args.first().map(String::as_str) == Some("mv")),
+            "a same-directory mv must put the rule in place"
+        );
+
+        fs::set_permissions(&sudoers_dir, fs::Permissions::from_mode(0o755)).expect("restore");
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 }
