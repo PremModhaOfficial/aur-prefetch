@@ -63,6 +63,9 @@ The PR review is a machine surface first, human second. Read it, decide, act.
   verdict: `no_concerns_found`, `needs_review`, or `changes_required`.
 - **State:** one persistent comment, updated in place. Do not reconstruct a
   thread.
+- **State command:** `scripts/review-state.sh [<pr>]` prints PR state, check
+  counts, risk, merge verdict, staleness, coverage, and finding counts.
+  `--findings` lists `path:line`, `--full` includes the comment.
 - **Authority:** the bot advises. `CI` and `Sim` are the gates. A merge verdict
   is input to a human decision, not permission to merge.
 - **Failure:** a review that could not run fails the `Review` check. A red
@@ -86,6 +89,7 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 | `.github/workflows/pr-agent.yml` | Agentic PR review |
 | `.pr_agent.toml` | Review policy |
 | `.github/PR-AGENT.md` | Review decisions and measurements |
+| `scripts/review-state.sh` | Agent-facing review state |
 
 ## Current status
 
