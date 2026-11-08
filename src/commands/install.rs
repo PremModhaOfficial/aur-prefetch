@@ -39,7 +39,7 @@ pub fn run_with(
     let official_output = runner.run(pacman, &["-Qu"])?;
     let official = lines(&official_output.stdout);
     let (aur, aur_available) = match runner.run("yay", &["-Qua"]) {
-        Ok(output) if output.code == 0 => (lines(&output.stdout), true),
+        Ok(output) if output.code == 0 || output.code == 1 => (lines(&output.stdout), true),
         _ => (Vec::new(), false),
     };
 

@@ -57,6 +57,8 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
 | `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
 | `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |
+| `17-install-noop.sh` | `install` on a current repo exits 0, changes nothing, and builds nothing |
+| `18-yay-build-loud.sh` | the AUR build path exits non-zero with a loud message instead of passing silently |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
