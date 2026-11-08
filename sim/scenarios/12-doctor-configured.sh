@@ -5,6 +5,9 @@ source /usr/local/lib/sim/lib.sh
 echo "scenario: doctor passes on a configured system"
 
 mkdir -p /etc/aurto
+# pacman 7 downloads as alpm; the configured cache must be writable by it.
+chown alpm:alpm /var/cache/pacman/pkg
+chmod 0755 /var/cache/pacman/pkg
 printf 'root ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n' >/etc/sudoers.d/aur-prefetch
 chmod 0440 /etc/sudoers.d/aur-prefetch
 printf 'maintainer\n' >/etc/aurto/trusted-users

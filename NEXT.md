@@ -168,9 +168,8 @@ Read-only setup audit.
 - [x] Timer enabled and next run scheduled.
 - [x] Sudoers rule present and exact.
 - [x] Trust file state and repo include.
-- [x] `pacman-conf CacheDir` resolves and the directory exists. Write access
-      for `alpm` cannot be checked without the sudoers rule, so it is reported
-      by existence only.
+- [x] `pacman-conf CacheDir` resolves and the directory is writable by `alpm`
+      (checked from ownership and mode bits; ACLs are not inspected).
 - [x] journald `Storage=persistent` and a size cap.
 - [x] Snapper timers and ranges, only if snapper is installed.
 - [x] Disk floor.

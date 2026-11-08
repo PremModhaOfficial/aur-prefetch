@@ -1,5 +1,5 @@
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
@@ -33,7 +33,7 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     problems += report_trust(config)?;
     problems += report_repo(config)?;
     let cache_dir = resolve_cache_dir(config, runner)?;
-    problems += report_cache_dir(&cache_dir)?;
+    problems += report_cache_dir(runner, &cache_dir)?;
     problems += report_journald(config)?;
     problems += report_snapper(config, runner)?;
     if cache_dir.exists() {
@@ -97,18 +97,17 @@ fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
 }
 
 fn sudo_list_ok(text: &str) -> bool {
+    let rule = "(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm";
     let mut exact = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.contains("NOPASSWD: ALL") || line.contains("ALL=(ALL)") || line.contains('*') {
-            return false;
-        }
-        let Some(command) = line.strip_prefix("(root) NOPASSWD:") else {
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
             continue;
-        };
-        if command.trim() == "/usr/bin/pacman -Syuw --noconfirm" {
+        }
+        if line == rule {
             exact = true;
-        } else {
+            continue;
+        }
+        if line.contains("NOPASSWD:") || line.contains("pacman -Syuw") {
             return false;
         }
     }
@@ -116,28 +115,38 @@ fn sudo_list_ok(text: &str) -> bool {
 }
 
 fn sudoers_rule_ok(text: &str) -> bool {
-    let mut exact = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
+    const SUFFIX: &str = " ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm";
+
+    let mut rule = None;
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
             continue;
         }
-        if line.contains("NOPASSWD: ALL") || line.contains("ALL=(ALL)") || line.contains('*') {
+        if line.starts_with("#include")
+            || line.starts_with("#includedir")
+            || line.starts_with("@include")
+        {
             return false;
         }
-        if !line.contains("ALL=(root)") {
+        if line.starts_with('#') {
             continue;
         }
-        let Some((_, command)) = line.split_once("NOPASSWD:") else {
-            return false;
-        };
-        if command.trim() == "/usr/bin/pacman -Syuw --noconfirm" {
-            exact = true;
-        } else {
+        if rule.is_some() {
             return false;
         }
+        rule = Some(line);
     }
-    exact
+
+    let Some(rule) = rule else {
+        return false;
+    };
+    let Some(principal) = rule.strip_suffix(SUFFIX) else {
+        return false;
+    };
+    !principal.is_empty()
+        && principal
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 fn report_trust(config: &Config) -> Result<u32, Error> {
@@ -197,34 +206,117 @@ fn report_repo(config: &Config) -> Result<u32, Error> {
     }
 }
 
-fn report_cache_dir(cache: &Path) -> Result<u32, Error> {
-    match fs::metadata(cache) {
-        Ok(meta) if meta.is_dir() => {
-            let mode = meta.permissions().mode() & 0o777;
-            if mode & 0o222 == 0 {
-                println!(
-                    "doctor: cache: {} has mode {mode:o} and no write bit",
-                    cache.display()
-                );
-                Ok(1)
-            } else {
-                println!("doctor: cache: {} exists (mode {mode:o})", cache.display());
-                Ok(0)
-            }
-        }
+fn report_cache_dir(runner: &dyn CommandRunner, cache: &Path) -> Result<u32, Error> {
+    let meta = match fs::metadata(cache) {
+        Ok(meta) if meta.is_dir() => meta,
         Ok(_) => {
             println!("doctor: cache: {} is not a directory", cache.display());
-            Ok(1)
+            return Ok(1);
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             println!("doctor: cache: {} is missing", cache.display());
-            Ok(1)
+            return Ok(1);
         }
-        Err(err) => Err(Error::failed(format!(
-            "cannot inspect {}: {err}",
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot inspect {}: {err}",
+                cache.display()
+            )));
+        }
+    };
+
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o222 == 0 {
+        println!(
+            "doctor: cache: {} has mode {mode:o} and no write bit",
             cache.display()
-        ))),
+        );
+        return Ok(1);
     }
+
+    match alpm_identity(runner)? {
+        Some((uid, gids)) => {
+            if cache_writable_by(cache, uid, &gids)? {
+                println!(
+                    "doctor: cache: {} is writable by alpm (mode {mode:o})",
+                    cache.display()
+                );
+                Ok(0)
+            } else {
+                println!(
+                    "doctor: cache: {} is not writable by alpm (mode {mode:o})",
+                    cache.display()
+                );
+                Ok(1)
+            }
+        }
+        None => {
+            println!(
+                "doctor: cache: {} exists (mode {mode:o}); no alpm user, writability not applicable",
+                cache.display()
+            );
+            Ok(0)
+        }
+    }
+}
+
+/// pacman 7 downloads as `alpm`; resolve that account without touching it.
+fn alpm_identity(runner: &dyn CommandRunner) -> Result<Option<(u32, Vec<u32>)>, Error> {
+    let uid = runner.run("id", &["-u", "alpm"])?;
+    if uid.code != 0 {
+        return Ok(None);
+    }
+    let Some(uid) = uid.stdout.trim().parse::<u32>().ok() else {
+        return Ok(None);
+    };
+
+    let groups = runner.run("id", &["-G", "alpm"])?;
+    if groups.code != 0 {
+        return Ok(None);
+    }
+    let gids: Vec<u32> = groups
+        .stdout
+        .split_whitespace()
+        .filter_map(|gid| gid.parse::<u32>().ok())
+        .collect();
+    if gids.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some((uid, gids)))
+}
+
+/// Best effort, mode bits only: ACLs are not inspected.
+fn cache_writable_by(cache: &Path, uid: u32, gids: &[u32]) -> Result<bool, Error> {
+    for ancestor in cache.ancestors() {
+        let meta = fs::metadata(ancestor).map_err(|err| {
+            Error::failed(format!("cannot inspect {}: {err}", ancestor.display()))
+        })?;
+        let need_write = ancestor == cache;
+        if !identity_can(meta.mode(), meta.uid(), meta.gid(), uid, gids, need_write) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn identity_can(
+    mode: u32,
+    owner: u32,
+    group: u32,
+    uid: u32,
+    gids: &[u32],
+    need_write: bool,
+) -> bool {
+    let bits = if owner == uid {
+        (mode >> 6) & 0o7
+    } else if gids.contains(&group) {
+        (mode >> 3) & 0o7
+    } else {
+        mode & 0o7
+    };
+    let needed = if need_write { 0o3 } else { 0o1 };
+    bits & needed == needed
 }
 
 fn report_journald(config: &Config) -> Result<u32, Error> {
@@ -365,11 +457,11 @@ fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<u3
 mod tests {
     use std::collections::HashMap;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::run_with;
+    use super::{identity_can, run_with, sudo_list_ok, sudoers_rule_ok};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -459,6 +551,9 @@ mod tests {
     fn queue_happy(runner: &FakeRunner, dir: &Path, available: &str) {
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
+        runner.push_output(ok(&format!("{}\n", meta.uid())));
+        runner.push_output(ok(&format!("{}\n", meta.gid())));
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
@@ -505,6 +600,9 @@ mod tests {
         let runner = FakeRunner::new();
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
+        runner.push_output(ok(&format!("{}\n", meta.uid())));
+        runner.push_output(ok(&format!("{}\n", meta.gid())));
         runner.push_output(ok("snapper 0.10\n"));
         runner.push_output(ok(""));
         runner.push_output(ok("10737418240\n"));
@@ -548,6 +646,9 @@ mod tests {
             "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
         ));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
+        runner.push_output(ok(&format!("{}\n", meta.uid())));
+        runner.push_output(ok(&format!("{}\n", meta.gid())));
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
@@ -568,12 +669,82 @@ mod tests {
         fs::set_permissions(&cache, fs::Permissions::from_mode(0o555)).expect("chmod cache");
 
         let runner = FakeRunner::new();
-        queue_happy(&runner, &dir, "10737418240\n");
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
 
         let result = run_with(&config, &runner);
 
         assert!(matches!(result, Err(Error::Blocked(_))));
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_cache_not_writable_by_alpm_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        runner.push_output(ok("999999\n"));
+        runner.push_output(ok("999999\n"));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_sudoers_file_must_contain_only_the_exact_rule() {
+        assert!(sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+        ));
+        assert!(!sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\nalice ALL=(ALL) NOPASSWD: ALL\n"
+        ));
+        assert!(!sudoers_rule_ok(
+            "%wheel ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+        ));
+        assert!(!sudoers_rule_ok(
+            "#include /etc/sudoers.d/other\nalice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+        ));
+        assert!(!sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm, /bin/sh\n"
+        ));
+    }
+
+    #[test]
+    fn sudo_l_output_rejects_wildcard_runas() {
+        assert!(sudo_list_ok(
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+        ));
+        assert!(!sudo_list_ok(
+            "    (ALL) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+        ));
+    }
+
+    #[test]
+    fn mode_bits_decide_alpm_access() {
+        // 0755 root:root, alpm is neither owner nor group.
+        assert!(!identity_can(0o755, 0, 0, 979, &[979], true));
+        assert!(identity_can(0o755, 0, 0, 979, &[979], false));
+        // 0775 alpm:alpm.
+        assert!(identity_can(0o775, 979, 979, 979, &[979], true));
+        // 0757, alpm reaches it through other.
+        assert!(identity_can(0o757, 0, 0, 979, &[979], true));
     }
 }
