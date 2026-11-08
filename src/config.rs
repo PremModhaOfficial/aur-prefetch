@@ -18,7 +18,6 @@ pub struct Config {
     pub sudoers_file: PathBuf,
     pub journald_conf: PathBuf,
     pub snapper_config_dir: PathBuf,
-    pub sudoers_file: PathBuf,
     pub user_unit_dir: Option<PathBuf>,
     pub state_file: PathBuf,
     pub min_free_bytes: u64,
@@ -88,11 +87,6 @@ impl Config {
                 &lookup,
                 "AUR_PREFETCH_SNAPPER_CONFIG_DIR",
                 "/etc/snapper/configs",
-            ),
-            sudoers_file: path_or(
-                &lookup,
-                "AUR_PREFETCH_SUDOERS",
-                "/etc/sudoers.d/aur-prefetch",
             ),
             user_unit_dir: non_empty(&lookup, "AUR_PREFETCH_USER_UNIT_DIR")
                 .map(PathBuf::from)
@@ -211,10 +205,6 @@ mod tests {
             PathBuf::from("/etc/snapper/configs")
         );
         assert_eq!(
-            config.sudoers_file,
-            PathBuf::from("/etc/sudoers.d/aur-prefetch")
-        );
-        assert_eq!(
             config.user_unit_dir,
             Some(PathBuf::from("/home/user/.config/systemd/user"))
         );
@@ -255,7 +245,6 @@ mod tests {
         assert_eq!(config.sudoers_file, PathBuf::from("/tmp/sudoers"));
         assert_eq!(config.journald_conf, PathBuf::from("/tmp/journald.conf"));
         assert_eq!(config.snapper_config_dir, PathBuf::from("/tmp/snapper"));
-        assert_eq!(config.sudoers_file, PathBuf::from("/tmp/sudoers"));
         assert_eq!(config.user_unit_dir, Some(PathBuf::from("/tmp/user-units")));
         assert_eq!(config.state_file, PathBuf::from("/tmp/state.json"));
         assert_eq!(config.min_free_bytes, 1_048_576);
