@@ -1,0 +1,98 @@
+# Review policy for the self-hosted pr-agent run in .github/workflows/pr-agent.yml.
+# Only overrides belong here; every other default comes from
+# pr_agent/settings/configuration.toml at the pinned pr-agent version.
+# The decision record with sources is .github/PR-AGENT.md.
+
+[config]
+# Command Code Provider API, OpenAI-compatible:
+# https://api.commandcode.ai/provider/v1
+model = "openai/deepseek/deepseek-v4.1-flash"
+fallback_models = ["openai/deepseek/deepseek-v4.1-flash"]
+
+# Live model list reports context_length = 1000000. pr-agent refuses an unknown
+# model id unless the window is declared.
+custom_model_max_tokens = 1000000
+# Input and output share this budget: max_model_tokens must exceed
+# max_output_tokens or the prompt has no input capacity left.
+max_model_tokens = 256000
+# Reasoning is on at max. Measured on a review prompt: 70,483 reasoning tokens
+# and 498-509s. A 64k cap returned empty content (`finish_reason=length`); 128k
+# finished. off measured ~22s; low measured 118-417s.
+max_output_tokens = 128000
+reasoning_effort = "max"
+# LiteLLM does not know this id, so pr-agent only forwards reasoning_effort when
+# the id is listed here (configuration.toml: additional_reasoning_effort_models).
+additional_reasoning_effort_models = ["openai/deepseek/deepseek-v4.1-flash"]
+# Default is 120s, far shorter than a measured max-reasoning review (498-509s).
+# Worst case is bounded: a timeout goes to the fallback entry (same model) once,
+# so 2 x 900s = 30 min, under the workflow's 45-minute job timeout.
+ai_timeout = 900
+retry_same_model_on_timeout = false
+
+# Read the rules from the default branch, never from the PR branch, so a PR
+# cannot rewrite the rules it is judged by.
+repo_context_files = ["AGENTS.md", "NEXT.md", "context.md"]
+repo_context_from_default_branch = true
+repo_context_max_lines = 900
+
+response_language = "en-US"
+
+[pr_reviewer]
+num_max_findings = 5
+require_tests_review = true
+extra_instructions = """
+This repo is a Rust CLI that splits Arch Linux updates into a background
+download (`fetch`) and a foreground install (`install`). AGENTS.md, NEXT.md, and
+context.md are already in your context. Treat them as binding requirements.
+
+Treat these as blocking findings:
+- Any code path outside `install` that writes /usr, /etc, or
+  /var/lib/pacman/local; any write at all from `check` or `doctor`; `fetch`
+  touching anything beyond the pacman sync DB and the download cache.
+- `std::process::Command` outside src/runner.rs instead of the CommandRunner
+  trait.
+- `unwrap()` on external input (file contents, command output, argv). `expect`
+  is allowed only for an invariant proven above it.
+- sudo around yay, makepkg, or any AUR build. Only `pacman -Syuw` escalates, as
+  `sudo -n` with the exact argv in the sudoers rule.
+- A wildcard sudoers rule, or deleting /var/lib/pacman/db.lck instead of
+  refusing while pacman holds it.
+- An exit code outside the contract: 0 healthy/done, 1 gated/action needed,
+  2 execution error.
+- A side-effect claim (fetch downloads, install changes /usr) proven only by a
+  FakeRunner unit test, with no entry in sim/scenarios/.
+- A gate turned into a silent skip that still prints success, or a stub
+  presented as implemented.
+- A pacman-behaviour change with no sim scenario and no NEXT.md checkbox ticked
+  in the same commit, or a command/flag/path change with no README update.
+
+Check these when the diff touches them:
+- pacman 7.1 downloads as DownloadUser=alpm; a moved CacheDir must be writable
+  by that user or downloads fail.
+- `Qk` proves presence only. `Qkk` plus mtree catches damage. Do not credit
+  `Qk` with detecting a broken install.
+- libalpm mis-orders multiple CacheDir entries (pacman#289). Do not recommend a
+  second CacheDir.
+- Snapper range limits need two values ("10-20"); a single number is ignored.
+- cargo-deny runs with --all-features; a feature-gated dependency is invisible
+  to the audit otherwise.
+- Do not propose new dependencies for parsing that state.rs already handles by
+  hand.
+
+Report only findings a human would block a merge on. Skip naming, formatting,
+and comment-only suggestions.
+"""
+
+[pr_description]
+extra_instructions = """
+Name the NEXT.md phase item this PR completes and what proves it: a unit test, a
+./sim/run.sh scenario, or both. If the PR changes pacman behaviour and names no
+sim scenario, say so. Do not claim test coverage the diff does not show.
+"""
+
+[pr_code_suggestions]
+focus_only_on_problems = true
+extra_instructions = """
+Only suggest changes that fix a bug, a safety-rule violation, or a correctness
+gap. No style rewrites, renames, added comments, or new dependencies.
+"""

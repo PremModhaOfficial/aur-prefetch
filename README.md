@@ -61,6 +61,28 @@ effects. `sim/` can: it boots an Arch container with a local package repo,
 runs the binary, and asserts on `/usr`, the download cache, and the fake AUR
 helper's log. The development machine is never a test machine.
 
+## Code review
+
+Every PR gets an automated review from a self-hosted
+[pr-agent](https://github.com/The-PR-Agent/pr-agent), the free replacement for
+CodeRabbit. It runs from
+[`.github/workflows/pr-agent.yml`](.github/workflows/pr-agent.yml) on PR
+open/reopen/ready-for-review and on `/` commands in PR comments. `CI` and `Sim`
+remain the merge gate; this is the review layer on top.
+
+- Policy lives in [`.pr_agent.toml`](.pr_agent.toml). The reviewer reads
+  `AGENTS.md`, `NEXT.md`, and `context.md` from `main`, so the safety and honesty
+  rules are part of every review.
+- Model: `deepseek/deepseek-v4.1-flash` with reasoning on, through the official
+  [Command Code Provider API](https://commandcode.ai/docs/provider). No bridge,
+  no tunnel, no developer machine.
+- One-time setup: create a dedicated key at
+  <https://commandcode.ai/docs/studio#api-keys> and run
+  `gh secret set COMMAND_CODE_API_KEY`.
+- Commands: `/describe`, `/review`, `/improve` (manual), `/ask <question>`.
+- A review that cannot run fails the check. It never reports green.
+- Fork PRs are skipped because GitHub does not expose secrets to them.
+
 ## Docs
 
 - [`NEXT.md`](NEXT.md) — the working plan: decisions, phases, acceptance criteria
@@ -68,6 +90,7 @@ helper's log. The development machine is never a test machine.
 - [`context.md`](context.md) — implementation notes and edge cases
 - [`sim/README.md`](sim/README.md) — simulation harness
 - [`AGENTS.md`](AGENTS.md) — operating rules and definition of done
+- [`.github/PR-AGENT.md`](.github/PR-AGENT.md) — review bot decisions and sources
 
 ## License
 
