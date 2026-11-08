@@ -35,7 +35,7 @@ runuser -l builder -c 'aur-prefetch doctor' >"$log" 2>&1
 status=$?
 
 assert_eq "$status" "0" "doctor as builder exited 0"
-assert_contains "$(cat "$log")" "verified via sudo -l" "doctor verified the unreadable rule through sudo -l"
+assert_contains "$(cat "$log")" "sudo -l matches" "doctor verified the unreadable rule through sudo -l"
 assert_eq "$(usr_state)" "$before_usr" "doctor as builder left /usr unchanged"
 
 finish

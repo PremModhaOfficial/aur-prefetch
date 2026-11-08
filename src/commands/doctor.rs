@@ -17,11 +17,8 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     let mut problems = 0u32;
 
     let timers = runner.run("systemctl", &["--user", "list-timers"])?;
-    let timer_scheduled = timers.code == 0
-        && timers
-            .stdout
-            .lines()
-            .any(|line| line.contains("aur-prefetch.timer"));
+    let timer_scheduled =
+        timers.code == 0 && timer_is_scheduled(&timers.stdout, "aur-prefetch.timer");
     if timer_scheduled {
         println!("doctor: timer: scheduled");
     } else {
@@ -83,26 +80,77 @@ fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
             Ok(1)
         }
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            // A correct file is 0440 root:root, so a normal user cannot read it.
-            // `sudo -l` names the rule without reading the file.
-            match runner.run("sudo", &["-n", "-l"]) {
-                Ok(output) if output.code == 0 && sudo_list_ok(&output.stdout) => {
-                    println!("doctor: sudoers: exact rule present (verified via sudo -l)");
-                    Ok(0)
-                }
-                _ => {
-                    println!(
-                        "doctor: sudoers: {} is unreadable and sudo -l could not verify it",
-                        config.sudoers_file.display()
-                    );
-                    Ok(1)
-                }
-            }
+            report_sudoers_unreadable(config, runner)
         }
         Err(err) => Err(Error::failed(format!(
             "cannot read {}: {err}",
             config.sudoers_file.display()
         ))),
+    }
+}
+
+fn report_sudoers_unreadable(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
+    // A correct rule is a root-owned 0440 file. Check the file's shape before
+    // trusting `sudo -l`, which cannot say which file granted the command.
+    let meta = match fs::metadata(&config.sudoers_file) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "doctor: sudoers: {} is missing",
+                config.sudoers_file.display()
+            );
+            return Ok(1);
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            // The parent directory is root-only, so even stat is unavailable.
+            // sudo -l is the only signal left; do not claim the source.
+            return report_sudoers_via_sudo(config, runner, false);
+        }
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot inspect {}: {err}",
+                config.sudoers_file.display()
+            )));
+        }
+    };
+    let mode = meta.permissions().mode() & 0o777;
+    if !meta.is_file() || meta.uid() != 0 || mode != 0o440 {
+        println!(
+            "doctor: sudoers: {} is not a root-owned 0440 file (mode {mode:o}, uid {})",
+            config.sudoers_file.display(),
+            meta.uid()
+        );
+        return Ok(1);
+    }
+
+    report_sudoers_via_sudo(config, runner, true)
+}
+
+fn report_sudoers_via_sudo(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    source_checked: bool,
+) -> Result<u32, Error> {
+    match runner.run("sudo", &["-n", "-l"]) {
+        Ok(output) if output.code == 0 && sudo_list_ok(&output.stdout) => {
+            if source_checked {
+                println!(
+                    "doctor: sudoers: exact rule present (root-owned 0440 file; sudo -l matches)"
+                );
+            } else {
+                println!(
+                    "doctor: sudoers: exact rule present (sudo -l matches; file source unverified)"
+                );
+            }
+            Ok(0)
+        }
+        _ => {
+            println!(
+                "doctor: sudoers: {} is unreadable and sudo -l could not verify it",
+                config.sudoers_file.display()
+            );
+            Ok(1)
+        }
     }
 }
 
@@ -518,7 +566,7 @@ fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
     let mut problems = 0;
     let timers_ok = ["snapper-timeline.timer", "snapper-cleanup.timer"]
         .iter()
-        .all(|name| system_timers.stdout.contains(name));
+        .all(|name| timer_is_scheduled(&system_timers.stdout, name));
     if timers_ok {
         println!("doctor: snapper: timers scheduled");
     } else {
@@ -563,6 +611,14 @@ fn snapper_limit_is_range(text: &str, key: &str) -> bool {
     })
 }
 
+/// `list-timers` also lists installed but inactive units, with `n/a` in NEXT.
+fn timer_is_scheduled(text: &str, name: &str) -> bool {
+    text.lines().any(|line| {
+        let line = line.trim();
+        line.contains(name) && !line.starts_with("n/a")
+    })
+}
+
 fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<u32, Error> {
     let label = crate::util::path_str(path)?;
     let output = runner.run("df", &["-B1", "--output=avail", label])?;
@@ -603,7 +659,8 @@ mod tests {
 
     use super::{
         JournaldSettings, cache_writable_by, identity_can, report_journald, report_snapper,
-        run_with, snapper_limit_is_range, sudo_list_ok, sudoers_rule_ok,
+        report_sudoers_via_sudo, run_with, snapper_limit_is_range, sudo_list_ok, sudoers_rule_ok,
+        timer_is_scheduled,
     };
     use crate::config::Config;
     use crate::error::Error;
@@ -816,26 +873,15 @@ mod tests {
     fn an_unreadable_sudoers_is_verified_with_sudo_l() {
         let dir = temp_dir();
         let config = test_config(&dir);
-        complete_setup(&config, &dir);
-        fs::set_permissions(&config.sudoers_file, fs::Permissions::from_mode(0o000))
-            .expect("chmod sudoers");
-
         let runner = FakeRunner::new();
-        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
         runner.push_output(ok(
             "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
         ));
-        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
-        let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
-        runner.push_output(ok(&format!("{}\n", meta.uid())));
-        runner.push_output(ok(&format!("{}\n", meta.gid())));
-        let mut not_installed = ok("");
-        not_installed.code = 1;
-        runner.push_output(not_installed);
-        runner.push_output(ok("10737418240\n"));
-        runner.push_output(ok("10737418240\n"));
 
-        run_with(&config, &runner).expect("doctor");
+        assert_eq!(
+            report_sudoers_via_sudo(&config, &runner, false).expect("sudo fallback"),
+            0
+        );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -1009,6 +1055,54 @@ mod tests {
             "SPACE_LIMIT = 0.5\n",
             "SPACE_LIMIT"
         ));
+    }
+
+    #[test]
+    fn inactive_timers_are_not_scheduled() {
+        assert!(timer_is_scheduled(
+            "Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer",
+            "aur-prefetch.timer"
+        ));
+        assert!(!timer_is_scheduled(
+            "n/a                n/a       aur-prefetch.timer",
+            "aur-prefetch.timer"
+        ));
+    }
+
+    #[test]
+    fn inactive_snapper_timers_block() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper dir");
+        fs::write(
+            config.snapper_config_dir.join("root"),
+            "SPACE_LIMIT=0.1-0.5\nFREE_LIMIT=0.1-0.5\n",
+        )
+        .expect("root config");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(
+            "n/a n/a snapper-timeline.timer\nn/a n/a snapper-cleanup.timer\n",
+        ));
+        assert_eq!(
+            report_snapper(&config, &runner).expect("snapper"),
+            1,
+            "inactive snapper timers must not pass"
+        );
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(
+            "Tue 2026-11-11 00:00:00 UTC snapper-timeline.timer\nTue 2026-11-11 00:00:00 UTC snapper-cleanup.timer\n",
+        ));
+        assert_eq!(
+            report_snapper(&config, &runner).expect("snapper"),
+            0,
+            "active snapper timers pass"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 
     #[test]

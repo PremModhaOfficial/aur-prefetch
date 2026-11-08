@@ -14,17 +14,16 @@ mkdir -p /srv/real-cache
 chown alpm:alpm /srv/real-cache
 chmod 0755 /srv/real-cache
 ln -s /srv/real-cache /tmp/cache-link
-sed -i 's#^CacheDir.*#CacheDir = /tmp/cache-link/#' /etc/pacman.conf
 
 printf 'root ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n' >/etc/sudoers.d/aur-prefetch
 chmod 0440 /etc/sudoers.d/aur-prefetch
 printf 'maintainer\n' >/etc/aurto/trusted-users
-printf 'Include = /etc/pacman.d/aurto\n' >>/etc/pacman.conf
 printf '[Journal]\nStorage=persistent\nSystemMaxUse=500M\n' >/etc/systemd/journald.conf
 printf 'Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n' >/etc/sim/systemctl.out
 
 log=$(mktemp)
-aur-prefetch doctor >"$log" 2>&1
+AUR_PREFETCH_PACMAN_CONF=/usr/local/lib/sim/fixtures/pacman-symlink-cache.conf \
+    aur-prefetch doctor >"$log" 2>&1
 status=$?
 
 assert_eq "$status" "1" "doctor exited 1"
