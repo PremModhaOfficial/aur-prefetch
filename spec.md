@@ -67,8 +67,8 @@ echo "PACCACHE_ARGS='-k1'" | sudo tee -a /etc/conf.d/pacman-contrib
 ```
 `-a` means add the line, not overwrite the whole file. If the line is already there, open the file and check it instead of adding a second copy. Do not use tee without `-a`.
 This makes timer match Step 4 manual clean. PACCACHE_ARGS = extra options for timer clean.
-Make script `~/.local/bin/aur-prefetch.sh`. It runs only `sudo -n pacman -Syuw --noconfirm`. AUR builds are handled by aurto's own root update-aurto timers installed by aurto init.
-The script must check free space first. Manual check once is not enough. Timer runs with no human watching.
+Point the timer at the `aur-prefetch` binary. `aur-prefetch fetch` runs only `sudo -n pacman -Syuw --noconfirm`. AUR builds are handled by aurto's own root update-aurto timers installed by aurto init.
+The free-space gate lives in the binary, so the timer needs no wrapper. The block below is the teaching example: it shows the rule the binary implements. Do not install it as a second gate.
 ```bash
 #!/bin/bash
 # Free-space gate. Stop before pacman if disk is too full.
@@ -80,11 +80,8 @@ if [ "$avail_kb" -lt "$need_kb" ]; then
 fi
 sudo -n pacman -Syuw --noconfirm
 ```
-2097152 KB is 2 GB. That is the floor. Rule: keep free space at least 2 times the download size plus a 2 to 5 GB floor. Use 5 GB floor if you use snapshots.
+2097152 KB is 2 GB. That is the floor. Rule: keep free space at least 2 times the download size plus a 2 to 5 GB floor. Use 5 GB floor if you use snapshots. The binary applies the same rule to the CacheDir filesystem and to `/`.
 Note: this gate guards only `pacman -Syuw`. It does NOT guard aurto builds. aurto builds use same disk with no check. Builds can still fill disk even when gate passes. Check build folders in Step 4.
-```bash
-chmod +x ~/.local/bin/aur-prefetch.sh
-```
 Add one sudoers line for that exact command only. The file is `/etc/sudoers.d/aur-prefetch`. Edit it with `sudo visudo -f /etc/sudoers.d/aur-prefetch`. Use NOPASSWD for `/usr/bin/pacman -Syuw --noconfirm`. No other commands. No wildcards.
 Create two files. This is two files, not one. Each block below is one file. Do not paste both into one file.
 
@@ -94,7 +91,7 @@ File `~/.config/systemd/user/aur-prefetch.service`:
 Description=Prefetch packages
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/aur-prefetch.sh
+ExecStart=%h/.local/bin/aur-prefetch fetch
 ```
 
 File `~/.config/systemd/user/aur-prefetch.timer`:
@@ -105,7 +102,7 @@ Persistent=true
 [Install]
 WantedBy=timers.target
 ```
-The .service is the job (runs the script once). The .timer is the clock (runs it daily).
+The .service is the job (runs the command once). The .timer is the clock (runs it daily).
 %h = your home folder. Type=oneshot = run once and stop. OnCalendar=daily = run once a day. Persistent=true = if the computer was off at run time, run soon after you turn it on. WantedBy = start with timers.
 ```bash
 systemctl --user daemon-reload
