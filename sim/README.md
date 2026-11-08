@@ -52,6 +52,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `08-stub-contract.sh` | stubs replay `.out`/`.err`/`.exit`, `builder` can append to logs, `paccache` honors a configured failure, and `yay` rejects root on every path |
 | `09-check-pending.sh` | `check` exits 1, names the pending package, and writes nothing |
 | `10-check-clean.sh` | `check` exits 0 and writes nothing when the system is current |
+| `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
