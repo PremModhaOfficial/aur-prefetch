@@ -24,9 +24,17 @@ Requires Docker or Podman. The container runs with `--network none`.
 - An empty download cache
 - `builder`, a non-root user whose only passwordless sudo command is
   `/usr/bin/pacman -Syuw --noconfirm`
+- `installer`, a sim-only user whose only sudoers rule is
+  `/usr/local/bin/sim-upgrade ""`, so the command and an empty argument list
+  are both pinned. The helper always performs exactly `pacman -Syu
+  --noconfirm`; no direct pacman argv is allowed through sudo, and scenario 19
+  proves the rule is exactly that narrow
 - `/usr/local/bin/yay`, a fake helper that logs every call to
-  `/var/log/sim-yay.log`, escalates through `sudo -n pacman`, and fails with
-  exit 97 if asked to build from the AUR or exit 98 if run as root
+  `/var/log/sim-yay.log`, upgrades through `sudo -n sim-upgrade`, and fails
+  with exit 97 if asked to build from the AUR or exit 98 if run as root
+- `/usr/local/bin/sudo`, a proxy that logs the exact argv to
+  `/var/log/sim-sudo.log` and then execs the real sudo, so a scenario can prove
+  which escalations actually happened
 - Stubs for `systemctl`, `journalctl`, `loginctl`, `aurto`, `paccache`, and
   `pacdiff`. Each logs argv to `/var/log/sim-<tool>.log`; a scenario sets the
   reply with `/etc/sim/<tool>.out`, `.err`, and `.exit`. `paccache` forwards to
@@ -53,6 +61,12 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `09-check-pending.sh` | `check` exits 1, names the pending package, and writes nothing |
 | `10-check-clean.sh` | `check` exits 0 and writes nothing when the system is current |
 | `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
+| `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
+| `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |
+| `17-install-noop.sh` | `install` on a current repo exits 0, changes nothing, and builds nothing |
+| `18-yay-build-loud.sh` | a direct yay build and `install` both surface the AUR failure loudly; install exits 2 and does not report success |
+| `19-installer-sudo-scope.sh` | `installer` may run only `/usr/local/bin/sim-upgrade` through sudo; direct pacman argv and helper arguments are refused |
+| `26-install-root-refuses.sh` | `install` exits 1 with no command run and `/usr` unchanged for plain root and for the sudo shape (real UID user, effective UID root) |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
@@ -73,7 +87,7 @@ finish
 Each scenario runs in a fresh container, so no cleanup is needed. Helpers live
 in `sim/lib.sh`: `assert_eq`, `assert_ne`, `assert_contains`, `assert_true`,
 `assert_false`, `installed_version`, `payload_version`, `cache_files`,
-`usr_state`, `yay_log`, `yay_built_something`, `finish`.
+`usr_state`, `yay_log`, `yay_built_something`, `sudo_log`, `finish`.
 
 ## Limits
 

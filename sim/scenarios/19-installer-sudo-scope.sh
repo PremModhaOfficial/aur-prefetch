@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# PR 16 finding: the sim must not widen privilege beyond the product contract.
+#
+# `install` runs yay as the user. The simulation gives yay exactly one allowed
+# command, `/usr/local/bin/sim-upgrade`, which takes no arguments and always
+# runs `pacman -Syu --noconfirm`. No direct pacman argv is allowed through sudo.
+source /usr/local/lib/sim/lib.sh
+
+echo "scenario: installer may escalate only the sim-upgrade helper with no arguments"
+
+rule=$(grep '^installer ' /etc/sudoers.d/sim)
+assert_eq "$rule" \
+    'installer ALL=(root) NOPASSWD: /usr/local/bin/sim-upgrade ""' \
+    "the installer rule names only the helper and pins an empty argument list"
+
+helper=/usr/local/bin/sim-upgrade
+assert_true "the scoped helper exists" test -x "$helper"
+assert_eq "$(stat -c '%U %a' "$helper")" "root 755" "the helper is a root-owned script"
+
+log=$(mktemp)
+
+deny() {
+    local label=$1
+    shift
+    if runuser -u installer -- sudo -n "$@" >"$log" 2>&1; then
+        fail "$label"
+    else
+        pass "$label"
+    fi
+    assert_true "$label: sudo explained the refusal" \
+        bash -c "grep -Eq 'not allowed|not in the sudoers|sudo:' '$log'"
+    assert_false "$label: pacman never started" grep -q "Synchronizing" "$log"
+}
+
+deny "installer has no blanket sudo" true
+deny "installer cannot run a direct pacman upgrade" /usr/bin/pacman -Syu --noconfirm
+deny "installer cannot run fetch's pacman argv" /usr/bin/pacman -Syuw --noconfirm
+deny "installer cannot run another pacman action" /usr/bin/pacman -Sy
+
+# The empty argument list in sudoers makes sudo refuse extra arguments. The
+# helper's own check is defence in depth and stays reachable if sudoers drifts.
+if runuser -u installer -- sudo -n /usr/local/bin/sim-upgrade extra >"$log" 2>&1; then
+    fail "the helper accepted arguments"
+else
+    pass "the helper refuses arguments"
+fi
+assert_true "sudo refused the extra arguments" \
+    bash -c "grep -Eq 'not allowed|not in the sudoers|sudo:' '$log'"
+
+finish

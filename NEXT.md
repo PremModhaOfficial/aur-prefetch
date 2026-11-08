@@ -110,7 +110,7 @@ Today the sim runs everything as root, so the real privilege path is untested.
 - [x] Scenario: `fetch` refuses while pacman holds the lock.
 - [x] Scenario: `fetch` refuses below the free-space floor.
 - [x] Scenario: `fetch` uses only the allowed argv.
-- [ ] Scenario: `install` builds nothing when the local repo is current.
+- [x] Scenario: `install` builds nothing when the local repo is current.
 
 Note: pacman 7.1 sets `DownloadUser = alpm`. Cache directories must be
 accessible to that user, or downloads fail. Test a moved CacheDir explicitly.
@@ -186,13 +186,13 @@ file.
 
 ### 3.5 `install`
 
-- [ ] Lock gate, same as fetch.
-- [ ] News gate: show pending list, require `--yes` when not a TTY. Do not try
+- [x] Lock gate, same as fetch.
+- [x] News gate: show pending list, require `--yes` when not a TTY. Do not try
       to parse news in v1. Print the URL and the last install time.
-- [ ] Trust gate from D1.
-- [ ] Run `yay -Syuu` as the user, no `--noconfirm`.
-- [ ] After: print pacdiff, reboot, and kernel checks.
-- [ ] Exit 2 if yay fails, 1 if gated.
+- [x] Trust gate from D1.
+- [x] Run `yay -Syuu` as the user, no `--noconfirm`.
+- [x] After: print pacdiff, reboot, and kernel checks.
+- [x] Exit 2 if yay fails, 1 if gated.
 
 Done when: sim proves a repo-package install changes `/usr` and never builds,
 and that an AUR build path exits loudly instead of silently passing.

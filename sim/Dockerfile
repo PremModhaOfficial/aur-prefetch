@@ -31,7 +31,19 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
         /var/log/sim-systemctl.log /var/log/sim-journalctl.log \
         /var/log/sim-loginctl.log /var/log/sim-aurto.log \
         /var/log/sim-paccache.log /var/log/sim-pacdiff.log \
+        /var/log/sim-sudo.log \
     && chmod 0666 /var/log/sim-*.log
+
+# The install scenario runs as a normal user and cannot prompt for a password.
+# A real yay escalates for its repo upgrade; the simulation gives it exactly one
+# allowed command. The helper takes no arguments and always performs
+# `pacman -Syu --noconfirm`, and the sudoers rule names only that helper, not
+# pacman itself, so the harness cannot accept a direct pacman escalation.
+COPY sim/sim-upgrade /usr/local/bin/sim-upgrade
+RUN useradd --create-home --shell /bin/bash installer \
+    && chmod 755 /usr/local/bin/sim-upgrade \
+    && printf 'installer ALL=(root) NOPASSWD: /usr/local/bin/sim-upgrade ""\n' >> /etc/sudoers.d/sim \
+    && visudo -cf /etc/sudoers.d/sim
 
 # Replace mirrors with the offline sim repo. Done after the builder stage so
 # only runtime has no network.
@@ -45,6 +57,7 @@ RUN chmod 755 /usr/local/bin/yay /usr/local/bin/make-repo.sh \
         /usr/local/bin/systemctl /usr/local/bin/journalctl \
         /usr/local/bin/loginctl /usr/local/bin/aurto \
         /usr/local/bin/paccache /usr/local/bin/pacdiff \
+        /usr/local/bin/sudo \
     && /usr/local/bin/make-repo.sh
 
 COPY --from=builder /src/target/release/aur-prefetch /usr/local/bin/aur-prefetch

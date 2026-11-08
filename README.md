@@ -9,10 +9,10 @@ of waiting on your connection.
 
 ## Status
 
-Early. `fetch`, `check`, and `clean` are implemented and proven in `sim/`;
-`doctor`, `install`, and `init` are still stubs. Nothing here has been run
-against a real Arch system yet. `AGENTS.md` lists the rules that apply while
-implementing, and `sim/` is where behaviour gets proven.
+Early. `fetch`, `check`, `clean`, and `install` are implemented and proven in
+`sim/`; `doctor` and `init` are still stubs. Nothing here has been run against a
+real Arch system yet. `AGENTS.md` lists the rules that apply while implementing,
+and `sim/` is where behaviour gets proven.
 
 ## Start here
 
@@ -35,7 +35,7 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch init` — set up timer, sudoers, checks
 - `aur-prefetch check` — pending updates, disk, lock, caches, timer status
 - `aur-prefetch fetch` — free-space gate, `pacman -Syuw` only
-- `aur-prefetch install` — news gate, lock check, then `yay -Syuu`
+- `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
 - `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
 - `aur-prefetch doctor` — verify timers, limits, repo, journald
 

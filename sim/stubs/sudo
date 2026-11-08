@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Sim-only proxy: log the exact argv, then hand off to the real sudo.
+#
+# The log makes escalation measurable. sudoers still decides whether the call
+# is allowed, so a scenario can assert that `install` only ever asks yay's one
+# allowed argv through sudo. Keeping this next to /usr/bin/sudo also catches a
+# regression where the binary escalates directly instead of going through yay.
+set -uo pipefail
+
+printf '%s\n' "$*" >>/var/log/sim-sudo.log
+exec /usr/bin/sudo "$@"
