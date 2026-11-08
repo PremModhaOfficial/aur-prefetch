@@ -37,7 +37,23 @@ pub fn run_with(
 
     let pacman = path_str(&config.pacman)?;
     let official_output = runner.run(pacman, &["-Qu"])?;
-    let official = lines(&official_output.stdout);
+    let official = match official_output.code {
+        // pacman -Qu exits 1 when nothing is pending and 0 when it printed
+        // updates. Any other code means the query itself failed, and reading
+        // its empty stdout as "no updates" would be a silent skip.
+        0 | 1 => lines(&official_output.stdout),
+        code => {
+            let detail = official_output.stderr.trim();
+            let suffix = if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            };
+            return Err(Error::failed(format!(
+                "pacman -Qu exited {code}; cannot tell whether updates are pending{suffix}"
+            )));
+        }
+    };
     let (aur, aur_available) = match runner.run("yay", &["-Qua"]) {
         Ok(output) if output.code == 0 || output.code == 1 => (lines(&output.stdout), true),
         _ => (Vec::new(), false),
@@ -93,17 +109,22 @@ fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> 
     }
 
     let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
-    if pgrep.code == 0 {
-        return Err(Error::blocked(format!(
+    match pgrep.code {
+        0 => Err(Error::blocked(format!(
             "pacman is running; refusing to install while {} is held",
             config.pacman_lock.display()
-        )));
+        ))),
+        // pgrep exits 1 when no process matched: the lock is stale, but only
+        // the user can confirm that. Never delete it ourselves.
+        1 => Err(Error::blocked(format!(
+            "stale lock {}: no pacman process is running; verify and remove it yourself",
+            config.pacman_lock.display()
+        ))),
+        code => Err(Error::failed(format!(
+            "pgrep -x pacman exited {code}; cannot tell whether pacman is running, so {} must stay",
+            config.pacman_lock.display()
+        ))),
     }
-
-    Err(Error::blocked(format!(
-        "stale lock {}: no pacman process is running; verify and remove it yourself",
-        config.pacman_lock.display()
-    )))
 }
 
 fn check_trust(config: &Config, options: &Options) -> Result<(), Error> {
@@ -301,6 +322,101 @@ mod tests {
 
         assert!(matches!(result, Err(Error::Blocked(_))));
         assert_eq!(runner.calls().len(), 1, "only pgrep may run");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_stale_lock_blocks_without_asking_to_remove_a_held_lock() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.pacman_lock, "").expect("lock file");
+        let runner = FakeRunner::new();
+        let mut no_match = ok("");
+        no_match.code = 1;
+        runner.push_output(no_match);
+
+        let result = run_with(&config, &runner, options(true, false, false));
+
+        let error = result.expect_err("a stale lock must block");
+        assert!(matches!(error, Error::Blocked(_)));
+        assert!(
+            error.to_string().contains("stale lock"),
+            "message was: {error}"
+        );
+        assert_eq!(runner.calls().len(), 1, "only pgrep may run");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_pgrep_error_fails_loudly_instead_of_claiming_a_stale_lock() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.pacman_lock, "").expect("lock file");
+        let runner = FakeRunner::new();
+        let mut broken = ok("");
+        broken.code = 2;
+        runner.push_output(broken);
+
+        let result = run_with(&config, &runner, options(true, false, false));
+
+        let error = result.expect_err("a broken pgrep must not be treated as a stale lock");
+        assert!(matches!(error, Error::Failed(_)));
+        assert_eq!(error.exit_code(), 2);
+        let message = error.to_string();
+        assert!(message.contains("pgrep"), "message was: {message}");
+        assert!(
+            !message.contains("remove it yourself"),
+            "a pgrep error must not give removal advice: {message}"
+        );
+        assert_eq!(runner.calls().len(), 1, "only pgrep may run");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_pacman_qu_error_fails_loudly() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(CommandOutput {
+            code: 2,
+            stdout: String::new(),
+            stderr: "error: could not open database".to_string(),
+        });
+
+        let result = run_with(&config, &runner, options(true, false, false));
+
+        let error = result.expect_err("a failed pacman -Qu must not be read as no updates");
+        assert!(matches!(error, Error::Failed(_)));
+        assert_eq!(error.exit_code(), 2);
+        let message = error.to_string();
+        assert!(message.contains("pacman -Qu"), "message was: {message}");
+        assert!(
+            message.contains('2'),
+            "the exit code must be named: {message}"
+        );
+        assert!(!ran_yay(&runner), "yay must not run after a failed query");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_pacman_qu_exit_one_means_no_official_updates() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.trusted_users, "maintainer\n").expect("trust file");
+        let runner = FakeRunner::new();
+        let mut no_updates = ok("");
+        no_updates.code = 1;
+        runner.push_output(no_updates);
+        runner.push_output(ok(""));
+        runner.push_interactive(0);
+
+        run_with(&config, &runner, options(true, false, false)).expect("install");
+
+        assert!(ran_yay(&runner), "exit 1 must continue to the upgrade");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

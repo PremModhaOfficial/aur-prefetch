@@ -31,10 +31,13 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
         /var/log/sim-systemctl.log /var/log/sim-journalctl.log \
         /var/log/sim-loginctl.log /var/log/sim-aurto.log \
         /var/log/sim-paccache.log /var/log/sim-pacdiff.log \
+        /var/log/sim-sudo.log \
     && chmod 0666 /var/log/sim-*.log
 
-# Sim-only: the install scenario needs yay's pacman -Syu path to succeed
-# without a password prompt. `init` never writes this rule.
+# Sim-only: the install scenario needs yay's one escalation to succeed without
+# a password prompt. Scope it to the exact argv the fake yay passes, with no
+# wildcard, so a regression cannot escalate anything else. Scenario 19 asserts
+# that no other command is accepted. `init` never writes this rule.
 RUN useradd --create-home --shell /bin/bash installer \
     && printf 'installer ALL=(root) NOPASSWD: /usr/bin/pacman -Syu --noconfirm\n' >> /etc/sudoers.d/sim \
     && visudo -cf /etc/sudoers.d/sim
@@ -51,6 +54,7 @@ RUN chmod 755 /usr/local/bin/yay /usr/local/bin/make-repo.sh \
         /usr/local/bin/systemctl /usr/local/bin/journalctl \
         /usr/local/bin/loginctl /usr/local/bin/aurto \
         /usr/local/bin/paccache /usr/local/bin/pacdiff \
+        /usr/local/bin/sudo \
     && /usr/local/bin/make-repo.sh
 
 COPY --from=builder /src/target/release/aur-prefetch /usr/local/bin/aur-prefetch
