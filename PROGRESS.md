@@ -16,9 +16,25 @@ The Markdown files remain the contract; the HTML shows the frames and the
 terminal limits together.
 
 Reference: [`nix-output-monitor`](https://github.com/maralorn/nix-output-monitor).
-Its dependency tree, phase glyphs and summary counters are the model. This
-screen is not trying to beat that tree. It puts the prefetch state on the same
+Its dependency graph, phase glyphs and summary counters are the model. This
+screen is not trying to beat that view. It puts the prefetch state on the same
 tree.
+
+## Naming: graph or tree?
+
+Both, at different layers.
+
+- The **data** is a dependency graph: a DAG where one package can be reachable
+  from more than one parent.
+- The **screen** is a tree view: an indented outline that prints each package
+  once, at its lowest dependency.
+
+This spec says "dependency graph" for the data and "dependency tree" for the
+view. nom labels its screen "Dependency Graph" while its prose says "tree"; we
+borrow the rendering, not the label.
+
+The removed time-space graph was a **timeline**, a different picture with time
+on one axis. It is not the dependency graph.
 
 ---
 
@@ -96,8 +112,8 @@ branch is a ghost. During a captured fetch, the tree's live nodes update in
 place. During the attached install, the tree is a plan; after it returns, the
 same tree shows the result.
 
-There is no separate time-space graph in v1. The tree is the structure. A
-timeline is an optional replay view, not the default.
+There is no separate timeline in v1. The dependency graph is the data; the tree
+view is the screen. A timeline is an optional replay view, not the default.
 
 ### P2. Orthogonal state dimensions, not one enum
 

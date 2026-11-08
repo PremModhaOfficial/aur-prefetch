@@ -286,7 +286,7 @@ check for the UI.
 | Is trust configured, and what does it mean? | Dashboard TRUST, Install gate, Doctor |
 | What exact command will run if I press this? | Inspector and every confirm modal |
 | Why is this action disabled? | Palette and footer, inline reason |
-| What is the dependency tree, and what is blocking? | Fetch/Progress tree, inspector |
+| What is the dependency graph, and what is blocking? | Fetch/Progress tree, inspector |
 | Is this screen stale? | Section age in the header and inspector |
 
 If a fact cannot be collected, the UI says so and why. Unknown is a value, not
@@ -807,7 +807,7 @@ Glyph tiers:
   for the whole screen.
 - **Tier B** is the shipped Unicode set above. It is the default, but its width
   and coverage are not guaranteed.
-- **Tier C** is braille and quadrant blocks, graph only. It is never
+- **Tier C** is braille and quadrant blocks, timeline only. It is never
   load-bearing and always has a block or ASCII fallback.
 
 Never emit emoji presentation, Nerd Font private-use glyphs, combining marks,
@@ -876,12 +876,12 @@ Everything below this line is conditional and must degrade.
 | Capability | Reality | Design response |
 |---|---|---|
 | Unicode width | Box drawing, block elements, arrows and many symbols are East Asian Ambiguous: one cell or two depending on the terminal and locale. Emoji are two; combining marks are zero. | Measure every string with `unicode-width`; pad by width; keep a spare column; never split a grapheme; `--ascii` is a full fallback. |
-| Glyphs | Braille, quadrant blocks, `☑`, `◆`, `◐`, `✖` can be missing, substituted or double-width. Nerd Font glyphs are a private contract. | Tier A ASCII, Tier B shipped Unicode, Tier C graph subcells. No Nerd Fonts, no emoji, no variation selectors, no zero-width joiners. |
+| Glyphs | Braille, quadrant blocks, `☑`, `◆`, `◐`, `✖` can be missing, substituted or double-width. Nerd Font glyphs are a private contract. | Tier A ASCII, Tier B shipped Unicode, Tier C timeline subcells. No Nerd Fonts, no emoji, no variation selectors, no zero-width joiners. |
 | Color | Truecolor needs `COLORTERM`; bold, dim, italic and reverse vary; light and dark palettes both exist. | `ansi` 16 colors is the default; `mono`; `NO_COLOR`; status never color-only; light and dark goldens. |
 | Input | In raw mode Ctrl-C and Ctrl-Z are keys, not signals. Alt, F-keys, mouse and Ctrl-Shift are not portable. Esc and Alt share a prefix. | Handle Ctrl-C and Ctrl-Z explicitly and restore first. No required Alt or F-key. Short Esc timeout. Bracketed paste goes to search, never to the action registry. Rebindable keymap. Mouse is T4 only. |
 | Output | The alternate screen has no scrollback. A crash can leave raw mode on. OSC 52, OSC 8 and synchronized output are often disabled. | Drop guard, panic hook, SIGTERM/SIGHUP restore. Synchronized output only when supported. `--render-once` and copy are the export paths. OSC 52 has a visible fallback that prints the text. |
-| Size | Terminals resize at any moment, including to zero rows or columns. | 40×12 floor; 80×24 supported; 120×40 for the graph. Below the floor, one centered line. Never panic on a zero-size area. |
-| Animation | Latency and cell quantization make smooth motion a budget, not a promise. | 10 to 15 fps only while a task runs; one pulse per active edge; no idle tick; `--no-motion`; motion is never the only signal. |
+| Size | Terminals resize at any moment, including to zero rows or columns. | 40×12 floor; 80×24 supported; 120×40 for the full tree. Below the floor, one centered line. Never panic on a zero-size area. |
+| Animation | Latency and cell quantization make smooth motion a budget, not a promise. | 10 to 15 fps only while a captured fetch runs; the tree updates in place; no idle tick; `--no-motion`; motion is never the only signal. |
 
 ### Untrusted text
 
@@ -903,13 +903,13 @@ Every string crosses one gate before it reaches a cell:
 
 ### Cell geometry
 
-- A cell is taller than it is wide, roughly 1:2. Time and dependency axes are
-  not to scale.
-- The graph is a layered DAG on integer cells, not a physics simulation.
-  Orthogonal or 45-degree strokes only.
-- Braille gives 2×4 subcells and only in the graph. Block elements are the
-  second fallback. ASCII is the last.
-- At 120×40 the graph is a viewport. Below that the ledger is the screen.
+- A cell is taller than it is wide, roughly 1:2. Tree depth and time are not to
+  scale.
+- The tree view is a forest on integer cells, not a physics simulation. The
+  optional timeline is the layered DAG. Orthogonal tree lines only.
+- Braille gives 2×4 subcells and only in the optional timeline. Block elements
+  are the second fallback. ASCII is the last.
+- At 120×40 the tree is a viewport. Below that the ledger is the screen.
 
 ### Motion and honesty
 
