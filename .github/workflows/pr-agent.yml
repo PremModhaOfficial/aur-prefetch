@@ -1,0 +1,67 @@
+name: PR Agent
+
+# Agentic PR review on top of CI and Sim. Self-hosted pr-agent calls the
+# official Command Code Provider API directly: OpenAI-compatible, API-key only,
+# no bridge, no tunnel, no developer machine.
+#
+# One-time setup: create a dedicated key at
+# https://commandcode.ai/docs/studio#api-keys and store it as the
+# COMMAND_CODE_API_KEY repository secret.
+#
+# Policy and the decision record: .pr_agent.toml and .github/PR-AGENT.md.
+# Fork PRs are skipped because `pull_request` does not expose secrets to them
+# (GitHub Docs, "Using secrets in GitHub Actions"). Never switch this to
+# pull_request_target with an untrusted checkout.
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    name: Review
+    # Commands are authorized here, not by the trigger: on a public repo anyone
+    # could comment "/review" and spend credits. Skipped commands do not join
+    # the concurrency group, so they cannot cancel a queued review.
+    if: >-
+      github.event.sender.type != 'Bot' &&
+      (github.event_name != 'issue_comment' ||
+        (github.event.issue.pull_request != null &&
+         contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+         startsWith(github.event.comment.body, '/'))) &&
+      (github.event_name != 'pull_request' ||
+        (github.event.pull_request.draft == false &&
+         github.event.pull_request.head.repo.full_name == github.repository))
+    concurrency:
+      group: pr-agent-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: pr-agent
+        # pragent/pr-agent:0.49.0-github_action, pinned by manifest digest.
+        uses: docker://pragent/pr-agent@sha256:b1ed6e8de56eb4d6e4169ee0d5c209bb5ed1ef071a01c0c042c64b80192a785c
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Official Provider API: https://commandcode.ai/docs/provider
+          OPENAI_API_KEY: ${{ secrets.COMMAND_CODE_API_KEY }}
+          OPENAI__API_BASE: https://api.commandcode.ai/provider/v1
+          # Nested keys use the SECTION__KEY spelling that dynaconf loads.
+          # Repeated from .pr_agent.toml so the first run works before that file
+          # is on main. Keep both in sync.
+          CONFIG__MODEL: openai/deepseek/deepseek-v4.1-flash
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "1000000"
+          CONFIG__MAX_MODEL_TOKENS: "256000"
+          CONFIG__MAX_OUTPUT_TOKENS: "128000"
+          CONFIG__REASONING_EFFORT: max
+          CONFIG__ADDITIONAL_REASONING_EFFORT_MODELS: '["openai/deepseek/deepseek-v4.1-flash"]'
+          CONFIG__AI_TIMEOUT: "1800"
+          GITHUB_ACTION_CONFIG__AUTO_DESCRIBE: "true"
+          GITHUB_ACTION_CONFIG__AUTO_REVIEW: "true"
+          GITHUB_ACTION_CONFIG__AUTO_IMPROVE: "false"
