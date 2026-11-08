@@ -381,10 +381,13 @@ mod tests {
     }
 
     /// Queue one response per external call, in the order `run_with` makes them.
-    fn queue(runner: &FakeRunner, official: &str, available: u64, lock_held: bool) {
+    fn queue(runner: &FakeRunner, dir: &Path, official: &str, available: u64, lock_held: bool) {
+        let cache = dir.join("cache");
+        fs::create_dir_all(&cache).expect("cache dir");
+
         runner.push_output(ok(official));
         runner.push_output(ok(""));
-        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
 
         let size = format!("107374182400 {available}\n");
         runner.push_output(ok(&size));
@@ -408,7 +411,7 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
-        queue(&runner, "", 53_687_091_200, false);
+        queue(&runner, &dir, "", 53_687_091_200, false);
 
         run_with(&config, &runner).expect("check");
 
@@ -424,6 +427,7 @@ mod tests {
         let runner = FakeRunner::new();
         queue(
             &runner,
+            &dir,
             "simapp 1.0.0-1 -> 2.0.0-1\n",
             53_687_091_200,
             false,
@@ -443,7 +447,7 @@ mod tests {
         let config = test_config(&dir);
         fs::write(&config.pacman_lock, "").expect("lock file");
         let runner = FakeRunner::new();
-        queue(&runner, "", 53_687_091_200, true);
+        queue(&runner, &dir, "", 53_687_091_200, true);
 
         let result = run_with(&config, &runner);
 
@@ -458,7 +462,7 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
-        queue(&runner, "", 1000, false);
+        queue(&runner, &dir, "", 1000, false);
 
         let result = run_with(&config, &runner);
 
@@ -529,12 +533,14 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
+        let cache = dir.join("cache");
+        fs::create_dir_all(&cache).expect("cache dir");
 
         runner.push_output(ok(""));
         let mut failed = ok("");
         failed.code = 2;
         runner.push_output(failed);
-        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
         runner.push_output(ok("107374182400 53687091200\n"));
