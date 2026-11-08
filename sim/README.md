@@ -62,7 +62,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `09-check-pending.sh` | `check` exits 1, names the pending package, and writes nothing |
 | `10-check-clean.sh` | `check` exits 0 and writes nothing when the system is current |
 | `11-doctor-missing-setup.sh` | `doctor` exits 1 and names the timer, sudoers, trust, and repo problems |
-| `12-doctor-configured.sh` | `doctor` exits 0 on a configured container |
+| `12-doctor-configured.sh` | `doctor` exits 0 on a configured container, as root and as the unprivileged user reading the rule through `sudo -l` |
 | `13-clean-dry-run.sh` | `clean` changes nothing without `--apply`; with it, only an installed package's old build is removed |
 | `14-install-upgrades.sh` | `install --yes` upgrades `/usr` through yay and runs no AUR build |
 | `15-install-gate.sh` | `install` without `--yes` on a non-TTY stops at the news gate |
@@ -77,6 +77,8 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `24-doctor-cache-permissions.sh` | a cache the `alpm` user cannot write makes `doctor` exit 1 |
 | `25-check-missing-cache-dir.sh` | a missing `CacheDir` makes `check` exit 1 instead of failing on `df` |
 | `26-install-root-refuses.sh` | `install` exits 1 with no command run and `/usr` unchanged for plain root and for the sudo shape (real UID user, effective UID root) |
+| `27-doctor-journald-dropin.sh` | a `journald.conf.d` drop-in sets persistence and the size cap |
+| `28-doctor-symlinked-cache.sh` | a symlinked `CacheDir` is resolved before checking `alpm` traversal |
 | `29-init-visudo-root.sh` | root `visudo -cf` accepts the user-owned temp rule that `init` validates through sudo |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could

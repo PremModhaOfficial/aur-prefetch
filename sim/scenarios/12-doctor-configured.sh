@@ -27,4 +27,15 @@ assert_eq "$status" "0" "doctor exited 0"
 assert_contains "$(cat "$log")" "doctor: ok" "doctor reported ok"
 assert_eq "$(usr_state)" "$before_usr" "doctor left /usr unchanged"
 
+# The product runs as the user, and a correct 0440 root-owned rule is
+# unreadable. Doctor must verify it through sudo -l and still pass.
+printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n' >/etc/sudoers.d/aur-prefetch
+chmod 0440 /etc/sudoers.d/aur-prefetch
+runuser -l builder -c 'aur-prefetch doctor' >"$log" 2>&1
+status=$?
+
+assert_eq "$status" "0" "doctor as builder exited 0"
+assert_contains "$(cat "$log")" "verified via sudo -l" "doctor verified the unreadable rule through sudo -l"
+assert_eq "$(usr_state)" "$before_usr" "doctor as builder left /usr unchanged"
+
 finish

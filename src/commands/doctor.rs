@@ -315,11 +315,15 @@ fn alpm_identity(runner: &dyn CommandRunner) -> Result<Option<(u32, Vec<u32>)>, 
 
 /// Best effort, mode bits only: ACLs are not inspected.
 fn cache_writable_by(cache: &Path, uid: u32, gids: &[u32]) -> Result<bool, Error> {
+    // ancestors() is lexical, so a symlinked CacheDir would skip the real
+    // target's parents. Resolve the link before walking them.
+    let cache = fs::canonicalize(cache)
+        .map_err(|err| Error::failed(format!("cannot resolve {}: {err}", cache.display())))?;
     for ancestor in cache.ancestors() {
         let meta = fs::metadata(ancestor).map_err(|err| {
             Error::failed(format!("cannot inspect {}: {err}", ancestor.display()))
         })?;
-        let need_write = ancestor == cache;
+        let need_write = ancestor == cache.as_path();
         if !identity_can(meta.mode(), meta.uid(), meta.gid(), uid, gids, need_write) {
             return Ok(false);
         }
@@ -347,65 +351,120 @@ fn identity_can(
 }
 
 fn report_journald(config: &Config) -> Result<u32, Error> {
-    match fs::read_to_string(&config.journald_conf) {
-        Ok(text) => {
-            let (persistent, capped) = journald_settings(&text);
-            let mut problems = 0;
-            if persistent {
-                println!("doctor: journald: Storage=persistent");
-            } else {
-                println!("doctor: journald: Storage is not persistent");
-                problems += 1;
-            }
-            if capped {
-                println!("doctor: journald: a size cap is set");
-            } else {
-                println!("doctor: journald: no size cap");
-                problems += 1;
-            }
-            Ok(problems)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!(
-                "doctor: journald: {} is missing",
-                config.journald_conf.display()
-            );
-            Ok(1)
-        }
-        Err(err) => Err(Error::failed(format!(
-            "cannot read {}: {err}",
+    let files = journald_files(&config.journald_conf)?;
+    if files.is_empty() {
+        println!(
+            "doctor: journald: {} is missing",
             config.journald_conf.display()
-        ))),
+        );
+        return Ok(1);
     }
+
+    let mut settings = JournaldSettings::default();
+    for text in &files {
+        settings.apply(text);
+    }
+
+    let mut problems = 0;
+    if settings.persistent() {
+        println!("doctor: journald: Storage=persistent");
+    } else {
+        println!("doctor: journald: Storage is not persistent");
+        problems += 1;
+    }
+    if settings.capped() {
+        println!("doctor: journald: a size cap is set");
+    } else {
+        println!("doctor: journald: no size cap");
+        problems += 1;
+    }
+    Ok(problems)
 }
 
-fn journald_settings(text: &str) -> (bool, bool) {
-    let mut in_journal = false;
-    let mut persistent = false;
-    let mut capped = false;
+/// The main file plus every `journald.conf.d/*.conf`, in the order systemd
+/// applies them. A missing main file or drop-in directory is not an error.
+fn journald_files(main: &Path) -> Result<Vec<String>, Error> {
+    let mut files = Vec::new();
+    match fs::read_to_string(main) {
+        Ok(text) => files.push(text),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot read {}: {err}",
+                main.display()
+            )));
+        }
+    }
 
-    for line in text.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            in_journal = line == "[Journal]";
-            continue;
+    let mut dropin_dir = main.as_os_str().to_owned();
+    dropin_dir.push(".d");
+    let dropin_dir = PathBuf::from(dropin_dir);
+    let entries = match fs::read_dir(&dropin_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot read {}: {err}",
+                dropin_dir.display()
+            )));
         }
-        if !in_journal {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim();
-            let value = value.trim();
-            if key == "Storage" && value == "persistent" {
-                persistent = true;
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "conf"))
+        .collect();
+    paths.sort();
+    for path in paths {
+        let text = fs::read_to_string(&path)
+            .map_err(|err| Error::failed(format!("cannot read {}: {err}", path.display())))?;
+        files.push(text);
+    }
+    Ok(files)
+}
+
+/// The effective `[Journal]` values after applying files in order.
+#[derive(Default)]
+struct JournaldSettings {
+    storage: Option<String>,
+    system_max_use: Option<String>,
+    runtime_max_use: Option<String>,
+}
+
+impl JournaldSettings {
+    fn apply(&mut self, text: &str) {
+        let mut in_journal = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_journal = line == "[Journal]";
+                continue;
             }
-            if (key == "SystemMaxUse" || key == "RuntimeMaxUse") && !value.is_empty() {
-                capped = true;
+            if !in_journal {
+                continue;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                let key = key.trim();
+                let value = value.trim();
+                match key {
+                    "Storage" => self.storage = Some(value.to_string()),
+                    "SystemMaxUse" => self.system_max_use = Some(value.to_string()),
+                    "RuntimeMaxUse" => self.runtime_max_use = Some(value.to_string()),
+                    _ => {}
+                }
             }
         }
     }
 
-    (persistent, capped)
+    fn persistent(&self) -> bool {
+        self.storage.as_deref() == Some("persistent")
+    }
+
+    fn capped(&self) -> bool {
+        [&self.system_max_use, &self.runtime_max_use]
+            .iter()
+            .any(|value| value.as_deref().is_some_and(|value| !value.is_empty()))
+    }
 }
 
 fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
@@ -490,7 +549,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{identity_can, journald_settings, run_with, sudo_list_ok, sudoers_rule_ok};
+    use super::{
+        JournaldSettings, cache_writable_by, identity_can, report_journald, run_with, sudo_list_ok,
+        sudoers_rule_ok,
+    };
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -853,10 +915,64 @@ mod tests {
 
     #[test]
     fn journald_accepts_spaces_around_each_equals() {
+        let mut settings = JournaldSettings::default();
+        settings.apply("[Journal]\nStorage = persistent\nSystemMaxUse = 500M\n");
+        assert!(settings.persistent());
+        assert!(settings.capped());
+    }
+
+    #[test]
+    fn journald_dropins_override_the_main_file() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let dropins = dir.join("journald.conf.d");
+        fs::create_dir_all(&dropins).expect("drop-in dir");
+        fs::write(
+            &config.journald_conf,
+            "[Journal]\nStorage=volatile\nSystemMaxUse=1G\n",
+        )
+        .expect("main file");
+        fs::write(
+            dropins.join("50-storage.conf"),
+            "[Journal]\nStorage = persistent\nSystemMaxUse = 500M\n",
+        )
+        .expect("drop-in");
+
         assert_eq!(
-            journald_settings("[Journal]\nStorage = persistent\nSystemMaxUse = 500M\n"),
-            (true, true)
+            report_journald(&config).expect("journald"),
+            0,
+            "the drop-in sets persistence and the cap"
         );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn cache_writable_by_checks_the_symlink_target_ancestors() {
+        // /tmp is world-traversable, so only the symlink target's parent can
+        // deny alpm; the scratch temp dir may sit under a private ancestor.
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = PathBuf::from("/tmp").join(format!(
+            "aur-prefetch-doctor-symlink-{}-{id}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).expect("test dir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("open test dir");
+        let real = dir.join("real");
+        fs::create_dir_all(real.join("cache")).expect("real cache");
+        fs::set_permissions(real.join("cache"), fs::Permissions::from_mode(0o777))
+            .expect("open the cache");
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o700)).expect("lock the parent");
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(real.join("cache"), &link).expect("symlink");
+
+        assert!(
+            !cache_writable_by(&link, 979, &[979]).expect("cache check"),
+            "the real parent has no other-execute bit, so alpm cannot traverse it"
+        );
+
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o755)).expect("restore");
+        fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 
     #[test]
