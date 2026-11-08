@@ -26,7 +26,12 @@ RUN pacman -Syu --noconfirm --needed sudo pacman-contrib \
     && printf 'builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n' > /etc/sudoers.d/sim \
     && chmod 0440 /etc/sudoers.d/sim \
     && visudo -cf /etc/sudoers.d/sim \
-    && mkdir -p /etc/sim
+    && mkdir -p /etc/sim \
+    && touch /var/log/sim-yay.log /var/log/sim-yay-build.log \
+        /var/log/sim-systemctl.log /var/log/sim-journalctl.log \
+        /var/log/sim-loginctl.log /var/log/sim-aurto.log \
+        /var/log/sim-paccache.log /var/log/sim-pacdiff.log \
+    && chmod 0666 /var/log/sim-*.log
 
 # Replace mirrors with the offline sim repo. Done after the builder stage so
 # only runtime has no network.

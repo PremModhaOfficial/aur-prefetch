@@ -8,11 +8,14 @@ source /usr/local/lib/sim/lib.sh
 
 echo "scenario: only the exact fetch argv is allowed through sudo"
 
+allowed_log=$(mktemp)
+denied_log=$(mktemp)
+
 before_usr=$(usr_state)
 before_pkgs=$(pkg_state)
 
 # The allowed command downloads and must not install.
-if runuser -u builder -- sudo -n /usr/bin/pacman -Syuw --noconfirm >/tmp/sim-allowed.log 2>&1; then
+if runuser -u builder -- sudo -n /usr/bin/pacman -Syuw --noconfirm >"$allowed_log" 2>&1; then
     pass "sudo allowed pacman -Syuw --noconfirm"
 else
     fail "sudo refused the one allowed command"
@@ -23,11 +26,13 @@ assert_eq "$(usr_state)" "$before_usr" "the allowed command left /usr unchanged"
 assert_eq "$(pkg_state)" "$before_pkgs" "the allowed command changed no package"
 
 # A different pacman action must be refused by sudo, not by pacman.
-if runuser -u builder -- sudo -n /usr/bin/pacman -Syu --noconfirm >/tmp/sim-denied.log 2>&1; then
+if runuser -u builder -- sudo -n /usr/bin/pacman -Syu --noconfirm >"$denied_log" 2>&1; then
     fail "sudo allowed pacman -Syu"
 else
     pass "sudo refused pacman -Syu"
 fi
+assert_contains "$(cat "$denied_log")" "sudo:" "the refusal came from sudo"
+assert_false "pacman never started" grep -q "Synchronizing" "$denied_log"
 assert_eq "$(installed_version)" "1.0.0-1" "the refused command installed nothing"
 
 # There must be no blanket rule.

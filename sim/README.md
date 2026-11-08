@@ -49,6 +49,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `05-fetch-download-only.sh` | `fetch` as `builder` downloads, records state, and leaves `/usr` and the package DB untouched |
 | `06-fetch-lock-gate.sh` | a live pacman blocks with exit 1; a stale lock warns, proceeds, and is never deleted |
 | `07-fetch-free-space-gate.sh` | a floor larger than the filesystem refuses before pacman runs |
+| `08-stub-contract.sh` | stubs replay `.out`/`.err`/`.exit`, `builder` can append to logs, `paccache` honors a configured failure, and `yay` rejects root on every path |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

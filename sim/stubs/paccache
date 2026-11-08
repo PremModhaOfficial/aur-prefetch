@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-# Sim stub: records argv, then runs the real paccache.
+# Sim stub: records argv, then replays a configured response or runs the real
+# paccache.
 #
-# The real tool (pacman-contrib) does the deletion; the log proves the binary
-# asked for the policy it claims to use.
+# Any of /etc/sim/paccache.out, .err, or .exit turns off forwarding, so a
+# scenario can test a failure without touching the cache.
 set -uo pipefail
 
 printf '%s\n' "$*" >>/var/log/sim-paccache.log
+
+if [[ -f /etc/sim/paccache.out || -f /etc/sim/paccache.err || -f /etc/sim/paccache.exit ]]; then
+    [[ -f /etc/sim/paccache.out ]] && cat /etc/sim/paccache.out
+    [[ -f /etc/sim/paccache.err ]] && cat /etc/sim/paccache.err >&2
+    [[ -f /etc/sim/paccache.exit ]] && exit "$(cat /etc/sim/paccache.exit)"
+    exit 0
+fi
+
 exec /usr/bin/paccache "$@"

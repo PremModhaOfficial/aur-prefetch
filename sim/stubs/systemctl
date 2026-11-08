@@ -6,16 +6,16 @@
 #   <tool>.err   stderr
 #   <tool>.exit  exit status
 #
-# Every call is appended to /var/log/sim-<tool>.log so a scenario can assert
-# that a command did or did not reach a tool.
+# Output is printed before the exit status is applied, so a failing command can
+# still report a diagnostic.
 set -uo pipefail
 
 tool=${0##*/}
 printf '%s\n' "$*" >>"/var/log/sim-$tool.log"
 
+[[ -f "/etc/sim/$tool.out" ]] && cat "/etc/sim/$tool.out"
+[[ -f "/etc/sim/$tool.err" ]] && cat "/etc/sim/$tool.err" >&2
 if [[ -f "/etc/sim/$tool.exit" ]]; then
     exit "$(cat "/etc/sim/$tool.exit")"
 fi
-[[ -f "/etc/sim/$tool.out" ]] && cat "/etc/sim/$tool.out"
-[[ -f "/etc/sim/$tool.err" ]] && cat "/etc/sim/$tool.err" >&2
 exit 0
