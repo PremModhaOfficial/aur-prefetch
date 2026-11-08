@@ -95,7 +95,7 @@ Today the sim runs everything as root, so the real privilege path is untested.
 - [x] Add a `builder` user to the sim image, no blanket sudo.
 - [x] Write `/etc/sudoers.d/sim` with only:
       `builder ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm`
-- [ ] Run fetch scenarios as `builder`. A wrong argv must fail, which proves
+- [x] Run fetch scenarios as `builder`. A wrong argv must fail, which proves
       the sudoers contract.
 - [x] Fake `yay` must call `sudo -n pacman`, so running it as root is detectable.
 - [x] Stubs, each logging argv and returning configurable output:
@@ -107,9 +107,9 @@ Today the sim runs everything as root, so the real privilege path is untested.
       `db.lck` with no process, `db.lck` with a sleeping fake pacman, tiny
       tmpfs CacheDir, stale aurto repo, a `pacman.log` with an install after a
       fetch.
-- [ ] Scenario: `fetch` refuses while pacman holds the lock.
-- [ ] Scenario: `fetch` refuses below the free-space floor.
-- [ ] Scenario: `fetch` uses only the allowed argv.
+- [x] Scenario: `fetch` refuses while pacman holds the lock.
+- [x] Scenario: `fetch` refuses below the free-space floor.
+- [x] Scenario: `fetch` uses only the allowed argv.
 - [ ] Scenario: `install` builds nothing when the local repo is current.
 
 Note: pacman 7.1 sets `DownloadUser = alpm`. Cache directories must be
@@ -123,18 +123,21 @@ accessible to that user, or downloads fail. Test a moved CacheDir explicitly.
 
 Gates in order: lock, free space, then pacman.
 
-- [ ] Lock: exists `/var/lib/pacman/db.lck` and `pgrep -x pacman` is alive,
-      refuse with exit 1. Never delete the lock.
-- [ ] Free space: `need = max(2 GiB, 2 * pending_download + 2 GiB)`. Check the
+- [x] Lock: `/var/lib/pacman/db.lck` present refuses with exit 1. If
+      `pgrep -x pacman` is alive, say pacman is running; otherwise call the lock
+      stale and leave removal to the user. Never delete the lock.
+- [x] Free space: `need = max(2 GiB, 2 * pending_download + 2 GiB)`. Check the
       CacheDir filesystem, and `/` too when they differ. 5 GiB floor if
       snapshots are detected.
-- [ ] Pending download size: sum `Download Size` from `pacman -Qui`, fall back
+- [x] Pending download size: sum `Download Size` from `pacman -Qui`, fall back
       to the floor if parsing fails.
-- [ ] Run `sudo -n /usr/bin/pacman -Syuw --noconfirm`.
-- [ ] Exit 0 on success or nothing to do, 1 on gate, 2 on pacman failure.
-- [ ] Record state: timestamp, pending count, bytes downloaded if available.
-- [ ] Invariant: never writes `/usr` or `/var/lib/pacman/local`.
-- [ ] Sim scenarios: download-only, lock refusal, disk refusal, wrong argv.
+- [x] Run `sudo -n /usr/bin/pacman -Syuw --noconfirm`, or pacman directly when
+      euid is 0.
+- [x] Exit 0 on success or nothing to do, 1 on gate, 2 on pacman failure.
+- [x] Record state: timestamp and pending count. The download size is an
+      estimate, so it is not stored.
+- [x] Invariant: never writes `/usr` or `/var/lib/pacman/local`.
+- [x] Sim scenarios: download-only, lock refusal, disk refusal, wrong argv.
 
 Done when: scenario 01 still passes, a new scenario proves the cache grew by
 exactly the pending package, and a lock scenario proves refusal.
