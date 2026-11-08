@@ -19,6 +19,7 @@ assert_true "dry run kept the installed build" test -d /root/.cache/yay/simapp
 assert_true "dry run kept the ghost build" test -d /root/.cache/yay/ghost
 assert_contains "$(cat /var/log/sim-paccache.log)" "-d" "paccache ran in dry-run mode"
 assert_contains "$(cat "$dry_log")" "dry run" "the output says it was a dry run"
+assert_contains "$(cat "$dry_log")" "paccache -r -c" "the dry run prints the apply command"
 assert_contains "$(cat "$dry_log")" "aurto repo" "the aurto repo was reported"
 
 aur-prefetch clean --apply >"$apply_log" 2>&1

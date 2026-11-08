@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -70,9 +71,19 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Res
         if apply { "pruning" } else { "dry run" }
     );
 
-    let mode = if apply { "-r" } else { "-d" };
     let cache_arg = path_str(&cache)?;
-    println!("clean: command: paccache {mode} -c {cache_arg} -k1");
+    if apply {
+        println!("clean: command: {}", apply_paccache_command(cache_arg));
+    } else {
+        // The dry run must print the command that --apply would run, not the
+        // reporting command it runs now.
+        println!(
+            "clean: command: {} (dry run: {})",
+            apply_paccache_command(cache_arg),
+            paccache_command(cache_arg, "-d")
+        );
+    }
+    let mode = if apply { "-r" } else { "-d" };
     let paccache = runner.run("paccache", &[mode, "-c", cache_arg, "-k1"])?;
     if !paccache.stdout.is_empty() {
         print!("{}", paccache.stdout);
@@ -133,8 +144,36 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
         return Ok(());
     }
 
+    // One query for the whole installed set. A non-zero exit here is a failed
+    // query, not "nothing installed", so it stops the command. Absence from a
+    // successful list is the only evidence used to call a build not installed.
     let pacman = path_str(&config.pacman)?;
+    let installed = runner.run(pacman, &["-Qq"])?;
+    if installed.code != 0 {
+        return Err(Error::failed(format!(
+            "pacman -Qq exited {}: {}",
+            installed.code,
+            installed.stderr.trim()
+        )));
+    }
+    let installed: HashSet<&str> = installed
+        .stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+
     for (name, path) in builds {
+        // The cache directory is named after the pkgbase, which is not
+        // necessarily an installed package name: a split package can install
+        // only some of its pkgname entries. Check every name the build
+        // declares.
+        let names = package_names(&path);
+        if !names.iter().any(|name| installed.contains(name.as_str())) {
+            println!("clean: yay build {name}: keep (not installed)");
+            continue;
+        }
+
         let size = match runner.run("du", &["-sb", path_str(&path)?]) {
             Ok(output) if output.code == 0 => output
                 .stdout
@@ -144,12 +183,6 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
                 .map_or_else(|| "unknown".to_string(), human_bytes),
             _ => "unknown".to_string(),
         };
-
-        let query = runner.run(pacman, &["-Q", &name])?;
-        if query.code != 0 {
-            println!("clean: yay build {name}: keep (not installed)");
-            continue;
-        }
 
         if apply {
             fs::remove_dir_all(&path)
@@ -161,6 +194,41 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
         }
     }
     Ok(())
+}
+
+/// Package names a cached build can install. The directory name is the
+/// pkgbase; `.SRCINFO` also lists every `pkgname` for split packages.
+fn package_names(path: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Ok(text) = fs::read_to_string(path.join(".SRCINFO")) {
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            if !matches!(key.trim(), "pkgbase" | "pkgname") {
+                continue;
+            }
+            let value = value.trim();
+            if !value.is_empty() {
+                names.push(value.to_string());
+            }
+        }
+    }
+
+    if names.is_empty() {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+fn paccache_command(cache: &str, mode: &str) -> String {
+    format!("paccache {mode} -c {cache} -k1")
+}
+
+fn apply_paccache_command(cache: &str) -> String {
+    paccache_command(cache, "-r")
 }
 
 fn report_only(runner: &dyn CommandRunner) -> Result<(), Error> {
@@ -223,7 +291,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime};
 
-    use super::{run_with, sudo_user_cache};
+    use super::{apply_paccache_command, run_with, sudo_user_cache};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -272,17 +340,20 @@ mod tests {
             .expect("set mtime");
     }
 
-    fn queue(runner: &FakeRunner, dir: &Path, installed: &[(&str, bool)]) {
+    /// Queue the outputs `run_with` consumes, in call order.
+    ///
+    /// `dying_builds` is the number of old builds whose `du` runs, which is
+    /// one per build that the installed list says is present.
+    fn queue(runner: &FakeRunner, dir: &Path, installed: &[&str], dying_builds: usize) {
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
         runner.push_output(ok(""));
 
-        for (_, present) in installed {
+        let mut list = installed.join("\n");
+        list.push('\n');
+        runner.push_output(ok(&list));
+
+        for _ in 0..dying_builds {
             runner.push_output(ok("1048576\n"));
-            let mut query = ok("");
-            if !present {
-                query.code = 1;
-            }
-            runner.push_output(query);
         }
 
         for _ in 0..3 {
@@ -304,7 +375,7 @@ mod tests {
         age(&pkg, 40);
 
         let runner = FakeRunner::new();
-        queue(&runner, &dir, &[("simapp", true)]);
+        queue(&runner, &dir, &["simapp"], 1);
 
         run_with(&config, &runner, false).expect("clean");
 
@@ -331,7 +402,7 @@ mod tests {
         age(&ghost, 40);
 
         let runner = FakeRunner::new();
-        queue(&runner, &dir, &[("ghost", false), ("simapp", true)]);
+        queue(&runner, &dir, &["simapp"], 1);
 
         run_with(&config, &runner, true).expect("clean");
 
@@ -348,6 +419,80 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_failed_installed_query_is_loud_and_keeps_the_build() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let pkg = config.yay_cache_dir.join("simapp");
+        fs::create_dir_all(&pkg).expect("yay dir");
+        age(&pkg, 40);
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        runner.push_output(ok(""));
+        let mut broken = ok("");
+        broken.code = 2;
+        broken.stderr = "error: could not open database".to_string();
+        runner.push_output(broken);
+
+        let result = run_with(&config, &runner, true);
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        assert_eq!(result.unwrap_err().exit_code(), 2);
+        assert!(pkg.exists(), "a failed query must never delete a build");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_split_package_build_is_removed_when_one_split_name_is_installed() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let pkg = config.yay_cache_dir.join("foo");
+        fs::create_dir_all(&pkg).expect("yay dir");
+        fs::write(
+            pkg.join(".SRCINFO"),
+            "pkgbase = foo\npkgname = foo\npkgname = foo-docs\n",
+        )
+        .expect("srcinfo");
+        age(&pkg, 40);
+
+        let runner = FakeRunner::new();
+        queue(&runner, &dir, &["foo-docs"], 1);
+
+        run_with(&config, &runner, true).expect("clean");
+
+        assert!(
+            !pkg.exists(),
+            "a split package whose installed name differs from the pkgbase must be removed"
+        );
+        let calls = runner.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|(program, args)| program.ends_with("pacman")
+                    && args.iter().map(String::as_str).eq(["-Qq"])),
+            "installed packages must come from one pacman -Qq query"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|(program, args)| program.ends_with("pacman")
+                    && args.iter().map(String::as_str).eq(["-Q", "foo"])),
+            "the pkgbase alone is not enough to decide installed state"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn the_dry_run_reports_the_apply_command() {
+        assert_eq!(
+            apply_paccache_command("/var/cache/pacman/pkg"),
+            "paccache -r -c /var/cache/pacman/pkg -k1"
+        );
     }
 
     #[test]

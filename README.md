@@ -9,8 +9,8 @@ of waiting on your connection.
 
 ## Status
 
-Early. `fetch` and `check` are implemented and proven in `sim/`; `doctor`,
-`clean`, `install`, and `init` are still stubs. Nothing here has been run
+Early. `fetch`, `check`, and `clean` are implemented and proven in `sim/`;
+`doctor`, `install`, and `init` are still stubs. Nothing here has been run
 against a real Arch system yet. `AGENTS.md` lists the rules that apply while
 implementing, and `sim/` is where behaviour gets proven.
 
