@@ -66,14 +66,17 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         actionable += 1;
     }
 
-    for (label, path) in [
-        ("downloads", cache_dir.as_path()),
-        ("yay builds", config.yay_cache_dir.as_path()),
-        ("aurto repo", Path::new(AURTO_REPO)),
-        ("aurbuild chroot", Path::new(AURBUILD)),
-        ("archbuild chroot", Path::new(ARCHBUILD)),
+    // The system-owned caches are usually root-only. Reporting them as
+    // unreadable is honest, but it is not a problem the invoking user can fix,
+    // so only the user-owned caches make `check` action needed.
+    for (label, path, unreadable_is_actionable) in [
+        ("downloads", cache_dir.as_path(), true),
+        ("yay builds", config.yay_cache_dir.as_path(), true),
+        ("aurto repo", Path::new(AURTO_REPO), false),
+        ("aurbuild chroot", Path::new(AURBUILD), false),
+        ("archbuild chroot", Path::new(ARCHBUILD), false),
     ] {
-        if report_cache(runner, label, path)? {
+        if report_cache(runner, label, path, unreadable_is_actionable)? {
             actionable += 1;
         }
     }
@@ -154,7 +157,12 @@ fn report_lock(config: &Config, runner: &dyn CommandRunner) -> Result<bool, Erro
     Ok(true)
 }
 
-fn report_cache(runner: &dyn CommandRunner, label: &str, path: &Path) -> Result<bool, Error> {
+fn report_cache(
+    runner: &dyn CommandRunner,
+    label: &str,
+    path: &Path,
+    unreadable_is_actionable: bool,
+) -> Result<bool, Error> {
     let path = path_str(path)?;
     let output = runner.run("du", &["-sb", path])?;
 
@@ -164,7 +172,7 @@ fn report_cache(runner: &dyn CommandRunner, label: &str, path: &Path) -> Result<
                 "check: cache {label}: unreadable ({})",
                 output.stderr.trim()
             );
-            return Ok(true);
+            return Ok(unreadable_is_actionable);
         }
         println!("check: cache {label}: absent");
         return Ok(false);
@@ -182,7 +190,7 @@ fn report_cache(runner: &dyn CommandRunner, label: &str, path: &Path) -> Result<
         }
         None => {
             println!("check: cache {label}: unreadable (no size in du output)");
-            Ok(true)
+            Ok(unreadable_is_actionable)
         }
     }
 }
@@ -316,7 +324,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::run_with;
+    use super::{report_cache, run_with};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -522,6 +530,26 @@ mod tests {
         let result = run_with(&config, &runner);
 
         assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unreadable_system_cache_is_informational() {
+        let dir = temp_dir();
+        let cache = dir.join("system-cache");
+        fs::create_dir_all(&cache).expect("cache dir");
+
+        let runner = FakeRunner::new();
+        let mut unreadable = ok("");
+        unreadable.code = 1;
+        unreadable.stderr = "permission denied".to_string();
+        runner.push_output(unreadable);
+
+        let actionable =
+            report_cache(&runner, "aurbuild chroot", &cache, false).expect("report cache");
+
+        assert!(!actionable, "system-owned caches must not force action");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
