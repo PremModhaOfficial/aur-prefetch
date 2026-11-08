@@ -1,17 +1,51 @@
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::runner::{CommandRunner, SystemRunner};
+use crate::runner::{CommandOutput, CommandRunner, SystemRunner};
 use crate::util::{human_bytes, path_str, resolve_cache_dir};
 
 const THIRTY_DAYS: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-const AURTO_REPO: &str = "/var/cache/pacman/aurto";
-const AURBUILD: &str = "/var/lib/aurbuild";
-const ARCHBUILD: &str = "/var/lib/archbuild";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CleanPlan {
+    pub cache: PathBuf,
+    pub apply: bool,
+    pub paccache_argv: Vec<String>,
+    pub apply_command: String,
+    pub dry_run_command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct YayBuild {
+    pub name: String,
+    pub path: PathBuf,
+    pub size: Option<u64>,
+    pub action: YayAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YayAction {
+    KeepNotInstalled,
+    WouldRemove,
+    Removed,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct YayReport {
+    pub absent: bool,
+    pub builds: Vec<YayBuild>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportItem {
+    pub label: String,
+    pub value: String,
+}
 
 pub fn run(apply: bool) -> Result<(), Error> {
     let mut config = Config::from_env()?;
@@ -64,27 +98,10 @@ fn sudo_user_cache(
 }
 
 pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result<(), Error> {
-    let cache = resolve_cache_dir(config, runner)?;
-    println!(
-        "clean: downloads: {} ({})",
-        cache.display(),
-        if apply { "pruning" } else { "dry run" }
-    );
+    let plan = prepare(config, runner, apply)?;
+    print!("{}", render_header(&plan));
 
-    let cache_arg = path_str(&cache)?;
-    if apply {
-        println!("clean: command: {}", apply_paccache_command(cache_arg));
-    } else {
-        // The dry run must print the command that --apply would run, not the
-        // reporting command it runs now.
-        println!(
-            "clean: command: {} (dry run: {})",
-            apply_paccache_command(cache_arg),
-            paccache_command(cache_arg, "-d")
-        );
-    }
-    let mode = if apply { "-r" } else { "-d" };
-    let paccache = runner.run("paccache", &[mode, "-c", cache_arg, "-k1"])?;
+    let paccache = run_paccache(&plan, runner)?;
     if !paccache.stdout.is_empty() {
         print!("{}", paccache.stdout);
     }
@@ -95,8 +112,11 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Res
         return Err(Error::failed(format!("paccache exited {}", paccache.code)));
     }
 
-    clean_yay(config, runner, apply)?;
-    report_only(runner)?;
+    let yay = collect_yay(config, runner, apply)?;
+    print!("{}", render_yay(&yay));
+
+    let report = collect_report_only(config, runner)?;
+    print!("{}", render_report_only(&report));
 
     if !apply {
         println!("clean: dry run; pass --apply to delete");
@@ -105,12 +125,73 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Res
     Ok(())
 }
 
-fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result<(), Error> {
+pub fn prepare(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    apply: bool,
+) -> Result<CleanPlan, Error> {
+    let cache = resolve_cache_dir(config, runner)?;
+    let cache_arg = path_str(&cache)?;
+    let mode = if apply { "-r" } else { "-d" };
+
+    Ok(CleanPlan {
+        cache: cache.clone(),
+        apply,
+        paccache_argv: vec![
+            "paccache".to_string(),
+            mode.to_string(),
+            "-c".to_string(),
+            cache_arg.to_string(),
+            "-k1".to_string(),
+        ],
+        apply_command: apply_paccache_command(cache_arg),
+        dry_run_command: paccache_command(cache_arg, "-d"),
+    })
+}
+
+pub fn render_header(plan: &CleanPlan) -> String {
+    let mut out = String::new();
+    writeln!(
+        out,
+        "clean: downloads: {} ({})",
+        plan.cache.display(),
+        if plan.apply { "pruning" } else { "dry run" }
+    )
+    .expect("writing to a String cannot fail");
+
+    if plan.apply {
+        writeln!(out, "clean: command: {}", plan.apply_command)
+            .expect("writing to a String cannot fail");
+    } else {
+        // The dry run must print the command that --apply would run, not the
+        // reporting command it runs now.
+        writeln!(
+            out,
+            "clean: command: {} (dry run: {})",
+            plan.apply_command, plan.dry_run_command
+        )
+        .expect("writing to a String cannot fail");
+    }
+    out
+}
+
+pub fn run_paccache(plan: &CleanPlan, runner: &dyn CommandRunner) -> Result<CommandOutput, Error> {
+    let args: Vec<&str> = plan.paccache_argv.iter().map(String::as_str).collect();
+    runner.run(args[0], &args[1..])
+}
+
+fn collect_yay(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    apply: bool,
+) -> Result<YayReport, Error> {
     let entries = match fs::read_dir(&config.yay_cache_dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!("clean: yay builds: absent");
-            return Ok(());
+            return Ok(YayReport {
+                absent: true,
+                builds: Vec::new(),
+            });
         }
         Err(err) => {
             return Err(Error::failed(format!(
@@ -140,8 +221,7 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
     builds.sort();
 
     if builds.is_empty() {
-        println!("clean: yay builds: nothing older than 30 days");
-        return Ok(());
+        return Ok(YayReport::default());
     }
 
     // One query for the whole installed set. A non-zero exit here is a failed
@@ -163,6 +243,7 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
         .filter(|line| !line.is_empty())
         .collect();
 
+    let mut report = Vec::new();
     for (name, path) in builds {
         // The cache directory is named after the pkgbase, which is not
         // necessarily an installed package name: a split package can install
@@ -170,7 +251,12 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
         // declares.
         let names = package_names(&path);
         if !names.iter().any(|name| installed.contains(name.as_str())) {
-            println!("clean: yay build {name}: keep (not installed)");
+            report.push(YayBuild {
+                name,
+                path,
+                size: None,
+                action: YayAction::KeepNotInstalled,
+            });
             continue;
         }
 
@@ -179,21 +265,71 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
                 .stdout
                 .split_whitespace()
                 .next()
-                .and_then(|value| value.parse::<u64>().ok())
-                .map_or_else(|| "unknown".to_string(), human_bytes),
-            _ => "unknown".to_string(),
+                .and_then(|value| value.parse::<u64>().ok()),
+            _ => None,
         };
 
         if apply {
             fs::remove_dir_all(&path)
                 .map_err(|err| Error::failed(format!("cannot remove {}: {err}", path.display())))?;
-            println!("clean: yay build {name}: removed ({size})");
+            report.push(YayBuild {
+                name,
+                path,
+                size,
+                action: YayAction::Removed,
+            });
         } else {
-            println!("clean: yay build {name}: would remove ({size})");
-            println!("clean: command: rm -rf {}", path.display());
+            report.push(YayBuild {
+                name,
+                path,
+                size,
+                action: YayAction::WouldRemove,
+            });
         }
     }
-    Ok(())
+    Ok(YayReport {
+        absent: false,
+        builds: report,
+    })
+}
+
+pub fn render_yay(report: &YayReport) -> String {
+    let mut out = String::new();
+    if report.absent {
+        out.push_str("clean: yay builds: absent\n");
+        return out;
+    }
+    if report.builds.is_empty() {
+        out.push_str("clean: yay builds: nothing older than 30 days\n");
+        return out;
+    }
+
+    for build in &report.builds {
+        let size = build
+            .size
+            .map_or_else(|| "unknown".to_string(), human_bytes);
+        match build.action {
+            YayAction::KeepNotInstalled => {
+                writeln!(out, "clean: yay build {}: keep (not installed)", build.name)
+                    .expect("writing to a String cannot fail");
+            }
+            YayAction::WouldRemove => {
+                writeln!(
+                    out,
+                    "clean: yay build {}: would remove ({size})",
+                    build.name
+                )
+                .expect("writing to a String cannot fail");
+                writeln!(out, "clean: command: rm -rf {}", build.path.display())
+                    .expect("writing to a String cannot fail");
+            }
+            YayAction::Removed => {
+                writeln!(out, "clean: yay build {}: removed ({size})", build.name)
+                    .expect("writing to a String cannot fail");
+            }
+        }
+    }
+    out
 }
 
 /// Package names a cached build can install. The directory name is the
@@ -231,21 +367,29 @@ fn apply_paccache_command(cache: &str) -> String {
     paccache_command(cache, "-r")
 }
 
-fn report_only(runner: &dyn CommandRunner) -> Result<(), Error> {
+fn collect_report_only(
+    config: &Config,
+    runner: &dyn CommandRunner,
+) -> Result<Vec<ReportItem>, Error> {
+    let mut items = Vec::new();
     for (label, path) in [
-        ("aurto repo", AURTO_REPO),
-        ("aurbuild chroot", AURBUILD),
-        ("archbuild chroot", ARCHBUILD),
+        ("aurto repo", config.aurto_repo.as_path()),
+        ("aurbuild chroot", config.aurbuild_dir.as_path()),
+        ("archbuild chroot", config.archbuild_dir.as_path()),
     ] {
-        let output = runner.run("du", &["-sb", path])?;
+        let path_text = path_str(path)?;
+        let output = runner.run("du", &["-sb", path_text])?;
         if output.code != 0 {
-            if Path::new(path).exists() {
+            if path.exists() {
                 return Err(Error::failed(format!(
-                    "cannot measure {path}: {}",
+                    "cannot measure {path_text}: {}",
                     output.stderr.trim()
                 )));
             }
-            println!("clean: {label}: absent");
+            items.push(ReportItem {
+                label: label.to_string(),
+                value: "absent".to_string(),
+            });
             continue;
         }
         let bytes = output
@@ -253,25 +397,45 @@ fn report_only(runner: &dyn CommandRunner) -> Result<(), Error> {
             .split_whitespace()
             .next()
             .and_then(|value| value.parse::<u64>().ok());
-        match bytes {
-            Some(bytes) => println!("clean: {label}: {} (report only)", human_bytes(bytes)),
-            None => println!("clean: {label}: unreadable (report only)"),
-        }
+        let value = match bytes {
+            Some(bytes) => format!("{} (report only)", human_bytes(bytes)),
+            None => "unreadable (report only)".to_string(),
+        };
+        items.push(ReportItem {
+            label: label.to_string(),
+            value,
+        });
     }
 
     match runner.run("journalctl", &["--disk-usage"]) {
-        Ok(output) if output.code == 0 => {
-            println!("clean: logs: {} (report only)", output.stdout.trim());
-        }
-        _ => println!("clean: logs: unavailable"),
+        Ok(output) if output.code == 0 => items.push(ReportItem {
+            label: "logs".to_string(),
+            value: format!("{} (report only)", output.stdout.trim()),
+        }),
+        _ => items.push(ReportItem {
+            label: "logs".to_string(),
+            value: "unavailable".to_string(),
+        }),
     }
 
     if let Ok(output) = runner.run("snapper", &["--version"]) {
         if output.code == 0 {
-            println!("clean: snapshots: snapper present (report only)");
+            items.push(ReportItem {
+                label: "snapshots".to_string(),
+                value: "snapper present (report only)".to_string(),
+            });
         }
     }
-    Ok(())
+    Ok(items)
+}
+
+pub fn render_report_only(items: &[ReportItem]) -> String {
+    let mut out = String::new();
+    for item in items {
+        writeln!(out, "clean: {}: {}", item.label, item.value)
+            .expect("writing to a String cannot fail");
+    }
+    out
 }
 
 fn older_than(path: &Path, age: Duration) -> bool {

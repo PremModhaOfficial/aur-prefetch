@@ -1,16 +1,17 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::report::{
+    CacheUsage, Cached, DiskStatus, DiskUsage, LockState, Policy, Repo, Section, Snapshot,
+    StateInfo, TimerState, TrustState, Update,
+};
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 use crate::util::{human_bytes, path_str, resolve_cache_dir};
-
-const AURTO_REPO: &str = "/var/cache/pacman/aurto";
-const AURBUILD: &str = "/var/lib/aurbuild";
-const ARCHBUILD: &str = "/var/lib/archbuild";
 
 pub fn run() -> Result<(), Error> {
     let config = Config::from_env()?;
@@ -19,131 +20,418 @@ pub fn run() -> Result<(), Error> {
 
 /// Read-only: this command never writes state or the caches it inspects.
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
+    let snapshot = collect(config, runner, SystemTime::now())?;
+    print!("{}", render_text(&snapshot));
+    if let Some(error) = snapshot.fatal.clone() {
+        return Err(error);
+    }
+    verdict(&snapshot)
+}
+
+macro_rules! collect_or_fatal {
+    ($snapshot:ident, $expr:expr) => {
+        match $expr {
+            Ok(value) => value,
+            Err(error) => {
+                $snapshot.fatal = Some(error);
+                return Ok($snapshot);
+            }
+        }
+    };
+}
+
+/// Collect the check snapshot. This never prints and never writes.
+pub fn collect(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    now: SystemTime,
+) -> Result<Snapshot, Error> {
+    let mut snapshot = Snapshot::default();
     let mut actionable = 0u32;
 
-    let official = runner.run(path_str(&config.pacman)?, &["-Qu"])?;
+    let pacman = collect_or_fatal!(snapshot, path_str(&config.pacman));
+    let official = collect_or_fatal!(snapshot, runner.run(pacman, &["-Qu"]));
     if official.code != 0 && official.code != 1 {
-        return Err(Error::failed(format!(
+        snapshot.fatal = Some(Error::failed(format!(
             "pacman -Qu exited {}: {}",
             official.code,
             official.stderr.trim()
         )));
+        return Ok(snapshot);
     }
-    if report_pending("official", &official.stdout) > 0 {
+    let updates = parse_updates(&official.stdout, Repo::Unknown);
+    if !updates.is_empty() {
         actionable += 1;
     }
+    snapshot.official = Section::ready(updates, now);
 
-    match runner.run("yay", &["-Qua"]) {
+    snapshot.aur = match runner.run("yay", &["-Qua"]) {
         Ok(output) if output.code == 0 || output.code == 1 => {
-            if report_pending("aur", &output.stdout) > 0 {
+            let updates = parse_updates(&output.stdout, Repo::Aur);
+            if !updates.is_empty() {
                 actionable += 1;
             }
+            Section::ready(updates, now)
         }
         Ok(output) => {
-            println!(
-                "check: aur updates: unavailable (yay exited {})",
-                output.code
-            );
             actionable += 1;
+            Section::failed(format!("unavailable (yay exited {})", output.code), now)
         }
         Err(_) => {
-            println!("check: aur updates: unavailable (yay not found)");
             actionable += 1;
+            Section::failed("unavailable (yay not found)", now)
         }
-    }
+    };
 
-    let cache_dir = resolve_cache_dir(config, runner)?;
+    let cache_dir = collect_or_fatal!(snapshot, resolve_cache_dir(config, runner));
+    let mut disks = Vec::new();
     if cache_dir.exists() {
-        if report_disk(runner, &cache_dir, config.min_free_bytes)? {
+        let disk = collect_or_fatal!(
+            snapshot,
+            collect_disk(runner, &cache_dir, config.min_free_bytes)
+        );
+        if disk.below_floor {
             actionable += 1;
         }
+        disks.push(disk);
     } else {
         // A missing CacheDir is action needed, not an execution error. `df`
         // would exit non-zero and turn this into exit 2.
-        println!(
-            "check: disk {}: not checked (cache dir is missing)",
-            cache_dir.display()
+        disks.push(DiskUsage {
+            path: cache_dir.clone(),
+            total: 0,
+            available: 0,
+            inode_total: 0,
+            inode_available: 0,
+            status: DiskStatus::NotChecked("cache dir is missing".to_string()),
+            floor: config.min_free_bytes,
+            below_floor: false,
+        });
+        actionable += 1;
+    }
+    if cache_dir != PathBuf::from("/") {
+        let disk = collect_or_fatal!(
+            snapshot,
+            collect_disk(runner, Path::new("/"), config.min_free_bytes)
         );
-        actionable += 1;
+        if disk.below_floor {
+            actionable += 1;
+        }
+        disks.push(disk);
     }
-    if cache_dir != PathBuf::from("/")
-        && report_disk(runner, Path::new("/"), config.min_free_bytes)?
-    {
-        actionable += 1;
-    }
+    snapshot.disk = Section::ready(disks, now);
 
-    if report_lock(config, runner)? {
+    let lock = collect_or_fatal!(snapshot, collect_lock(config, runner));
+    if !matches!(lock, LockState::None) {
         actionable += 1;
     }
+    snapshot.lock = Section::ready(lock, now);
 
     // The system-owned caches are usually root-only. Reporting them as
     // unreadable is honest, but it is not a problem the invoking user can fix,
     // so only the user-owned caches make `check` action needed.
-    for (label, path, unreadable_is_actionable) in [
-        ("downloads", cache_dir.as_path(), true),
-        ("yay builds", config.yay_cache_dir.as_path(), true),
-        ("aurto repo", Path::new(AURTO_REPO), false),
-        ("aurbuild chroot", Path::new(AURBUILD), false),
-        ("archbuild chroot", Path::new(ARCHBUILD), false),
+    let mut caches = Vec::new();
+    for (label, path, unreadable_is_actionable, policy) in [
+        ("downloads", cache_dir.as_path(), true, Policy::KeepOne),
+        (
+            "yay builds",
+            config.yay_cache_dir.as_path(),
+            true,
+            Policy::OlderThan30DaysInstalledOnly,
+        ),
+        (
+            "aurto repo",
+            config.aurto_repo.as_path(),
+            false,
+            Policy::ReportOnly,
+        ),
+        (
+            "aurbuild chroot",
+            config.aurbuild_dir.as_path(),
+            false,
+            Policy::ReportOnly,
+        ),
+        (
+            "archbuild chroot",
+            config.archbuild_dir.as_path(),
+            false,
+            Policy::ReportOnly,
+        ),
     ] {
-        if report_cache(runner, label, path, unreadable_is_actionable)? {
+        let cache = collect_or_fatal!(
+            snapshot,
+            collect_cache(runner, label, path, unreadable_is_actionable, policy)
+        );
+        if cache.actionable {
             actionable += 1;
         }
+        caches.push(cache);
     }
+    snapshot.caches = Section::ready(caches, now);
 
-    if report_timer(runner)? {
+    let timer = collect_or_fatal!(snapshot, collect_timer(runner));
+    if timer.actionable {
         actionable += 1;
     }
-    report_state(config)?;
-    report_trust(config)?;
+    snapshot.timer = Section::ready(timer, now);
 
-    if actionable == 0 {
-        println!("check: clean");
+    let state = collect_or_fatal!(snapshot, collect_state(config));
+    snapshot.state = Section::ready(state, now);
+    let trust = collect_or_fatal!(snapshot, collect_trust(config));
+    snapshot.trust = Section::ready(trust, now);
+    snapshot.actionable = actionable;
+    Ok(snapshot)
+}
+
+fn verdict(snapshot: &Snapshot) -> Result<(), Error> {
+    if snapshot.actionable == 0 {
         Ok(())
     } else {
-        println!("check: action needed ({actionable} item(s))");
         Err(Error::blocked(format!(
-            "{actionable} item(s) need attention"
+            "{} item(s) need attention",
+            snapshot.actionable
         )))
     }
 }
 
-fn report_pending(label: &str, stdout: &str) -> u32 {
-    let lines: Vec<&str> = stdout
+/// Render the same text the CLI printed before the report layer existed.
+pub fn render_text(snapshot: &Snapshot) -> String {
+    let mut out = String::new();
+    render_updates(&mut out, "official", &snapshot.official);
+    render_updates(&mut out, "aur", &snapshot.aur);
+    render_disk(&mut out, &snapshot.disk);
+    render_lock(&mut out, &snapshot.lock);
+    render_caches(&mut out, &snapshot.caches);
+    render_timer(&mut out, &snapshot.timer);
+    render_state(&mut out, &snapshot.state);
+    render_trust(&mut out, &snapshot.trust);
+
+    if snapshot.fatal.is_some() {
+        return out;
+    }
+    if snapshot.actionable == 0 {
+        out.push_str("check: clean\n");
+    } else {
+        writeln!(
+            out,
+            "check: action needed ({} item(s))",
+            snapshot.actionable
+        )
+        .expect("writing to a String cannot fail");
+    }
+    out
+}
+
+fn render_updates(out: &mut String, label: &str, section: &Section<Vec<Update>>) {
+    match section {
+        Section::Ready { data, .. } => {
+            writeln!(out, "check: {label} updates: {}", data.len())
+                .expect("writing to a String cannot fail");
+            for update in data {
+                writeln!(out, "  {}", update.raw).expect("writing to a String cannot fail");
+            }
+        }
+        Section::Failed { error, .. } => {
+            writeln!(out, "check: {label} updates: {error}")
+                .expect("writing to a String cannot fail");
+        }
+        Section::NotCollected => {}
+    }
+}
+
+fn render_disk(out: &mut String, section: &Section<Vec<DiskUsage>>) {
+    match section {
+        Section::Ready { data, .. } => {
+            for disk in data {
+                match &disk.status {
+                    DiskStatus::Measured => {
+                        writeln!(
+                            out,
+                            "check: disk {}: {} free of {}, {} inodes free of {}",
+                            disk.path.display(),
+                            human_bytes(disk.available),
+                            human_bytes(disk.total),
+                            disk.inode_available,
+                            disk.inode_total
+                        )
+                        .expect("writing to a String cannot fail");
+                        if disk.below_floor {
+                            writeln!(
+                                out,
+                                "check: disk {}: below the {} floor",
+                                disk.path.display(),
+                                human_bytes(disk.floor)
+                            )
+                            .expect("writing to a String cannot fail");
+                        }
+                    }
+                    DiskStatus::NotChecked(reason) => {
+                        writeln!(
+                            out,
+                            "check: disk {}: not checked ({reason})",
+                            disk.path.display()
+                        )
+                        .expect("writing to a String cannot fail");
+                    }
+                }
+            }
+        }
+        Section::Failed { error, .. } => {
+            writeln!(out, "check: disk: {error}").expect("writing to a String cannot fail");
+        }
+        Section::NotCollected => {}
+    }
+}
+
+fn render_lock(out: &mut String, section: &Section<LockState>) {
+    match section {
+        Section::Ready { data, .. } => match data {
+            LockState::None => out.push_str("check: lock: none\n"),
+            LockState::HeldByPacman => out.push_str("check: lock: held by pacman\n"),
+            LockState::Stale(path) => {
+                writeln!(out, "check: lock: stale {}", path.display())
+                    .expect("writing to a String cannot fail");
+            }
+        },
+        Section::Failed { error, .. } => {
+            writeln!(out, "check: lock: {error}").expect("writing to a String cannot fail");
+        }
+        Section::NotCollected => {}
+    }
+}
+
+fn render_caches(out: &mut String, section: &Section<Vec<CacheUsage>>) {
+    match section {
+        Section::Ready { data, .. } => {
+            for cache in data {
+                if let Some(bytes) = cache.bytes {
+                    writeln!(out, "check: cache {}: {}", cache.label, human_bytes(bytes))
+                        .expect("writing to a String cannot fail");
+                } else if let Some(note) = &cache.note {
+                    writeln!(out, "check: cache {}: {note}", cache.label)
+                        .expect("writing to a String cannot fail");
+                } else {
+                    writeln!(out, "check: cache {}: unknown", cache.label)
+                        .expect("writing to a String cannot fail");
+                }
+            }
+        }
+        Section::Failed { error, .. } => {
+            writeln!(out, "check: caches: {error}").expect("writing to a String cannot fail");
+        }
+        Section::NotCollected => {}
+    }
+}
+
+fn render_timer(out: &mut String, section: &Section<TimerState>) {
+    match section {
+        Section::Ready { data, .. } => {
+            if !data.available {
+                out.push_str("check: timer: unavailable\n");
+            } else if let Some(next) = &data.next {
+                writeln!(out, "check: timer: {next}").expect("writing to a String cannot fail");
+            } else {
+                out.push_str("check: timer: not scheduled\n");
+            }
+            if let Some(result) = &data.last_result {
+                writeln!(out, "check: timer: last service result: {result}")
+                    .expect("writing to a String cannot fail");
+            }
+        }
+        Section::Failed { error, .. } => {
+            writeln!(out, "check: timer: {error}").expect("writing to a String cannot fail");
+        }
+        Section::NotCollected => {}
+    }
+}
+
+fn render_state(out: &mut String, section: &Section<StateInfo>) {
+    match section {
+        Section::Ready { data, at } => {
+            let now = unix_seconds(*at);
+            writeln!(
+                out,
+                "check: state: last fetch {}, last install {}",
+                ago(data.last_fetch_unix, now),
+                ago(data.last_install_unix, now)
+            )
+            .expect("writing to a String cannot fail");
+            if let Some(fallback) = &data.fallback {
+                writeln!(out, "check: state: {fallback}").expect("writing to a String cannot fail");
+            }
+        }
+        Section::Failed { error, .. } => {
+            writeln!(out, "check: state: {error}").expect("writing to a String cannot fail");
+        }
+        Section::NotCollected => {}
+    }
+}
+
+fn render_trust(out: &mut String, section: &Section<TrustState>) {
+    match section {
+        Section::Ready { data, .. } => match data {
+            TrustState::Missing => out.push_str("check: trust: missing (aurto trusts everyone)\n"),
+            TrustState::Empty => out.push_str("check: trust: empty (trusts no one)\n"),
+            TrustState::Allowlist(count) => {
+                writeln!(out, "check: trust: {count} maintainer(s)")
+                    .expect("writing to a String cannot fail");
+            }
+        },
+        Section::Failed { error, .. } => {
+            writeln!(out, "check: trust: {error}").expect("writing to a String cannot fail");
+        }
+        Section::NotCollected => {}
+    }
+}
+
+fn unix_seconds(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
+fn parse_updates(stdout: &str, repo: Repo) -> Vec<Update> {
+    stdout
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-        .collect();
-
-    println!("check: {label} updates: {}", lines.len());
-    for line in &lines {
-        println!("  {line}");
-    }
-    lines.len() as u32
+        .map(|line| {
+            let (left, available) = line.split_once(" -> ").unwrap_or((line, ""));
+            let (name, installed) = left.split_once(' ').unwrap_or((left, ""));
+            Update {
+                name: name.to_string(),
+                repo: repo.clone(),
+                installed: installed.trim().to_string(),
+                available: available.trim().to_string(),
+                download_bytes: None,
+                cached: Cached::Unknown,
+                raw: line.to_string(),
+            }
+        })
+        .collect()
 }
 
-fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<bool, Error> {
-    let path = path_str(path)?;
+fn collect_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<DiskUsage, Error> {
+    let path_text = path_str(path)?;
 
-    let size = runner.run("df", &["-B1", "--output=size,avail", path])?;
+    let size = runner.run("df", &["-B1", "--output=size,avail", path_text])?;
     let (total, available) = parse_pair(&size.stdout)
-        .ok_or_else(|| Error::failed(format!("cannot parse df output for {path}")))?;
+        .ok_or_else(|| Error::failed(format!("cannot parse df output for {path_text}")))?;
 
-    let inodes = runner.run("df", &["--output=itotal,iavail", path])?;
+    let inodes = runner.run("df", &["--output=itotal,iavail", path_text])?;
     let (inode_total, inode_available) = parse_pair(&inodes.stdout)
-        .ok_or_else(|| Error::failed(format!("cannot parse df inode output for {path}")))?;
+        .ok_or_else(|| Error::failed(format!("cannot parse df inode output for {path_text}")))?;
 
-    println!(
-        "check: disk {path}: {} free of {}, {inode_available} inodes free of {inode_total}",
-        human_bytes(available),
-        human_bytes(total)
-    );
-
-    if available < floor {
-        println!("check: disk {path}: below the {} floor", human_bytes(floor));
-        return Ok(true);
-    }
-    Ok(false)
+    Ok(DiskUsage {
+        path: path.to_path_buf(),
+        total,
+        available,
+        inode_total,
+        inode_available,
+        status: DiskStatus::Measured,
+        floor,
+        below_floor: available < floor,
+    })
 }
 
 fn parse_pair(stdout: &str) -> Option<(u64, u64)> {
@@ -152,40 +440,48 @@ fn parse_pair(stdout: &str) -> Option<(u64, u64)> {
     Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
 }
 
-fn report_lock(config: &Config, runner: &dyn CommandRunner) -> Result<bool, Error> {
+fn collect_lock(config: &Config, runner: &dyn CommandRunner) -> Result<LockState, Error> {
     if !config.pacman_lock.exists() {
-        println!("check: lock: none");
-        return Ok(false);
+        return Ok(LockState::None);
     }
 
     let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
     if pgrep.code == 0 {
-        println!("check: lock: held by pacman");
+        Ok(LockState::HeldByPacman)
     } else {
-        println!("check: lock: stale {}", config.pacman_lock.display());
+        Ok(LockState::Stale(config.pacman_lock.clone()))
     }
-    Ok(true)
 }
 
-fn report_cache(
+fn collect_cache(
     runner: &dyn CommandRunner,
     label: &str,
     path: &Path,
     unreadable_is_actionable: bool,
-) -> Result<bool, Error> {
-    let path = path_str(path)?;
-    let output = runner.run("du", &["-sb", path])?;
+    policy: Policy,
+) -> Result<CacheUsage, Error> {
+    let path_text = path_str(path)?;
+    let output = runner.run("du", &["-sb", path_text])?;
 
     if output.code != 0 {
         if Path::new(path).exists() {
-            println!(
-                "check: cache {label}: unreadable ({})",
-                output.stderr.trim()
-            );
-            return Ok(unreadable_is_actionable);
+            return Ok(CacheUsage {
+                label: label.to_string(),
+                path: path.to_path_buf(),
+                bytes: None,
+                note: Some(format!("unreadable ({})", output.stderr.trim())),
+                policy,
+                actionable: unreadable_is_actionable,
+            });
         }
-        println!("check: cache {label}: absent");
-        return Ok(false);
+        return Ok(CacheUsage {
+            label: label.to_string(),
+            path: path.to_path_buf(),
+            bytes: None,
+            note: Some("absent".to_string()),
+            policy,
+            actionable: false,
+        });
     }
 
     match output
@@ -194,31 +490,38 @@ fn report_cache(
         .next()
         .and_then(|value| value.parse::<u64>().ok())
     {
-        Some(bytes) => {
-            println!("check: cache {label}: {}", human_bytes(bytes));
-            Ok(false)
-        }
-        None => {
-            println!("check: cache {label}: unreadable (no size in du output)");
-            Ok(unreadable_is_actionable)
-        }
+        Some(bytes) => Ok(CacheUsage {
+            label: label.to_string(),
+            path: path.to_path_buf(),
+            bytes: Some(bytes),
+            note: None,
+            policy,
+            actionable: false,
+        }),
+        None => Ok(CacheUsage {
+            label: label.to_string(),
+            path: path.to_path_buf(),
+            bytes: None,
+            note: Some("unreadable (no size in du output)".to_string()),
+            policy,
+            actionable: unreadable_is_actionable,
+        }),
     }
 }
 
-fn report_timer(runner: &dyn CommandRunner) -> Result<bool, Error> {
+fn collect_timer(runner: &dyn CommandRunner) -> Result<TimerState, Error> {
     let output = runner.run("systemctl", &["--user", "list-timers"])?;
     if output.code != 0 {
-        println!("check: timer: unavailable");
-        return Ok(true);
+        return Ok(TimerState {
+            available: false,
+            next: None,
+            last_result: None,
+            actionable: true,
+        });
     }
 
-    match scheduled_timer(&output.stdout) {
-        Some(line) => {
-            let compact = line.split_whitespace().collect::<Vec<_>>().join(" ");
-            println!("check: timer: {compact}");
-        }
-        None => println!("check: timer: not scheduled"),
-    }
+    let next = scheduled_timer(&output.stdout)
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "));
 
     let result = runner.run(
         "systemctl",
@@ -230,10 +533,18 @@ fn report_timer(runner: &dyn CommandRunner) -> Result<bool, Error> {
         ],
     )?;
     let value = result.stdout.trim();
-    if result.code == 0 && !value.is_empty() {
-        println!("check: timer: last service result: {value}");
-    }
-    Ok(false)
+    let last_result = if result.code == 0 && !value.is_empty() {
+        Some(value.to_string())
+    } else {
+        None
+    };
+
+    Ok(TimerState {
+        available: true,
+        next,
+        last_result,
+        actionable: false,
+    })
 }
 
 /// A loaded timer is not enough: its NEXT column must name a real run.
@@ -244,24 +555,25 @@ fn scheduled_timer(stdout: &str) -> Option<&str> {
         .filter(|line| !line.trim_start().starts_with("n/a"))
 }
 
-fn report_state(config: &Config) -> Result<(), Error> {
+fn collect_state(config: &Config) -> Result<StateInfo, Error> {
     let state = State::load(&config.state_file)?;
-    println!(
-        "check: state: last fetch {}, last install {}",
-        ago(state.last_fetch_unix),
-        ago(state.last_install_unix)
-    );
+    let fallback = if state.last_fetch_unix.is_none() && state.last_install_unix.is_none() {
+        collect_log_fallback(config)
+    } else {
+        None
+    };
 
-    if state.last_fetch_unix.is_none() && state.last_install_unix.is_none() {
-        report_log_fallback(config)?;
-    }
-    Ok(())
+    Ok(StateInfo {
+        last_fetch_unix: state.last_fetch_unix,
+        last_fetch_pending: state.last_fetch_pending,
+        last_install_unix: state.last_install_unix,
+        fallback,
+    })
 }
 
-fn report_log_fallback(config: &Config) -> Result<(), Error> {
+fn collect_log_fallback(config: &Config) -> Option<String> {
     let Ok(log) = fs::read_to_string(&config.pacman_log) else {
-        println!("check: state: no pacman.log fallback");
-        return Ok(());
+        return Some("no pacman.log fallback".to_string());
     };
 
     let lines: Vec<&str> = log.lines().collect();
@@ -270,20 +582,17 @@ fn report_log_fallback(config: &Config) -> Result<(), Error> {
         .iter()
         .rposition(|line| line.contains("[ALPM] installed") || line.contains("[ALPM] upgraded"));
 
-    match (fetch, install) {
+    Some(match (fetch, install) {
         (Some(fetch), Some(install)) if fetch > install => {
-            println!("check: state: log shows a download after the last install");
+            "log shows a download after the last install".to_string()
         }
-        (Some(_), Some(_)) => {
-            println!("check: state: log shows no download after the last install");
-        }
-        (Some(_), None) => println!("check: state: log shows a download and no install"),
-        _ => println!("check: state: log shows no download record"),
-    }
-    Ok(())
+        (Some(_), Some(_)) => "log shows no download after the last install".to_string(),
+        (Some(_), None) => "log shows a download and no install".to_string(),
+        _ => "log shows no download record".to_string(),
+    })
 }
 
-fn report_trust(config: &Config) -> Result<(), Error> {
+fn collect_trust(config: &Config) -> Result<TrustState, Error> {
     match fs::read_to_string(&config.trusted_users) {
         Ok(text) => {
             let count = text
@@ -294,32 +603,23 @@ fn report_trust(config: &Config) -> Result<(), Error> {
                 })
                 .count();
             if count == 0 {
-                println!("check: trust: empty (trusts no one)");
+                Ok(TrustState::Empty)
             } else {
-                println!("check: trust: {count} maintainer(s)");
+                Ok(TrustState::Allowlist(count))
             }
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!("check: trust: missing (aurto trusts everyone)");
-        }
-        Err(err) => {
-            return Err(Error::failed(format!(
-                "cannot read {}: {err}",
-                config.trusted_users.display()
-            )));
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(TrustState::Missing),
+        Err(err) => Err(Error::failed(format!(
+            "cannot read {}: {err}",
+            config.trusted_users.display()
+        ))),
     }
-    Ok(())
 }
 
-fn ago(timestamp: Option<u64>) -> String {
+fn ago(timestamp: Option<u64>, now: u64) -> String {
     let Some(timestamp) = timestamp else {
         return "never".to_string();
     };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_secs())
-        .unwrap_or(0);
     let seconds = now.saturating_sub(timestamp);
 
     if seconds < 3600 {
@@ -337,10 +637,15 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use super::{report_cache, run_with, scheduled_timer};
+    use super::{collect_cache, render_text, run_with, scheduled_timer};
     use crate::config::Config;
     use crate::error::Error;
+    use crate::report::{
+        CacheUsage, Cached, DiskStatus, DiskUsage, LockState, Policy, Repo, Section, Snapshot,
+        StateInfo, TimerState, TrustState, Update,
+    };
     use crate::runner::{CommandOutput, FakeRunner};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -605,10 +910,19 @@ mod tests {
         unreadable.stderr = "permission denied".to_string();
         runner.push_output(unreadable);
 
-        let actionable =
-            report_cache(&runner, "aurbuild chroot", &cache, false).expect("report cache");
+        let usage = collect_cache(
+            &runner,
+            "aurbuild chroot",
+            &cache,
+            false,
+            Policy::ReportOnly,
+        )
+        .expect("collect cache");
 
-        assert!(!actionable, "system-owned caches must not force action");
+        assert!(
+            !usage.actionable,
+            "system-owned caches must not force action"
+        );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -619,5 +933,133 @@ mod tests {
             scheduled_timer("n/a  n/a  Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer").is_none()
         );
         assert!(scheduled_timer("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer").is_some());
+    }
+
+    fn at() -> SystemTime {
+        UNIX_EPOCH + Duration::from_secs(1_760_000_000)
+    }
+
+    fn base_snapshot() -> Snapshot {
+        Snapshot {
+            official: Section::ready(Vec::new(), at()),
+            aur: Section::ready(Vec::new(), at()),
+            disk: Section::ready(
+                vec![DiskUsage {
+                    path: PathBuf::from("/var/cache/pacman/pkg"),
+                    total: 107_374_182_400,
+                    available: 53_687_091_200,
+                    inode_total: 6_553_600,
+                    inode_available: 3_200_000,
+                    status: DiskStatus::Measured,
+                    floor: 1_048_576,
+                    below_floor: false,
+                }],
+                at(),
+            ),
+            lock: Section::ready(LockState::None, at()),
+            caches: Section::ready(
+                vec![CacheUsage {
+                    label: "downloads".to_string(),
+                    path: PathBuf::from("/var/cache/pacman/pkg"),
+                    bytes: Some(1_048_576),
+                    note: None,
+                    policy: Policy::KeepOne,
+                    actionable: false,
+                }],
+                at(),
+            ),
+            timer: Section::ready(
+                TimerState {
+                    available: true,
+                    next: Some("Tue 2026-11-11 00:00:00 UTC aur-prefetch.timer".to_string()),
+                    last_result: Some("success".to_string()),
+                    actionable: false,
+                },
+                at(),
+            ),
+            state: Section::ready(
+                StateInfo {
+                    last_fetch_unix: Some(1_759_999_400),
+                    last_fetch_pending: Some(2),
+                    last_install_unix: Some(1_759_913_600),
+                    fallback: None,
+                },
+                at(),
+            ),
+            trust: Section::ready(TrustState::Allowlist(2), at()),
+            actionable: 0,
+            ..Snapshot::default()
+        }
+    }
+
+    #[test]
+    fn clean_text_is_frozen() {
+        assert_eq!(
+            render_text(&base_snapshot()),
+            "\
+check: official updates: 0
+check: aur updates: 0
+check: disk /var/cache/pacman/pkg: 50.0 GiB free of 100.0 GiB, 3200000 inodes free of 6553600
+check: lock: none
+check: cache downloads: 1.0 MiB
+check: timer: Tue 2026-11-11 00:00:00 UTC aur-prefetch.timer
+check: timer: last service result: success
+check: state: last fetch 10m ago, last install 1d ago
+check: trust: 2 maintainer(s)
+check: clean
+"
+        );
+    }
+
+    #[test]
+    fn pending_text_is_frozen() {
+        let mut snapshot = base_snapshot();
+        snapshot.official = Section::ready(
+            vec![Update {
+                name: "bash".to_string(),
+                repo: Repo::Unknown,
+                installed: "5.2.037-1".to_string(),
+                available: "5.2.037-2".to_string(),
+                download_bytes: None,
+                cached: Cached::Unknown,
+                raw: "bash 5.2.037-1 -> 5.2.037-2".to_string(),
+            }],
+            at(),
+        );
+        snapshot.actionable = 1;
+
+        assert_eq!(
+            render_text(&snapshot),
+            "\
+check: official updates: 1
+  bash 5.2.037-1 -> 5.2.037-2
+check: aur updates: 0
+check: disk /var/cache/pacman/pkg: 50.0 GiB free of 100.0 GiB, 3200000 inodes free of 6553600
+check: lock: none
+check: cache downloads: 1.0 MiB
+check: timer: Tue 2026-11-11 00:00:00 UTC aur-prefetch.timer
+check: timer: last service result: success
+check: state: last fetch 10m ago, last install 1d ago
+check: trust: 2 maintainer(s)
+check: action needed (1 item(s))
+"
+        );
+    }
+
+    #[test]
+    fn a_fatal_error_keeps_the_lines_collected_before_it() {
+        let mut snapshot = base_snapshot();
+        snapshot.caches = Section::NotCollected;
+        snapshot.timer = Section::NotCollected;
+        snapshot.state = Section::NotCollected;
+        snapshot.trust = Section::NotCollected;
+        snapshot.fatal = Some(Error::failed("du failed"));
+
+        let text = render_text(&snapshot);
+
+        assert!(text.contains("check: official updates: 0"));
+        assert!(text.contains("check: lock: none"));
+        assert!(!text.contains("not collected"));
+        assert!(!text.contains("check: clean"));
     }
 }

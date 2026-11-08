@@ -3,10 +3,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
-use crate::runner::{CommandRunner, SystemRunner};
+use crate::runner::{CommandOutput, CommandRunner, SystemRunner};
 use crate::state::State;
+use crate::util::{human_bytes, path_str, resolve_cache_dir};
 
 const SNAPSHOT_FLOOR_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Everything the download needs, before any download starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchPlan {
+    pub pending: Vec<String>,
+    pub pending_bytes: u64,
+    pub cache_dir: PathBuf,
+    pub need: u64,
+    pub state: State,
+}
 
 pub fn run() -> Result<(), Error> {
     let config = Config::from_env()?;
@@ -18,51 +29,11 @@ pub fn run() -> Result<(), Error> {
 /// `pacman -Qui` sits between the lock and the space gate because the size
 /// estimate needs it. It only reads.
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    check_lock(config, runner)?;
-
-    let pacman = path_str(&config.pacman)?;
-    let quiet = runner.run(pacman, &["-Qui"])?;
-    let (pending_bytes, pending_names) = if quiet.code == 0 {
-        parse_pending(&quiet.stdout)
-    } else {
-        eprintln!(
-            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
-            quiet.code
-        );
-        (0, Vec::new())
-    };
-    let pending_count = pending_names.len() as u64;
-
-    let cache_dir = resolve_cache_dir(config, runner)?;
-    let floor = if config.snapper_config_dir.is_dir() {
-        config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
-    } else {
-        config.min_free_bytes
-    };
-    let need = floor.saturating_add(pending_bytes.saturating_mul(2));
-    check_space(runner, &cache_dir, need)?;
-    if cache_dir != PathBuf::from("/") {
-        check_space(runner, Path::new("/"), need)?;
-    }
-
-    let mut state = State::load(&config.state_file)?;
-
-    println!(
-        "fetch: {pending_count} pending package(s), {} to download",
-        human_bytes(pending_bytes)
-    );
-
-    let mut argv: Vec<&str> = Vec::new();
-    if !is_root(runner)? {
-        argv.push("sudo");
-        argv.push("-n");
-    }
-    argv.push(pacman);
-    argv.push("-Syuw");
-    argv.push("--noconfirm");
-    println!("fetch: running {}", argv.join(" "));
-
-    let output = runner.run(argv[0], &argv[1..])?;
+    let plan = plan(config, runner)?;
+    print!("{}", render_plan(&plan));
+    let argv = command_argv(config, runner)?;
+    print!("{}", render_running(&argv));
+    let output = execute(&argv, runner)?;
     if !output.stdout.is_empty() {
         print!("{}", output.stdout);
     }
@@ -77,11 +48,83 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         )));
     }
 
+    let pending_count = plan.pending.len() as u64;
+    let mut state = plan.state;
     state.last_fetch_unix = Some(now_unix()?);
     state.last_fetch_pending = Some(pending_count);
     state.save(&config.state_file)?;
     println!("fetch: ok");
     Ok(())
+}
+
+/// Read the gates and the pending set. This runs no transaction.
+pub fn plan(config: &Config, runner: &dyn CommandRunner) -> Result<FetchPlan, Error> {
+    check_lock(config, runner)?;
+
+    let pacman = path_str(&config.pacman)?;
+    let quiet = runner.run(pacman, &["-Qui"])?;
+    let (pending_bytes, pending) = if quiet.code == 0 {
+        parse_pending(&quiet.stdout)
+    } else {
+        eprintln!(
+            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
+            quiet.code
+        );
+        (0, Vec::new())
+    };
+
+    let cache_dir = resolve_cache_dir(config, runner)?;
+    let floor = if config.snapper_config_dir.is_dir() {
+        config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
+    } else {
+        config.min_free_bytes
+    };
+    let need = floor.saturating_add(pending_bytes.saturating_mul(2));
+    check_space(runner, &cache_dir, need)?;
+    if cache_dir != PathBuf::from("/") {
+        check_space(runner, Path::new("/"), need)?;
+    }
+
+    Ok(FetchPlan {
+        pending,
+        pending_bytes,
+        cache_dir,
+        need,
+        state: State::load(&config.state_file)?,
+    })
+}
+
+/// The one line printed before the command is chosen.
+pub fn render_plan(plan: &FetchPlan) -> String {
+    format!(
+        "fetch: {} pending package(s), {} to download\n",
+        plan.pending.len(),
+        human_bytes(plan.pending_bytes)
+    )
+}
+
+/// Build the exact argv. `id -u` runs here, after the plan is rendered, so a
+/// failure leaves the same output as the old in-place command.
+pub fn command_argv(config: &Config, runner: &dyn CommandRunner) -> Result<Vec<String>, Error> {
+    let mut argv: Vec<String> = Vec::new();
+    if !is_root(runner)? {
+        argv.push("sudo".to_string());
+        argv.push("-n".to_string());
+    }
+    argv.push(path_str(&config.pacman)?.to_string());
+    argv.push("-Syuw".to_string());
+    argv.push("--noconfirm".to_string());
+    Ok(argv)
+}
+
+pub fn render_running(argv: &[String]) -> String {
+    format!("fetch: running {}\n", argv.join(" "))
+}
+
+/// Run the captured download. The renderer prints the returned streams.
+pub fn execute(argv: &[String], runner: &dyn CommandRunner) -> Result<CommandOutput, Error> {
+    let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+    runner.run(args[0], &args[1..])
 }
 
 fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
@@ -104,20 +147,6 @@ fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> 
         "stale lock {}: no pacman process is running; verify and remove it yourself",
         config.pacman_lock.display()
     )))
-}
-
-fn resolve_cache_dir(config: &Config, runner: &dyn CommandRunner) -> Result<PathBuf, Error> {
-    let conf = path_str(&config.pacman_conf)?;
-    match runner.run("pacman-conf", &["--config", conf, "CacheDir"]) {
-        Ok(output) if output.code == 0 => Ok(output
-            .stdout
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config.pacman_cache_dir.clone())),
-        _ => Ok(config.pacman_cache_dir.clone()),
-    }
 }
 
 fn check_space(runner: &dyn CommandRunner, path: &Path, need: u64) -> Result<(), Error> {
@@ -191,33 +220,11 @@ fn parse_size(value: &str) -> Option<u64> {
     Some((number * factor) as u64)
 }
 
-fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
 fn now_unix() -> Result<u64, Error> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .map_err(|err| Error::failed(format!("system clock is before the epoch: {err}")))
-}
-
-fn path_str(path: &Path) -> Result<&str, Error> {
-    path.to_str()
-        .ok_or_else(|| Error::failed(format!("path is not valid UTF-8: {}", path.display())))
 }
 
 #[cfg(test)]

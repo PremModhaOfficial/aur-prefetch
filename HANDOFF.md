@@ -11,27 +11,28 @@ covers where things stand and the first move. Do not re-plan.
   are implemented and have sim scenarios.
 - Phase 1-3 in `NEXT.md` are ticked. Phase 4 (chaos), Phase 5 (VM) and Phase 6
   (packaging) are open and still block a release.
+- Phase 7 T0 (the shared report layer) is landed: `src/report.rs`, collect and
+  render splits for `check`/`fetch`/`clean`, the system cache paths in
+  `Config`, and frozen `check` text. The full CI and all 30 sim scenarios pass.
 - The TUI is **specified, not implemented**: `TUI.md` (shell, keys, actions)
   and `PROGRESS.md` (prefetch/install progress screen). `prototype/` holds the
   design sketches those documents reference.
-- `NEXT.md` Phase 7 is the TUI order of work. It starts at T0.
+- `NEXT.md` Phase 7 is the TUI order of work. It starts at T1.
 
-## Do this first: T0 report layer
+## Do this first: T1 tree shell
 
-Read `NEXT.md` Phase 7 T0 and `TUI.md` T0. Then:
+Read `NEXT.md` Phase 7 T1 and `TUI.md` T1. Then:
 
-1. Add the aurto repo and build-chroot paths to `Config`, with
-   `AUR_PREFETCH_*` overrides and default-value tests.
-2. Create `src/report.rs`: `Snapshot`, `Section<T>`, and the per-domain structs
-   for `check` first.
-3. Split `check` into `collect` and `render_text`, with an injected `now` so
-   tests are deterministic. Move no behaviour: the CLI output must stay
-   byte-identical.
-4. Add a golden text test for `check` (clean and pending fixtures).
-5. Repeat for `fetch` and `clean` in separate commits, then tick T0.
+1. Add `ratatui` and `crossterm`, `src/tui/`, and a terminal guard with `Drop`
+   restore plus a panic hook.
+2. Build the event loop: input, resize, and a tick only while a captured task
+   runs. Add `--render-once`, `--ascii` and `NO_COLOR` before the first frame.
+3. Render the tree at 80x24 and 120x40 from `check::collect` and `fetch::plan`.
+   No dashboard and no panel shell.
+4. Add golden frames and terminal-restore tests. `--render-once` writes nothing.
 
-Do not add `ratatui` until T0 is green. Do not give the TUI its own collectors;
-that is how the two paths drift.
+Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
+collectors; that is how the two paths drift.
 
 ## Gates
 

@@ -274,14 +274,18 @@ does not make them optional; they still block a release.
 
 ### T0. Report layer (prerequisite, no UI)
 
-- [ ] `src/report.rs`: `Snapshot`, `Section<T>`, per-domain structs.
-- [ ] `check`, `fetch`, `clean`: split collection from text rendering.
-- [ ] Reuse `CommandRunner`; add only the fetch stream channel in T3.
-- [ ] Move the aurto repo and build-chroot paths into `Config`.
-- [ ] Golden text tests for `check`; its output is frozen during the move.
+- [x] `src/report.rs`: `Snapshot`, `Section<T>`, per-domain structs.
+- [x] `check`, `fetch`, `clean`: split collection from text rendering.
+- [x] Reuse `CommandRunner`; add only the fetch stream channel in T3.
+- [x] Move the aurto repo and build-chroot paths into `Config`.
+- [x] Golden text tests for `check`; its output is frozen during the move.
 
 Done when `./ci.sh` and `./sim/run.sh` are green with no scenario edits and the
 CLI output is byte-identical.
+
+T0 landed. `Snapshot::fatal` carries a hard collection error: the text renderer
+keeps the sections collected before it, and the command returns the original
+error. Section failures such as an unavailable `yay` render as their own line.
 
 ### T1. Tree shell
 
