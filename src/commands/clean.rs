@@ -22,12 +22,44 @@ pub fn run(apply: bool) -> Result<(), Error> {
             ));
         }
     }
-    if std::env::var("AUR_PREFETCH_YAY_CACHE_DIR").is_err() {
-        if let Ok(user) = std::env::var("SUDO_USER") {
-            config.yay_cache_dir = PathBuf::from("/home").join(user).join(".cache/yay");
+    if std::env::var("AUR_PREFETCH_YAY_CACHE_DIR").map_or(true, |value| value.is_empty()) {
+        if let Some(cache) =
+            sudo_user_cache(&SystemRunner, std::env::var("SUDO_USER").ok().as_deref())?
+        {
+            config.yay_cache_dir = cache;
         }
     }
     run_with(&config, &SystemRunner, apply)
+}
+
+/// Under sudo, HOME is root's, so resolve the invoking user's cache explicitly.
+fn sudo_user_cache(
+    runner: &dyn CommandRunner,
+    user: Option<&str>,
+) -> Result<Option<PathBuf>, Error> {
+    let Some(user) = user.filter(|user| !user.is_empty() && *user != "root") else {
+        return Ok(None);
+    };
+
+    let output = runner.run("getent", &["passwd", user])?;
+    if output.code != 0 {
+        return Err(Error::failed(format!(
+            "SUDO_USER {user} has no passwd entry; cannot locate the yay cache"
+        )));
+    }
+    let home = output
+        .stdout
+        .trim()
+        .split(':')
+        .nth(5)
+        .filter(|home| !home.is_empty())
+        .ok_or_else(|| {
+            Error::failed(format!(
+                "cannot resolve {user}'s home directory; cannot locate the yay cache"
+            ))
+        })?;
+
+    Ok(Some(PathBuf::from(home).join(".cache").join("yay")))
 }
 
 pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result<(), Error> {
@@ -39,8 +71,9 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Res
     );
 
     let mode = if apply { "-r" } else { "-d" };
-    println!("clean: command: paccache {mode} -k1");
-    let paccache = runner.run("paccache", &[mode, "-k1"])?;
+    let cache_arg = path_str(&cache)?;
+    println!("clean: command: paccache {mode} -c {cache_arg} -k1");
+    let paccache = runner.run("paccache", &[mode, "-c", cache_arg, "-k1"])?;
     if !paccache.stdout.is_empty() {
         print!("{}", paccache.stdout);
     }
@@ -77,7 +110,13 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
     };
 
     let mut builds: Vec<(String, PathBuf)> = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            Error::failed(format!(
+                "cannot read {}: {err}",
+                config.yay_cache_dir.display()
+            ))
+        })?;
         let path = entry.path();
         if !path.is_dir() || !older_than(&path, THIRTY_DAYS) {
             continue;
@@ -184,7 +223,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime};
 
-    use super::run_with;
+    use super::{run_with, sudo_user_cache};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -270,9 +309,10 @@ mod tests {
         run_with(&config, &runner, false).expect("clean");
 
         assert!(pkg.exists(), "a dry run must not delete");
+        let cache = dir.join("cache").to_string_lossy().into_owned();
         assert_eq!(
             runner.calls()[1],
-            call("paccache", &["-d", "-k1"]),
+            call("paccache", &["-d", "-c", cache.as_str(), "-k1"]),
             "paccache must run in dry-run mode"
         );
 
@@ -300,9 +340,10 @@ mod tests {
             "an installed old build must be removed"
         );
         assert!(ghost.exists(), "a non-installed build must be kept");
+        let cache = dir.join("cache").to_string_lossy().into_owned();
         assert_eq!(
             runner.calls()[1],
-            call("paccache", &["-r", "-k1"]),
+            call("paccache", &["-r", "-c", cache.as_str(), "-k1"]),
             "paccache must run in remove mode"
         );
 
@@ -329,5 +370,41 @@ mod tests {
         fs::set_permissions(&config.yay_cache_dir, fs::Permissions::from_mode(0o755))
             .expect("restore mode");
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn sudo_user_cache_resolves_the_invoking_users_home() {
+        let runner = FakeRunner::new();
+        runner.push_output(ok("alice:x:1000:1000::/home/alice:/bin/bash\n"));
+
+        let cache = sudo_user_cache(&runner, Some("alice")).expect("cache");
+
+        assert_eq!(cache, Some(PathBuf::from("/home/alice/.cache/yay")));
+        assert_eq!(
+            runner.calls()[0],
+            call("getent", &["passwd", "alice"]),
+            "the home must come from the passwd database"
+        );
+    }
+
+    #[test]
+    fn sudo_user_cache_skips_root_and_unset() {
+        let runner = FakeRunner::new();
+
+        assert_eq!(sudo_user_cache(&runner, None).expect("none"), None);
+        assert_eq!(sudo_user_cache(&runner, Some("root")).expect("root"), None);
+        assert!(runner.calls().is_empty(), "no lookup without a target user");
+    }
+
+    #[test]
+    fn an_unknown_sudo_user_fails_loudly() {
+        let runner = FakeRunner::new();
+        let mut missing = ok("");
+        missing.code = 2;
+        runner.push_output(missing);
+
+        let result = sudo_user_cache(&runner, Some("ghost"));
+
+        assert!(matches!(result, Err(Error::Failed(_))));
     }
 }
