@@ -1,4 +1,6 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::Error;
@@ -14,7 +16,7 @@ pub fn run() -> Result<(), Error> {
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
     let mut problems = 0u32;
 
-    let timers = runner.run("systemctl", &["--user", "list-timers", "--all"])?;
+    let timers = runner.run("systemctl", &["--user", "list-timers"])?;
     let timer_scheduled = timers.code == 0
         && timers
             .stdout
@@ -27,13 +29,17 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         problems += 1;
     }
 
-    problems += report_sudoers(config)?;
+    problems += report_sudoers(config, runner)?;
     problems += report_trust(config)?;
     problems += report_repo(config)?;
-    problems += report_cache_dir(config, runner)?;
+    let cache_dir = resolve_cache_dir(config, runner)?;
+    problems += report_cache_dir(&cache_dir)?;
     problems += report_journald(config)?;
-    problems += report_snapper(config, runner, &timers.stdout)?;
-    problems += report_disk(runner, config.min_free_bytes)?;
+    problems += report_snapper(config, runner)?;
+    problems += report_disk(runner, &cache_dir, config.min_free_bytes)?;
+    if cache_dir != PathBuf::from("/") {
+        problems += report_disk(runner, Path::new("/"), config.min_free_bytes)?;
+    }
 
     if problems == 0 {
         println!("doctor: ok");
@@ -44,7 +50,7 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     }
 }
 
-fn report_sudoers(config: &Config) -> Result<u32, Error> {
+fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
     match fs::read_to_string(&config.sudoers_file) {
         Ok(text) if sudoers_rule_ok(&text) => {
             println!("doctor: sudoers: exact rule present");
@@ -64,11 +70,32 @@ fn report_sudoers(config: &Config) -> Result<u32, Error> {
             );
             Ok(1)
         }
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            // A correct file is 0440 root:root, so a normal user cannot read it.
+            // `sudo -l` names the rule without reading the file.
+            match runner.run("sudo", &["-n", "-l"]) {
+                Ok(output) if output.code == 0 && sudo_list_ok(&output.stdout) => {
+                    println!("doctor: sudoers: exact rule present (verified via sudo -l)");
+                    Ok(0)
+                }
+                _ => {
+                    println!(
+                        "doctor: sudoers: {} is unreadable and sudo -l could not verify it",
+                        config.sudoers_file.display()
+                    );
+                    Ok(1)
+                }
+            }
+        }
         Err(err) => Err(Error::failed(format!(
             "cannot read {}: {err}",
             config.sudoers_file.display()
         ))),
     }
+}
+
+fn sudo_list_ok(text: &str) -> bool {
+    text.contains("NOPASSWD: /usr/bin/pacman -Syuw --noconfirm") && !text.contains("NOPASSWD: ALL")
 }
 
 fn sudoers_rule_ok(text: &str) -> bool {
@@ -138,14 +165,33 @@ fn report_repo(config: &Config) -> Result<u32, Error> {
     }
 }
 
-fn report_cache_dir(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
-    let cache = resolve_cache_dir(config, runner)?;
-    if cache.is_dir() {
-        println!("doctor: cache: {} exists", cache.display());
-        Ok(0)
-    } else {
-        println!("doctor: cache: {} is missing", cache.display());
-        Ok(1)
+fn report_cache_dir(cache: &Path) -> Result<u32, Error> {
+    match fs::metadata(cache) {
+        Ok(meta) if meta.is_dir() => {
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o222 == 0 {
+                println!(
+                    "doctor: cache: {} has mode {mode:o} and no write bit",
+                    cache.display()
+                );
+                Ok(1)
+            } else {
+                println!("doctor: cache: {} exists (mode {mode:o})", cache.display());
+                Ok(0)
+            }
+        }
+        Ok(_) => {
+            println!("doctor: cache: {} is not a directory", cache.display());
+            Ok(1)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("doctor: cache: {} is missing", cache.display());
+            Ok(1)
+        }
+        Err(err) => Err(Error::failed(format!(
+            "cannot inspect {}: {err}",
+            cache.display()
+        ))),
     }
 }
 
@@ -209,21 +255,18 @@ fn journald_settings(text: &str) -> (bool, bool) {
     (persistent, capped)
 }
 
-fn report_snapper(
-    config: &Config,
-    runner: &dyn CommandRunner,
-    timer_text: &str,
-) -> Result<u32, Error> {
+fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
     let installed = matches!(runner.run("snapper", &["--version"]), Ok(output) if output.code == 0);
     if !installed {
         println!("doctor: snapper: not installed");
         return Ok(0);
     }
 
+    let system_timers = runner.run("systemctl", &["list-timers", "--all"])?;
     let mut problems = 0;
     let timers_ok = ["snapper-timeline.timer", "snapper-cleanup.timer"]
         .iter()
-        .all(|name| timer_text.contains(name));
+        .all(|name| system_timers.stdout.contains(name));
     if timers_ok {
         println!("doctor: snapper: timers scheduled");
     } else {
@@ -256,11 +299,12 @@ fn report_snapper(
     Ok(problems)
 }
 
-fn report_disk(runner: &dyn CommandRunner, floor: u64) -> Result<u32, Error> {
-    let output = runner.run("df", &["-B1", "--output=avail", "/"])?;
+fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<u32, Error> {
+    let label = crate::util::path_str(path)?;
+    let output = runner.run("df", &["-B1", "--output=avail", label])?;
     if output.code != 0 {
         return Err(Error::failed(format!(
-            "df failed for /: {}",
+            "df failed for {label}: {}",
             output.stderr.trim()
         )));
     }
@@ -270,17 +314,17 @@ fn report_disk(runner: &dyn CommandRunner, floor: u64) -> Result<u32, Error> {
         .lines()
         .rev()
         .find_map(|line| line.trim().parse::<u64>().ok())
-        .ok_or_else(|| Error::failed("cannot parse df output for /".to_string()))?;
+        .ok_or_else(|| Error::failed(format!("cannot parse df output for {label}")))?;
 
     if available < floor {
         println!(
-            "doctor: disk: {} free, below the {} floor",
+            "doctor: disk {label}: {} free, below the {} floor",
             human_bytes(available),
             human_bytes(floor)
         );
         Ok(1)
     } else {
-        println!("doctor: disk: {} free", human_bytes(available));
+        println!("doctor: disk {label}: {} free", human_bytes(available));
         Ok(0)
     }
 }
@@ -289,6 +333,7 @@ fn report_disk(runner: &dyn CommandRunner, floor: u64) -> Result<u32, Error> {
 mod tests {
     use std::collections::HashMap;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -350,6 +395,7 @@ mod tests {
         not_installed.code = 1;
         runner.push_output(not_installed);
         runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
 
         let result = run_with(&config, &runner);
 
@@ -384,6 +430,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(ok(available));
         runner.push_output(ok(available));
     }
 
@@ -427,6 +474,8 @@ mod tests {
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
         runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(""));
+        runner.push_output(ok("10737418240\n"));
         runner.push_output(ok("10737418240\n"));
 
         let result = run_with(&config, &runner);
@@ -442,6 +491,49 @@ mod tests {
         let config = test_config(&dir);
         complete_setup(&config, &dir);
         fs::write(&config.sudoers_file, "alice ALL=(ALL) NOPASSWD: ALL\n").expect("sudoers");
+
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "10737418240\n");
+
+        let result = run_with(&config, &runner);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unreadable_sudoers_is_verified_with_sudo_l() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        fs::set_permissions(&config.sudoers_file, fs::Permissions::from_mode(0o000))
+            .expect("chmod sudoers");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok(
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+        ));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        run_with(&config, &runner).expect("doctor");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_cache_without_a_write_bit_blocks() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        let cache = dir.join("cache");
+        fs::set_permissions(&cache, fs::Permissions::from_mode(0o555)).expect("chmod cache");
 
         let runner = FakeRunner::new();
         queue_happy(&runner, &dir, "10737418240\n");
