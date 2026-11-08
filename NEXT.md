@@ -243,15 +243,15 @@ A container cannot test snapshots or boot.
 
 ## Doc corrections to make before Phase 3
 
-- [ ] `context.md` says `pacman-conf CacheDir` is empty on a default install.
+- [x] `context.md` says `pacman-conf CacheDir` is empty on a default install.
       On pacman 7.1 it prints `/var/cache/pacman/pkg/` even when the line is
       commented. Keep the fallback, drop the premise.
-- [ ] `context.md` trust gate is inverted. Missing file means trust everyone.
+- [x] `context.md` trust gate is inverted. Missing file means trust everyone.
       See D1.
-- [ ] `spec.md` names the timer target `~/.local/bin/aur-prefetch.sh`, while the
+- [x] `spec.md` names the timer target `~/.local/bin/aur-prefetch.sh`, while the
       repo builds `aur-prefetch`. Decide: install the binary and call it
       directly, or keep a thin wrapper. Recommendation: call the binary.
-- [ ] `spec.md` embeds a shell free-space gate. That logic now lives in the
+- [x] `spec.md` embeds a shell free-space gate. That logic now lives in the
       binary. Keep the shell block only as a teaching example, and say so.
 
 ---
