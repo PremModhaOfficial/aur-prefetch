@@ -19,13 +19,12 @@ fn help_lists_every_subcommand() {
 // command from `cargo test` would touch the development host.
 #[test]
 fn every_stub_subcommand_reports_that_it_is_not_implemented() {
-    for name in ["doctor"] {
-        let output = binary().arg(name).output().expect("run subcommand");
+    let name = "doctor";
+    let output = binary().arg(name).output().expect("run subcommand");
 
-        assert!(output.status.success(), "{name} did not exit 0");
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout).trim(),
-            format!("{name}: not implemented yet")
-        );
-    }
+    assert!(output.status.success(), "{name} did not exit 0");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        format!("{name}: not implemented yet")
+    );
 }
