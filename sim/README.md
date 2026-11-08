@@ -69,6 +69,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `19-installer-sudo-scope.sh` | `installer` may run only `/usr/local/bin/sim-upgrade` through sudo; direct pacman argv and helper arguments are refused |
 | `20-init-as-builder.sh` | `init --apply` as `builder` escalates only `visudo`, `install`, and `mv` with the recorded argv, writes a `builder` rule, and refuses to run under `sudo`; the fixture grants no wildcard sudo |
 | `26-install-root-refuses.sh` | `install` exits 1 with no command run and `/usr` unchanged for plain root and for the sudo shape (real UID user, effective UID root) |
+| `29-init-visudo-root.sh` | root `visudo -cf` accepts the user-owned temp rule that `init` validates through sudo |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

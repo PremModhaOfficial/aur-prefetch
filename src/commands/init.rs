@@ -26,18 +26,7 @@ pub fn run(apply: bool) -> Result<(), Error> {
 
     let exe = std::env::current_exe()
         .map_err(|err| Error::failed(format!("cannot find the running executable: {err}")))?;
-    let user = match std::env::var("USER") {
-        Ok(user) if !user.is_empty() => user,
-        _ => {
-            let output = SystemRunner.run("id", &["-un"])?;
-            if output.code != 0 {
-                return Err(Error::failed(
-                    "cannot determine the current account: USER is unset and `id -un` failed",
-                ));
-            }
-            output.stdout.trim().to_string()
-        }
-    };
+    let user = current_user(&SystemRunner)?;
 
     run_with(
         &config,
@@ -48,6 +37,24 @@ pub fn run(apply: bool) -> Result<(), Error> {
             user: &user,
         },
     )
+}
+
+/// The invoking account, from the kernel, not from `USER`; an inherited or
+/// spoofed `USER` must not select the account that gets passwordless pacman.
+fn current_user(runner: &dyn CommandRunner) -> Result<String, Error> {
+    let output = runner.run("id", &["-un"])?;
+    if output.code != 0 {
+        return Err(Error::failed(
+            "cannot determine the current account: `id -un` failed",
+        ));
+    }
+    let user = output.stdout.trim();
+    if user.is_empty() {
+        return Err(Error::failed(
+            "cannot determine the current account: `id -un` printed nothing",
+        ));
+    }
+    Ok(user.to_string())
 }
 
 fn now_nanos() -> u128 {
@@ -197,8 +204,20 @@ fn install_sudoers(
             config.sudoers_file.display()
         ))
     })?;
-    fs::create_dir_all(parent)
-        .map_err(|err| Error::failed(format!("cannot create {}: {err}", parent.display())))?;
+    match fs::create_dir_all(parent) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            // A missing /etc/sudoers.d is created by the same sudo prompt that
+            // installs the rule; do not turn it into an execution error.
+            return install_sudoers_with_sudo(runner, sudoers, &config.sudoers_file, parent);
+        }
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot create {}: {err}",
+                parent.display()
+            )));
+        }
+    }
 
     let staged = parent.join(format!(
         ".aur-prefetch-sudoers-{}-{}",
@@ -287,6 +306,18 @@ fn install_sudoers_with_sudo_in(
     parent: &Path,
     temp_dir: &Path,
 ) -> Result<(), Error> {
+    if !parent.is_dir() {
+        let code =
+            runner.run_interactive("sudo", &["install", "-d", "-m", "0755", path_str(parent)?])?;
+        if code != 0 {
+            return Err(Error::failed(format!(
+                "sudo could not create {}; run `sudo mkdir -p {}` manually",
+                parent.display(),
+                parent.display()
+            )));
+        }
+    }
+
     let temp = TempFile::new(temp_dir.join(format!(
         "aur-prefetch-sudoers-{}-{}",
         std::process::id(),
@@ -344,7 +375,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Setup, install_sudoers_with_sudo_in, render_service, run_with, write_atomic};
+    use super::{
+        Setup, current_user, install_sudoers, install_sudoers_with_sudo_in, render_service,
+        run_with, write_atomic,
+    };
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, CommandRunner, FakeRunner};
@@ -533,6 +567,58 @@ mod tests {
         assert!(matches!(result, Err(Error::Failed(_))));
         assert!(runner.calls().is_empty(), "nothing may run");
 
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn the_current_user_comes_from_id_not_the_environment() {
+        let runner = FakeRunner::new();
+        runner.push_output(ok("builder\n"));
+
+        assert_eq!(current_user(&runner).expect("current user"), "builder");
+        assert_eq!(
+            runner.calls()[0],
+            ("id".to_string(), vec!["-un".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_failed_id_is_an_execution_error() {
+        let runner = FakeRunner::new();
+        let mut failed = ok("");
+        failed.code = 1;
+        runner.push_output(failed);
+
+        assert!(matches!(current_user(&runner), Err(Error::Failed(_))));
+    }
+
+    #[test]
+    fn a_missing_sudoers_dir_is_created_through_sudo() {
+        let dir = temp_dir();
+        let readonly = dir.join("readonly");
+        fs::create_dir_all(&readonly).expect("readonly parent");
+        fs::set_permissions(&readonly, fs::Permissions::from_mode(0o555)).expect("chmod");
+        let mut config = test_config(&dir);
+        config.sudoers_file = readonly.join("sudoers.d/aur-prefetch");
+        let runner = FakeRunner::new();
+
+        install_sudoers(
+            &config,
+            &runner,
+            "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+        )
+        .expect("sudo fallback");
+
+        let calls = runner.calls();
+        assert_eq!(calls[0].0, "sudo");
+        assert_eq!(&calls[0].1[..3], ["install", "-d", "-m"]);
+        assert!(
+            calls[0].1[4].ends_with("sudoers.d"),
+            "the missing parent is created: {:?}",
+            calls[0]
+        );
+
+        fs::set_permissions(&readonly, fs::Permissions::from_mode(0o755)).expect("restore");
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 
