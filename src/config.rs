@@ -232,10 +232,7 @@ mod tests {
         assert_eq!(config.trusted_users, PathBuf::from("/tmp/trusted-users"));
         assert_eq!(config.snapper_config_dir, PathBuf::from("/tmp/snapper"));
         assert_eq!(config.sudoers_file, PathBuf::from("/tmp/sudoers"));
-        assert_eq!(
-            config.user_unit_dir,
-            Some(PathBuf::from("/tmp/user-units"))
-        );
+        assert_eq!(config.user_unit_dir, Some(PathBuf::from("/tmp/user-units")));
         assert_eq!(config.state_file, PathBuf::from("/tmp/state.json"));
         assert_eq!(config.min_free_bytes, 1_048_576);
     }

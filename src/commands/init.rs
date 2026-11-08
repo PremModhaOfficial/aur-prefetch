@@ -15,9 +15,29 @@ pub struct Setup<'a> {
 
 pub fn run(apply: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
+    if apply {
+        let euid = SystemRunner.run("id", &["-u"])?;
+        if euid.stdout.trim() != "0" {
+            return Err(Error::blocked(
+                "init --apply needs root to write /etc/sudoers.d; run `sudo aur-prefetch init --apply`",
+            ));
+        }
+    }
+
     let exe = std::env::current_exe()
         .map_err(|err| Error::failed(format!("cannot find the running executable: {err}")))?;
-    let user = std::env::var("USER").unwrap_or_else(|_| "user".to_string());
+    let user = match std::env::var("USER") {
+        Ok(user) if !user.is_empty() => user,
+        _ => {
+            let output = SystemRunner.run("id", &["-un"])?;
+            if output.code != 0 {
+                return Err(Error::failed(
+                    "cannot determine the current account: USER is unset and `id -un` failed",
+                ));
+            }
+            output.stdout.trim().to_string()
+        }
+    };
 
     run_with(
         &config,
@@ -30,11 +50,27 @@ pub fn run(apply: bool) -> Result<(), Error> {
     )
 }
 
+fn valid_user(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_lowercase() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
 pub fn run_with(
     config: &Config,
     runner: &dyn CommandRunner,
     setup: Setup<'_>,
 ) -> Result<(), Error> {
+    if !valid_user(setup.user) {
+        return Err(Error::failed(format!(
+            "USER is not a valid account name: {}",
+            setup.user
+        )));
+    }
+
     let unit_dir = config
         .user_unit_dir
         .as_deref()
@@ -97,7 +133,13 @@ pub fn run_with(
         },
     )?;
 
-    runner.run("systemctl", &["--user", "daemon-reload"])?;
+    let reload = runner.run("systemctl", &["--user", "daemon-reload"])?;
+    if reload.code != 0 {
+        return Err(Error::failed(format!(
+            "systemctl --user daemon-reload failed: {}",
+            reload.stderr.trim()
+        )));
+    }
     let enable = runner.run(
         "systemctl",
         &["--user", "enable", "--now", "aur-prefetch.timer"],
@@ -277,6 +319,45 @@ mod tests {
             !config.sudoers_file.exists(),
             "no invalid rule may be written"
         );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_invalid_user_is_rejected() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        let bad = Setup {
+            apply: true,
+            exe: Path::new("/usr/local/bin/aur-prefetch"),
+            user: "bad\nname",
+        };
+
+        let result = run_with(&config, &runner, bad);
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        assert!(runner.calls().is_empty(), "nothing may run");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_reload_failure_is_exit_two() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+
+        runner.push_output(ok(""));
+        let mut reload = ok("");
+        reload.code = 1;
+        reload.stderr = "no user manager".to_string();
+        runner.push_output(reload);
+
+        let result = run_with(&config, &runner, setup(true));
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        assert_eq!(result.unwrap_err().exit_code(), 2);
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

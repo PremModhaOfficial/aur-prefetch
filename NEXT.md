@@ -78,7 +78,9 @@ are filled in. Change them here first, then implement.
       prefixed to avoid clobbering system variables:
       `AUR_PREFETCH_PACMAN`, `AUR_PREFETCH_PACMAN_CONF`,
       `AUR_PREFETCH_PACMAN_CACHE_DIR`, `AUR_PREFETCH_PACMAN_LOCK`,
-      `AUR_PREFETCH_TRUSTED_USERS`, `AUR_PREFETCH_STATE`,
+      `AUR_PREFETCH_PACMAN_LOG`, `AUR_PREFETCH_YAY_CACHE_DIR`,
+      `AUR_PREFETCH_TRUSTED_USERS`, `AUR_PREFETCH_SUDOERS`,
+      `AUR_PREFETCH_USER_UNIT_DIR`, `AUR_PREFETCH_STATE`,
       `AUR_PREFETCH_MIN_FREE_BYTES`.
 - [x] `src/state.rs`: read/write the state file atomically.
 - [x] `src/commands/{fetch,check,install,clean,doctor,init}.rs`.
@@ -200,7 +202,8 @@ and that an AUR build path exits loudly instead of silently passing.
 ### 3.6 `init`
 
 - [x] Detect the running executable path. Use it in the unit file.
-- [x] Print artifacts by default, `--apply` to write.
+- [x] Print artifacts by default, `--apply` to write. Applying needs root
+      (`sudo aur-prefetch init --apply`) because it writes `/etc/sudoers.d`.
 - [x] Write the user service and timer, enable with `systemctl --user`.
 - [x] Write `/etc/sudoers.d/aur-prefetch` through `visudo -c` validation.
 - [x] Never run `aurto init`. Check for it and print the manual command.
