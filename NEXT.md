@@ -177,7 +177,8 @@ file.
 ### 3.4 `clean`
 
 - [x] Dry-run output with sizes and the exact commands that would run.
-- [x] `--apply` required for deletion.
+- [x] `--apply` required for deletion, and it needs root for `paccache`
+      (`sudo aur-prefetch clean --apply`).
 - [x] Never touch aurto repo or chroots.
 - [x] Never delete a yay build for a package that is not installed.
 - [x] Sim scenario: dry-run changes nothing, apply removes only the expected

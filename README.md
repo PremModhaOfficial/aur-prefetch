@@ -36,7 +36,7 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch check` — pending updates, disk, lock, caches, timer status
 - `aur-prefetch fetch` — free-space gate, `pacman -Syuw` only
 - `aur-prefetch install` — news gate, lock check, then `yay -Syuu`
-- `aur-prefetch clean` — prune download cache, yay builds, logs, orphans
+- `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
 - `aur-prefetch doctor` — verify timers, limits, repo, journald
 
 ### `check`

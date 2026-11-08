@@ -14,6 +14,14 @@ const ARCHBUILD: &str = "/var/lib/archbuild";
 
 pub fn run(apply: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
+    if apply {
+        let euid = SystemRunner.run("id", &["-u"])?;
+        if euid.stdout.trim() != "0" {
+            return Err(Error::blocked(
+                "clean --apply needs root for the download cache; run `sudo aur-prefetch clean --apply`",
+            ));
+        }
+    }
     run_with(&config, &SystemRunner, apply)
 }
 
@@ -26,6 +34,7 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Res
     );
 
     let mode = if apply { "-r" } else { "-d" };
+    println!("clean: command: paccache {mode} -k1");
     let paccache = runner.run("paccache", &[mode, "-k1"])?;
     if !paccache.stdout.is_empty() {
         print!("{}", paccache.stdout);
@@ -48,9 +57,18 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Res
 }
 
 fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result<(), Error> {
-    let Ok(entries) = fs::read_dir(&config.yay_cache_dir) else {
-        println!("clean: yay builds: absent");
-        return Ok(());
+    let entries = match fs::read_dir(&config.yay_cache_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            println!("clean: yay builds: absent");
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(Error::failed(format!(
+                "cannot read {}: {err}",
+                config.yay_cache_dir.display()
+            )));
+        }
     };
 
     let mut builds: Vec<(String, PathBuf)> = Vec::new();
@@ -73,6 +91,16 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
 
     let pacman = path_str(&config.pacman)?;
     for (name, path) in builds {
+        let size = match runner.run("du", &["-sb", path_str(&path)?]) {
+            Ok(output) if output.code == 0 => output
+                .stdout
+                .split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .map_or_else(|| "unknown".to_string(), human_bytes),
+            _ => "unknown".to_string(),
+        };
+
         let query = runner.run(pacman, &["-Q", &name])?;
         if query.code != 0 {
             println!("clean: yay build {name}: keep (not installed)");
@@ -82,9 +110,10 @@ fn clean_yay(config: &Config, runner: &dyn CommandRunner, apply: bool) -> Result
         if apply {
             fs::remove_dir_all(&path)
                 .map_err(|err| Error::failed(format!("cannot remove {}: {err}", path.display())))?;
-            println!("clean: yay build {name}: removed");
+            println!("clean: yay build {name}: removed ({size})");
         } else {
-            println!("clean: yay build {name}: would remove");
+            println!("clean: yay build {name}: would remove ({size})");
+            println!("clean: command: rm -rf {}", path.display());
         }
     }
     Ok(())
@@ -141,12 +170,14 @@ fn older_than(path: &Path, age: Duration) -> bool {
 mod tests {
     use std::collections::HashMap;
     use std::fs::{self, FileTimes};
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime};
 
     use super::run_with;
     use crate::config::Config;
+    use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -198,6 +229,7 @@ mod tests {
         runner.push_output(ok(""));
 
         for (_, present) in installed {
+            runner.push_output(ok("1048576\n"));
             let mut query = ok("");
             if !present {
                 query.code = 1;
@@ -265,6 +297,28 @@ mod tests {
             "paccache must run in remove mode"
         );
 
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unreadable_yay_cache_fails_loudly() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::create_dir_all(&config.yay_cache_dir).expect("yay cache");
+        fs::set_permissions(&config.yay_cache_dir, fs::Permissions::from_mode(0o000))
+            .expect("chmod yay cache");
+
+        let runner = FakeRunner::new();
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        runner.push_output(ok(""));
+
+        let result = run_with(&config, &runner, false);
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        assert_eq!(result.unwrap_err().exit_code(), 2);
+
+        fs::set_permissions(&config.yay_cache_dir, fs::Permissions::from_mode(0o755))
+            .expect("restore mode");
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 }
