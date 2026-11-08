@@ -78,7 +78,9 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         }
     }
 
-    report_timer(runner)?;
+    if report_timer(runner)? {
+        actionable += 1;
+    }
     report_state(config)?;
     report_trust(config)?;
 
@@ -185,11 +187,11 @@ fn report_cache(runner: &dyn CommandRunner, label: &str, path: &Path) -> Result<
     }
 }
 
-fn report_timer(runner: &dyn CommandRunner) -> Result<(), Error> {
+fn report_timer(runner: &dyn CommandRunner) -> Result<bool, Error> {
     let output = runner.run("systemctl", &["--user", "list-timers", "--all"])?;
     if output.code != 0 {
         println!("check: timer: unavailable");
-        return Ok(());
+        return Ok(true);
     }
 
     match output
@@ -217,7 +219,7 @@ fn report_timer(runner: &dyn CommandRunner) -> Result<(), Error> {
     if result.code == 0 && !value.is_empty() {
         println!("check: timer: last service result: {value}");
     }
-    Ok(())
+    Ok(false)
 }
 
 fn report_state(config: &Config) -> Result<(), Error> {
@@ -299,7 +301,7 @@ fn ago(timestamp: Option<u64>) -> String {
     let seconds = now.saturating_sub(timestamp);
 
     if seconds < 3600 {
-        format!("{seconds}m ago")
+        format!("{}m ago", seconds / 60)
     } else if seconds < 86_400 {
         format!("{}h ago", seconds / 3600)
     } else {
