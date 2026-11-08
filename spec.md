@@ -82,9 +82,6 @@ sudo -n pacman -Syuw --noconfirm
 ```
 2097152 KB is 2 GB. That is the floor. Rule: keep free space at least 2 times the download size plus a 2 to 5 GB floor. Use 5 GB floor if you use snapshots. The binary applies the same rule to the CacheDir filesystem and to `/`.
 Note: this gate guards only `pacman -Syuw`. It does NOT guard aurto builds. aurto builds use same disk with no check. Builds can still fill disk even when gate passes. Check build folders in Step 4.
-```bash
-chmod +x ~/.local/bin/aur-prefetch.sh   # teaching example only
-```
 Add one sudoers line for that exact command only. The file is `/etc/sudoers.d/aur-prefetch`. Edit it with `sudo visudo -f /etc/sudoers.d/aur-prefetch`. Use NOPASSWD for `/usr/bin/pacman -Syuw --noconfirm`. No other commands. No wildcards.
 Create two files. This is two files, not one. Each block below is one file. Do not paste both into one file.
 
