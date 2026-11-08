@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dependency graph, but it moves with meaning (prototype)</title>
+<!--
+  THROWAWAY PROTOTYPE. Not production code.
+  Question: what is more awesome than nix-output-monitor's animated tree?
+  Five canvas sketches: flow, time-space, subway, nebula, hybrid.
+  No real commands. No persistence. Canvas is a design sketch for a
+  braille/ANSI terminal implementation.
+-->
+<style>
+  :root{
+    color-scheme:dark;--bg:#080a0d;--panel:#0e1319;--panel2:#121922;--line:#222b36;--line2:#2c3744;
+    --text:#e2e9f1;--muted:#8c9aab;--dim:#5c6a7a;--accent:#f0a35e;--accent-soft:rgba(240,163,94,.10);
+    --font:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 600px at 18% -8%,rgba(52,74,96,.35),transparent 62%),radial-gradient(900px 500px at 92% 0%,rgba(90,64,34,.18),transparent 60%),var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5}
+  .wrap{max-width:1320px;margin:0 auto;padding:34px 24px 140px}
+  .kicker{font-size:10px;letter-spacing:.18em;font-weight:700;color:var(--accent);text-transform:uppercase}
+  h1{font-size:clamp(26px,3.6vw,40px);line-height:1.08;letter-spacing:-.025em;margin:10px 0 12px;font-weight:650}
+  .lede{color:var(--muted);max-width:900px;font-size:clamp(14px,1.5vw,16px);line-height:1.6;margin:0 0 10px}
+  .warnbox{border:1px solid rgba(240,163,94,.35);background:var(--accent-soft);border-radius:9px;padding:12px 14px;margin:18px 0 22px;font-size:12.5px;line-height:1.6;max-width:980px}
+  .warnbox b{color:var(--accent)}
+  .stage{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start;margin-top:22px}
+  @media(max-width:1060px){.stage{grid-template-columns:1fr}.notes{position:static!important}}
+  .terminal{border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;min-width:0}
+  .chrome{display:flex;align-items:center;gap:7px;padding:10px 14px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--panel2),var(--panel))}
+  .dot{width:8px;height:8px;border-radius:50%;border:1px solid var(--line2)}
+  .dot:nth-child(1){background:rgba(255,123,114,.55)}.dot:nth-child(2){background:rgba(242,198,109,.55)}.dot:nth-child(3){background:rgba(125,220,154,.55)}
+  .chrome .title{margin-left:8px;font-size:11.5px;color:var(--muted)}.chrome .title b{color:var(--text);font-weight:600}
+  .dims{margin-left:auto;font-size:10px;color:var(--dim)}
+  canvas{display:block;width:100%;height:auto;background:#080b10}
+  .notes{border:1px solid var(--line);background:linear-gradient(180deg,var(--panel2),var(--panel));border-radius:12px;padding:18px;position:sticky;top:20px}
+  .notes h2{font-size:18px;margin:6px 0 0}.notes p{color:var(--muted);font-size:12.5px;line-height:1.6;margin:10px 0 0}
+  .notes h3{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin:16px 0 6px;font-weight:700}
+  .notes ul{margin:6px 0 0;padding-left:15px;color:var(--muted);font-size:12px;line-height:1.55}.notes li{margin:4px 0}.notes li::marker{color:var(--accent)}
+  .badge{display:inline-block;font-size:8.5px;letter-spacing:.12em;font-weight:700;padding:3px 6px;border-radius:4px;border:1px solid rgba(240,163,94,.45);color:var(--accent);background:var(--accent-soft)}
+  .fit{border-top:1px solid var(--line);margin-top:16px;padding-top:12px;font-size:11px;color:var(--dim)}.fit b{font-size:22px;color:var(--accent)}
+  .controls{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+  .controls button{appearance:none;border:1px solid var(--line2);background:var(--panel);color:var(--muted);border-radius:999px;padding:5px 9px;font:600 10px/1 var(--font);cursor:pointer}
+  .controls button:hover{color:var(--text);border-color:var(--muted)}
+  .controls button.on{color:var(--accent);border-color:rgba(240,163,94,.55);background:var(--accent-soft)}
+  .controls input[type=range]{flex:1;min-width:130px;accent-color:var(--accent)}
+  .controls .t{font-size:10px;color:var(--dim);min-width:46px;text-align:right}
+  .switcher{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:5px;padding:7px 9px;background:rgba(14,19,25,.95);border:1px solid var(--line2);border-radius:999px;box-shadow:0 16px 50px rgba(0,0,0,.55);backdrop-filter:blur(14px);z-index:60;max-width:calc(100vw - 20px);overflow-x:auto}
+  .switcher button{appearance:none;border:1px solid transparent;background:transparent;color:var(--muted);border-radius:999px;padding:7px 9px;font:600 10.5px/1 var(--font);cursor:pointer;white-space:nowrap}
+  .switcher button:hover{color:var(--text);background:var(--panel2)}.switcher button.on{color:var(--accent);background:var(--accent-soft);border-color:rgba(240,163,94,.4)}
+  .switcher .tag{font-size:8.5px;font-weight:800;letter-spacing:.16em;color:var(--accent);border:1px solid rgba(240,163,94,.45);border-radius:4px;padding:4px 6px;margin-left:2px}
+  h2.section{font-size:24px;margin:34px 0 8px;letter-spacing:-.02em}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.35);margin-top:14px}
+  table{border-collapse:collapse;width:100%;min-width:800px}th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:11.5px}
+  th{background:var(--panel2);color:var(--muted);font-size:9px;letter-spacing:.08em;text-transform:uppercase}td{color:var(--muted)}td:first-child{color:var(--text);font-weight:600}
+  tr.win td{color:var(--accent)}
+  .callout{border:1px solid rgba(240,163,94,.3);background:var(--accent-soft);border-radius:10px;padding:16px 18px;margin:22px 0;font-size:13px;line-height:1.65}
+  .callout b{color:var(--accent)}.callout ul{margin:8px 0 0;padding-left:18px;color:var(--muted)}.callout li{margin:4px 0}
+  .foot{color:var(--dim);font-size:10.5px;line-height:1.6;margin-top:14px;max-width:980px}
+  code{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kicker">Dependency animation lab · throwaway prototype · no real commands</div>
+  <h1>The graph should move like work, not like a screensaver</h1>
+  <p class="lede">nom animates a tree by redrawing state. The next step is animation that encodes <b>causality and time</b>: only edges carrying work flow, the critical path glows, the future is a ghost, and a failure freezes into a repair card. Five sketches, one hybrid.</p>
+  <div class="warnbox"><b>The bar:</b> nom's tree is the best passive progress display in the terminal. It is passive, Nerd-Font/colour bound, and it cannot show duration, the critical path, or a repair. The hybrid below is the answer: a scrubbable time-space DAG.</div>
+
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">aur-prefetch — <b id="vname">Time-Space Flow</b></span><span class="dims">canvas sketch · 60 s loop</span></div>
+      <canvas id="c" width="1000" height="560" aria-label="Animated dependency graph"></canvas>
+      <div class="controls">
+        <button id="play">pause</button>
+        <button id="speed">1×</button>
+        <input id="scrub" type="range" min="0" max="58" step="0.1" value="0" aria-label="Scrub timeline">
+        <span class="t" id="tlabel">0.0s</span>
+      </div>
+    </div>
+    <aside class="notes" id="notes"></aside>
+  </div>
+
+  <h2 class="section">The ideas, ranked</h2>
+  <p class="lede">Animation is not a score on its own. It has to encode state, survive 80×24, and stay calm when nothing happens. The hybrid wins because it is the only sketch that shows <i>where the work is, what it blocks, and what is still ahead</i> in one frame.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th>Concept</th><th>Wow</th><th>Legibility</th><th>Density</th><th>Feasibility</th><th>Overall</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Time-Space Flow</td><td>10</td><td>9</td><td>9</td><td>8</td><td><b>9.1</b></td><td>build this</td></tr>
+      <tr><td>Critical Flow</td><td>8</td><td>9</td><td>9</td><td>10</td><td><b>8.9</b></td><td>core</td></tr>
+      <tr><td>Time-Space</td><td>9</td><td>8</td><td>9</td><td>9</td><td><b>8.7</b></td><td>steal timeline</td></tr>
+      <tr><td>Subway</td><td>10</td><td>6</td><td>6</td><td>8</td><td><b>7.6</b></td><td>motion vocabulary</td></tr>
+      <tr><td>Braille Nebula</td><td>10</td><td>5</td><td>5</td><td>7</td><td><b>6.9</b></td><td>ambient mode</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout"><b>What makes it more awesome than nom</b>
+    <ul>
+      <li><b>Time is an axis, not a timer.</b> Future work is a ghost; the now-line is a camera; the critical path is the lit route.</li>
+      <li><b>Only real work flows.</b> A particle on an edge means the edge is carrying data now. Everything else is still.</li>
+      <li><b>Failure freezes the graph.</b> The failed node turns red, downstream nodes go blocked, and a repair card replaces the status line.</li>
+      <li><b>Scrub it.</b> Pause and rewind the run. A post-mortem becomes a replay, not a log crawl.</li>
+      <li><b>Focus follows the bottleneck.</b> The active node expands; completed branches recede. The camera does the attention management.</li>
+    </ul>
+  </div>
+
+  <p class="foot">Scores are design judgments, not an independent audit. The canvas is a design sketch. The real TUI would use braille/ANSI cells at 10–15 fps with an ASCII fallback; the motion budget is one pulse per active edge, not a particle system per frame. Nothing here runs pacman or writes state.</p>
+</div>
+
+<nav class="switcher" id="switcher">
+  <button data-v="hybrid" class="on">1 Time-Space Flow</button>
+  <button data-v="flow">2 Critical Flow</button>
+  <button data-v="time">3 Time-Space</button>
+  <button data-v="subway">4 Subway</button>
+  <button data-v="nebula">5 Braille Nebula</button>
+  <span class="tag">PROTO</span>
+</nav>
+
+<script>
+"use strict";
+const c = document.getElementById("c");
+const ctx = c.getContext("2d");
+const W = 1000, H = 560;
+const COL = {
+  bg:"#080b10", grid:"#101820", text:"#d3dde8", dim:"#4f5d6d", muted:"#8c9aab",
+  acc:"#f0a35e", blue:"#7cc7ff", ok:"#7ddc9a", red:"#ff7b72", warn:"#f2c66d", purple:"#c792ea"
+};
+const NODES = [
+  { id:"fetch", label:"fetch lists", start:0, end:4, lane:0, x:120, y:150 },
+  { id:"bash", label:"bash 5.2", start:4, end:6, lane:1, x:330, y:120 },
+  { id:"linux", label:"linux 6.11", start:4, end:25, lane:2, x:330, y:300 },
+  { id:"yay", label:"yay-bin 12.4", start:25, end:50, lane:3, x:610, y:410 },
+  { id:"install", label:"install", start:50, end:55, lane:4, x:850, y:250 }
+];
+const EDGES = [
+  ["fetch","bash"],["fetch","linux"],["linux","yay"],["bash","install"],["linux","install"],["yay","install"]
+];
+const CRIT = new Set(["fetch>linux","linux>yay","yay>install"]);
+let t = 12, playing = true, speed = 1, last = 0, variant = "hybrid";
+
+const META = {
+  hybrid: {
+    name:"Time-Space Flow", score:"9.1", badge:"build this",
+    idea:"A DAG laid out on a time axis. Bars grow, active edges carry particles, the critical path glows, the future is a ghost, and the now-line is a scrubber.",
+    why:["Shows state, dependency and duration in one frame","Only animates edges that are actually carrying work","Failure freezes the downstream and opens a repair card"],
+    cost:["Needs a time model and history","Hard at 80 columns without focus","More chrome than nom"]
+  },
+  flow: {
+    name:"Critical Flow", score:"8.9", badge:"core",
+    idea:"nom's tree with a causal upgrade: edge particles mean work is moving, the critical path glows, and a focus card follows the bottleneck.",
+    why:["Direct upgrade to nom's tree","Cheap: no time axis","Keyboard focus and failure lens"],
+    cost:["No duration or future","Dense graphs still need collapse"]
+  },
+  time: {
+    name:"Time-Space", score:"8.7", badge:"steal timeline",
+    idea:"A Gantt of the run: each package is a row, each bar is real elapsed time, and dependency curves show what waits for what.",
+    why:["Duration and parallelism are obvious","p50/p90 can be drawn as ghosts","A now-line is a natural scrubber"],
+    cost:["No per-item log","Needs history to be useful"]
+  },
+  subway: {
+    name:"Subway", score:"7.6", badge:"motion vocabulary",
+    idea:"Dependencies as metro lines and jobs as trains. A delayed train visibly propagates; transfers show shared dependencies.",
+    why:["The most delightful motion","Delays and transfers are intuitive","Great for parallel builds"],
+    cost:["Weak exact state","Layout is hand-made","Hard to scale"]
+  },
+  nebula: {
+    name:"Braille Nebula", score:"6.9", badge:"ambient mode",
+    idea:"A constellation DAG: nodes glow, particles travel the edges, completed stars dim, and a focus ring expands the active node.",
+    why:["The most beautiful terminal-native sketch","Braille cells make it feasible","Good ambient mode"],
+    cost:["Poor exactness","Weak at 80x24","Not a work surface"]
+  }
+};
+
+function text(s, x, y, color = COL.text, size = 12, align = "left", weight = "500") {
+  ctx.font = weight + " " + size + "px ui-monospace,SFMono-Regular,Menlo,monospace";
+  ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = "middle";
+  ctx.fillText(s, x, y);
+}
+function line(x1,y1,x2,y2,color,width=1,dash=[]) {
+  ctx.save(); ctx.strokeStyle=color; ctx.lineWidth=width; ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke(); ctx.restore();
+}
+function curve(x1,y1,x2,y2,color,width=1,dash=[]) {
+  const mx=(x1+x2)/2;
+  ctx.save(); ctx.strokeStyle=color; ctx.lineWidth=width; ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.bezierCurveTo(mx,y1,mx,y2,x2,y2); ctx.stroke(); ctx.restore();
+}
+function dot(x,y,r,color,glow=0) {
+  ctx.save(); ctx.fillStyle=color; if(glow){ctx.shadowColor=color;ctx.shadowBlur=glow;}
+  ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); ctx.restore();
+}
+function roundRect(x,y,w,h,r) {
+  ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+function nodeState(n) {
+  const fail = t >= 45 && t < 58;
+  if (fail && n.id === "yay") return "failed";
+  if (fail && n.id === "install") return "blocked";
+  if (t < n.start) return "future";
+  if (t >= n.end) return "done";
+  return "running";
+}
+function stateColor(s) {
+  return s==="done"?COL.ok : s==="running"?COL.blue : s==="failed"?COL.red : s==="blocked"?COL.warn : COL.dim;
+}
+function progress(n) {
+  return Math.max(0, Math.min(1, (t - n.start) / Math.max(0.1, n.end - n.start)));
+}
+function drawGrid() {
+  ctx.fillStyle=COL.bg; ctx.fillRect(0,0,W,H);
+  for(let x=0;x<W;x+=24){for(let y=0;y<H;y+=24){ctx.fillStyle=COL.grid;ctx.fillRect(x,y,1,1);}}
+  ctx.strokeStyle="#151e28"; ctx.strokeRect(16,16,W-32,H-32);
+}
+function drawParticle(x1,y1,x2,y2,p,color) {
+  const mx=(x1+x2)/2;
+  const u=1-p;
+  const x=u*u*x1+2*u*p*mx+p*p*x2;
+  const y=u*u*y1+2*u*p*y1+p*p*y2; // simple horizontal flow
+  dot(x,y,2.2,color,10);
+}
+function drawHeader(label) {
+  text("aur-prefetch  /  progress  /  " + label, 32, 36, COL.muted, 11);
+  text("t = " + t.toFixed(1) + "s", W-32, 36, COL.dim, 10, "right");
+}
+function activeNode() {
+  const running = NODES.find(n => nodeState(n)==="running");
+  if (running) return running;
+  const failed = NODES.find(n => nodeState(n)==="failed");
+  if (failed) return failed;
+  const blocked = NODES.find(n => nodeState(n)==="blocked");
+  if (blocked) return blocked;
+  return NODES[NODES.length-1];
+}
+function focusCard() {
+  const n = activeNode(), s = nodeState(n);
+  const boxW=320, boxH=92, x=32, y=H-124;
+  ctx.save(); ctx.fillStyle="rgba(12,17,24,.92)"; ctx.strokeStyle="#26323f"; ctx.lineWidth=1;
+  roundRect(x,y,boxW,boxH,8); ctx.fill(); ctx.stroke(); ctx.restore();
+  text("FOCUS  " + n.label, x+14, y+20, stateColor(s), 11, "left", "700");
+  text(s.toUpperCase() + "  ·  " + (s==="running" ? Math.round(progress(n)*100)+"%" : s), x+14, y+40, COL.muted, 11);
+  if (s==="failed") {
+    text("repair: install/provide go; do not retry blindly", x+14, y+62, COL.red, 10);
+    text("downstream: install blocked", x+14, y+78, COL.dim, 10);
+  } else if (s==="blocked") {
+    text("blocked by: yay-bin build failure", x+14, y+62, COL.warn, 10);
+    text("nothing to install; repair the build first", x+14, y+78, COL.dim, 10);
+  } else {
+    text("blocked by: " + (n.id==="yay" ? "linux + go/git" : "—"), x+14, y+62, COL.dim, 10);
+    text("elapsed " + Math.max(0,t-n.start).toFixed(1) + "s  ·  p50 " + (n.id==="yay"?"95s":n.id==="linux"?"18s":"—"), x+14, y+78, COL.dim, 10);
+  }
+}
+function drawFlow() {
+  drawGrid(); drawHeader("Critical Flow");
+  const fail = t>=45 && t<58;
+  for (const [a,b] of EDGES) {
+    const na=NODES.find(n=>n.id===a), nb=NODES.find(n=>n.id===b);
+    const sa=nodeState(na), sb=nodeState(nb);
+    const crit=CRIT.has(a+">"+b);
+    const flowing = (sa==="done" && (sb==="running"||sb==="future")) || (sa==="running" && sb==="future");
+    const color = fail && (a==="yay"||b==="yay") ? COL.red : flowing ? (crit?COL.acc:COL.blue) : "#27313d";
+    curve(na.x,na.y,nb.x,nb.y,color, flowing?1.6:1, flowing?[]:[3,4]);
+    if (flowing) {
+      for(let k=0;k<3;k++){const p=((t*0.35+k/3)%1); drawParticle(na.x,na.y,nb.x,nb.y,p, crit?COL.acc:COL.blue);}
+    }
+  }
+  for (const n of NODES) {
+    const s=nodeState(n), col=stateColor(s), active=s==="running"||s==="failed"||s==="blocked";
+    if(active){ctx.save();ctx.shadowColor=col;ctx.shadowBlur=24;}
+    ctx.fillStyle=s==="future"?"#0d141c":"#101a23"; ctx.strokeStyle=col; ctx.lineWidth=active?2:1;
+    roundRect(n.x-64,n.y-22,128,44,8); ctx.fill(); ctx.stroke(); ctx.restore();
+    text(n.label, n.x, n.y-4, s==="future"?COL.dim:COL.text, 11, "center", "600");
+    text(s==="done"?"✓ done":s==="running"?Math.round(progress(n)*100)+"%":s==="failed"?"✖ failed":s==="blocked"?"■ blocked":"○ planned", n.x, n.y+12, col, 9, "center");
+    if(s==="running") {
+      ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=2; ctx.beginPath();
+      ctx.arc(n.x+54,n.y-12,10,-Math.PI/2,-Math.PI/2+progress(n)*Math.PI*2); ctx.stroke(); ctx.restore();
+    }
+  }
+  focusCard();
+}
+function drawTime(hybrid) {
+  drawGrid(); drawHeader(hybrid?"Time-Space Flow":"Time-Space");
+  const x0=150, x1=950, y0=90;
+  const lanes={fetch:0,bash:1,linux:2,yay:3,install:4};
+  const px=v=>x0+(v/58)*(x1-x0);
+  for(let s=0;s<=60;s+=10){line(px(s),y0-8,px(s),H-120,"#1a242e",1,[2,4]); text(s+"s",px(s),y0-22,COL.dim,9,"center");}
+  const now=px(t);
+  line(now,y0-8,now,H-120,"rgba(240,163,94,.65)",1.5);
+  text("now",now+4,y0-24,COL.acc,9);
+  const fail=t>=45&&t<58;
+  for(const n of NODES) {
+    const y=y0+lanes[n.id]*64+40, s=nodeState(n), col=stateColor(s);
+    text(n.label, 130, y, s==="future"?COL.dim:COL.text, 10, "right", "600");
+    line(px(0),y,px(58),y,"#101820",1);
+    if(s==="future") { line(px(n.start),y,px(n.end),y,COL.dim,5,[3,4]); }
+    else {
+      ctx.save(); ctx.strokeStyle=col; ctx.lineWidth=7; ctx.lineCap="round";
+      ctx.globalAlpha=s==="done"?.45:1; ctx.beginPath(); ctx.moveTo(px(n.start),y); ctx.lineTo(px(Math.min(t,n.end)),y); ctx.stroke(); ctx.restore();
+      if(t>n.start) { dot(px(Math.min(t,n.end)),y,3.2,col,12); }
+    }
+    text(s==="done"?"done":s==="running"?Math.round(progress(n)*100)+"%":s==="failed"?"failed":s==="blocked"?"blocked":"planned", px(n.end)+8, y, col, 9);
+    if(hybrid && s==="running") {
+      const bx=px(t), by=y;
+      ctx.save(); ctx.strokeStyle="rgba(240,163,94,.25)"; ctx.setLineDash([3,4]);
+      ctx.beginPath(); ctx.arc(bx,by,14,0,Math.PI*2); ctx.stroke(); ctx.restore();
+    }
+  }
+  // dependency curves
+  for(const [a,b] of EDGES){
+    const na=NODES.find(n=>n.id===a), nb=NODES.find(n=>n.id===b);
+    const ya=y0+lanes[a]*64+40, yb=y0+lanes[b]*64+40;
+    const s=nodeState(na);
+    const c = fail && (a==="yay"||b==="yay") ? COL.red : s==="done" ? COL.acc : "#26313d";
+    curve(px(na.end),ya,px(nb.start),yb,c,1.2,s==="done"?[]:[3,4]);
+    if(s==="done" && t>=nb.start) { for(let k=0;k<2;k++){const p=((t*.3+k/2)%1);drawParticle(px(na.end),ya,px(nb.start),yb,p,c);} }
+  }
+  if (hybrid) focusCard();
+}
+function drawSubway() {
+  drawGrid(); drawHeader("Subway");
+  const lines = [
+    {name:"fetch", color:COL.blue, pts:[[100,140],[380,140],[620,220]], stations:[[100,140,"start"],[240,140,"lists"],[380,140,"fetch"]]},
+    {name:"download", color:COL.acc, pts:[[380,140],[500,300],[700,300]], stations:[[380,140,"fetch"],[500,300,"bash"],[700,300,"linux"]]},
+    {name:"build", color:COL.purple, pts:[[700,300],[820,420],[920,420]], stations:[[700,300,"linux"],[820,420,"yay"],[920,420,"install"]]}
+  ];
+  for(const l of lines){
+    ctx.save();ctx.strokeStyle=l.color;ctx.lineWidth=5;ctx.lineCap="round";ctx.lineJoin="round";
+    ctx.beginPath();ctx.moveTo(l.pts[0][0],l.pts[0][1]);for(let i=1;i<l.pts.length;i++)ctx.lineTo(l.pts[i][0],l.pts[i][1]);ctx.stroke();ctx.restore();
+    for(const [x,y,label] of l.stations){
+      dot(x,y,6,l.color,14); text(label,x+10,y-10,COL.text,10,"left","600");
+    }
+  }
+  // trains move along the polyline
+  const train=(pts,p,col)=>{const seg=Math.min(pts.length-2,Math.floor(p*(pts.length-1)));const local=(p*(pts.length-1))%1;const [x1,y1]=pts[seg],[x2,y2]=pts[seg+1];const x=x1+(x2-x1)*local,y=y1+(y2-y1)*local;dot(x,y,5,col,18);};
+  train(lines[0].pts, (t/10)%1, COL.blue);
+  train(lines[1].pts, (t/18+0.2)%1, COL.acc);
+  train(lines[2].pts, (t/30+0.5)%1, COL.purple);
+  if(t>=45&&t<58){dot(820,420,8,COL.red,24);text("yay-bin failed · install blocked",820,400,COL.red,10,"center");}
+  text("transfers = shared dependencies · trains = active jobs · a stalled train propagates",32,H-36,COL.dim,10);
+  focusCard();
+}
+function drawNebula() {
+  drawGrid(); drawHeader("Braille Nebula");
+  const cx=500, cy=280, R=170;
+  const pos={fetch:[-0.9,-0.7],bash:[-0.5,-0.1],linux:[-0.2,0.4],yay:[0.4,0.2],install:[0.9,-0.3]};
+  const xy={}; for(const n of NODES){const [a,b]=pos[n.id];xy[n.id]=[cx+a*R,cy+b*R];}
+  for(const [a,b] of EDGES){
+    const [x1,y1]=xy[a],[x2,y2]=xy[b], s=nodeState(NODES.find(n=>n.id===a));
+    ctx.save();ctx.strokeStyle=s==="done"?"rgba(240,163,94,.55)":"rgba(124,199,255,.18)";ctx.lineWidth=1;ctx.setLineDash(s==="done"?[]:[2,5]);
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo((x1+x2)/2+40,(y1+y2)/2-40,x2,y2);ctx.stroke();ctx.restore();
+    if(s==="done"){for(let k=0;k<3;k++){const p=((t*.4+k/3)%1);const mx=(x1+x2)/2+40,my=(y1+y2)/2-40;const u=1-p;dot(u*u*x1+2*u*p*mx+p*p*x2,u*u*y1+2*u*p*my+p*p*y2,2,COL.acc,10);}}
+  }
+  for(const n of NODES){
+    const [x,y]=xy[n.id], s=nodeState(n), col=stateColor(s);
+    dot(x,y,s==="running"?6:3.5,col,s==="running"?26:10);
+    if(s==="running"){ctx.save();ctx.strokeStyle=col;ctx.globalAlpha=.35;ctx.beginPath();ctx.arc(x,y,18+Math.sin(t*3)*3,0,Math.PI*2);ctx.stroke();ctx.restore();}
+    text(n.label,x,y+22,COL.muted,9,"center");
+  }
+  text("constellation layout · particles follow active edges · focus ring on the running node",32,H-36,COL.dim,10);
+  focusCard();
+}
+
+const RENDER = { flow:drawFlow, time:()=>drawTime(false), hybrid:()=>drawTime(true), subway:drawSubway, nebula:drawNebula };
+function renderNotes() {
+  const m=META[variant];
+  document.getElementById("vname").textContent=m.name;
+  document.getElementById("notes").innerHTML =
+    '<span class="badge">'+m.badge+'</span><h2>'+m.name+'</h2><p>'+m.idea+'</p>' +
+    '<h3>Why it beats nom</h3><ul>'+m.why.map(x=>'<li>'+x+'</li>').join('')+'</ul>' +
+    '<h3>Pays for it</h3><ul>'+m.cost.map(x=>'<li>'+x+'</li>').join('')+'</ul>' +
+    '<div class="fit">overall <b>'+m.score+'</b> / 10</div>';
+}
+function setVariant(v) {
+  variant = META[v] ? v : "hybrid";
+  document.querySelectorAll("#switcher button").forEach(b=>b.classList.toggle("on", b.dataset.v===variant));
+  try{const u=new URL(location.href);u.searchParams.set("variant",variant);history.replaceState(null,"",u)}catch(e){}
+  renderNotes();
+}
+document.querySelectorAll("#switcher button").forEach(b=>b.addEventListener("click",()=>setVariant(b.dataset.v)));
+const play=document.getElementById("play"), speedBtn=document.getElementById("speed"), scrub=document.getElementById("scrub"), tlabel=document.getElementById("tlabel");
+play.addEventListener("click",()=>{playing=!playing;play.textContent=playing?"pause":"play";});
+const speeds=[1,2,0.5];let si=0;
+speedBtn.addEventListener("click",()=>{si=(si+1)%speeds.length;speed=speeds[si];speedBtn.textContent=speed+"×";});
+scrub.addEventListener("input",()=>{t=parseFloat(scrub.value);playing=false;play.textContent="play";tlabel.textContent=t.toFixed(1)+"s";});
+document.addEventListener("keydown",e=>{
+  if(e.target.matches("input,textarea,[contenteditable]"))return;
+  const order=["hybrid","flow","time","subway","nebula"];
+  if(e.key===" "){e.preventDefault();playing=!playing;play.textContent=playing?"pause":"play";}
+  if(e.key==="ArrowRight"){e.preventDefault();t=Math.min(58,t+1);scrub.value=t;}
+  if(e.key==="ArrowLeft"){e.preventDefault();t=Math.max(0,t-1);scrub.value=t;}
+  if(e.key>="1"&&e.key<="5"){e.preventDefault();setVariant(order[Number(e.key)-1]);}
+});
+function loop(now){
+  const dt=Math.min(0.1,(now-last)/1000||0);last=now;
+  if(playing){t+=dt*speed;if(t>=58)t=0;scrub.value=t;}
+  tlabel.textContent=t.toFixed(1)+"s";
+  RENDER[variant]();
+  requestAnimationFrame(loop);
+}
+setVariant(new URLSearchParams(location.search).get("variant")||"hybrid");
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

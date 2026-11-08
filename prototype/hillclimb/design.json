@@ -1,0 +1,503 @@
+{
+  "name": "Atlas",
+  "screens": {
+    "dashboard": {
+      "first": "verdict",
+      "verdict": [
+        "summary",
+        "drift",
+        "next_action"
+      ],
+      "blocks": [
+        "verdict",
+        "drift",
+        "pending",
+        "disk",
+        "inodes",
+        "timer",
+        "lock",
+        "trust",
+        "caches"
+      ],
+      "primary": "install",
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked",
+        "stale",
+        "unavailable"
+      ]
+    },
+    "updates": {
+      "first": "verdict",
+      "primary": "install",
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "columns": [
+        "package",
+        "repo",
+        "installed",
+        "available",
+        "size",
+        "cached"
+      ],
+      "inspector": [
+        "name",
+        "repo",
+        "cached",
+        "size",
+        "exact_command"
+      ]
+    },
+    "install": {
+      "first": "verdict",
+      "primary": "install",
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "gates": [
+        "root",
+        "lock",
+        "official_list",
+        "aur_list",
+        "news",
+        "trust",
+        "yay",
+        "disk",
+        "attestation"
+      ]
+    },
+    "caches": {
+      "first": "verdict",
+      "primary": "apply",
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "columns": [
+        "path",
+        "size",
+        "policy",
+        "action"
+      ]
+    },
+    "doctor": {
+      "first": "verdict",
+      "read_only": true,
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "columns": [
+        "check",
+        "verdict",
+        "detail",
+        "fix"
+      ]
+    },
+    "activity": {
+      "first": "verdict",
+      "read_only": true,
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "columns": [
+        "time",
+        "level",
+        "source",
+        "message"
+      ]
+    },
+    "settings": {
+      "first": "verdict",
+      "read_only": true,
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "columns": [
+        "setting",
+        "value",
+        "source"
+      ]
+    },
+    "help": {
+      "first": "summary",
+      "summary": true,
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "read_only": true
+    },
+    "palette": {
+      "first": "summary",
+      "summary": true,
+      "states": [
+        "empty",
+        "loading",
+        "error",
+        "blocked"
+      ],
+      "read_only": true
+    }
+  },
+  "report": {
+    "drift": [
+      "last_fetch",
+      "last_install",
+      "partial_upgrade"
+    ],
+    "sections": {
+      "official": {
+        "data": true,
+        "error": true,
+        "state": "Ready",
+        "at": true
+      },
+      "aur": {
+        "data": true,
+        "error": true,
+        "state": "Ready",
+        "at": true
+      },
+      "disk": {
+        "data": true,
+        "error": true,
+        "state": "Ready",
+        "at": true
+      },
+      "lock": {
+        "data": true,
+        "state": "Ready",
+        "at": true
+      },
+      "caches": {
+        "data": true,
+        "state": "Ready",
+        "at": true
+      },
+      "timer": {
+        "data": true,
+        "state": "Ready",
+        "at": true
+      },
+      "state": {
+        "data": true,
+        "state": "Ready",
+        "at": true
+      },
+      "trust": {
+        "data": true,
+        "state": "Ready",
+        "at": true
+      },
+      "doctor": {
+        "data": true,
+        "state": "NotCollected",
+        "at": true
+      }
+    },
+    "post_install": [
+      "exit_code",
+      "kernel_running",
+      "kernel_disk",
+      "pacdiff_count",
+      "reboot_required",
+      "news_url"
+    ],
+    "slow_sections": true,
+    "stale_after": 120,
+    "unknown_glyph": "?",
+    "unavailable_reason": true
+  },
+  "actions": [
+    {
+      "id": "install",
+      "label": "Install",
+      "keys": [
+        "i"
+      ],
+      "danger": "destructive",
+      "plan": true,
+      "exact_argv": true,
+      "confirm": true,
+      "enabled_reason": "blocked by lock/news/trust"
+    },
+    {
+      "id": "fetch",
+      "label": "Fetch",
+      "keys": [
+        "F"
+      ],
+      "danger": "mutating",
+      "plan": true,
+      "exact_argv": true,
+      "confirm": true,
+      "enabled_reason": "blocked by lock/space"
+    },
+    {
+      "id": "clean",
+      "label": "Clean",
+      "keys": [
+        "x"
+      ],
+      "danger": "destructive",
+      "plan": true,
+      "exact_argv": true,
+      "confirm": true,
+      "enabled_reason": "needs root for apply"
+    },
+    {
+      "id": "filter",
+      "label": "Filter updates",
+      "keys": [
+        "f"
+      ],
+      "danger": "readonly",
+      "enabled_reason": "always"
+    },
+    {
+      "id": "quit",
+      "label": "Quit",
+      "keys": [
+        "q"
+      ],
+      "danger": "readonly",
+      "enabled_reason": "blocked while a task runs"
+    }
+  ],
+  "keymap": {
+    "bindings": [
+      {
+        "scope": "global",
+        "key": "F",
+        "action": "fetch"
+      },
+      {
+        "scope": "panel",
+        "key": "f",
+        "action": "filter"
+      },
+      {
+        "scope": "global",
+        "key": "x",
+        "action": "clean"
+      },
+      {
+        "scope": "panel",
+        "key": "c",
+        "action": "clear"
+      },
+      {
+        "scope": "global",
+        "key": "i",
+        "action": "install"
+      }
+    ],
+    "collisions": [],
+    "precedence": [
+      "modal",
+      "panel",
+      "global"
+    ]
+  },
+  "glyphs": {
+    "semantics": [
+      "ok",
+      "warn",
+      "block",
+      "error",
+      "running",
+      "skipped"
+    ],
+    "ascii": {
+      "ok": "+",
+      "warn": "!",
+      "block": "#",
+      "error": "x",
+      "running": "*",
+      "skipped": "-"
+    }
+  },
+  "tables": {
+    "numeric_align": "right",
+    "text_align": "left"
+  },
+  "layout": {
+    "border": "single",
+    "spacing": 1,
+    "truncation": "ellipsis"
+  },
+  "themes": [
+    "ansi",
+    "dark",
+    "light",
+    "mono"
+  ],
+  "panels": {
+    "registry": true,
+    "list": [
+      "dashboard",
+      "updates",
+      "install",
+      "caches",
+      "doctor",
+      "activity",
+      "settings"
+    ],
+    "add_steps": 4,
+    "golden_tests": true
+  },
+  "config": {
+    "format": "line",
+    "optional": true,
+    "unknown": "warn",
+    "keymap_overrides": true,
+    "collision_check": true
+  },
+  "help": {
+    "mental_model": [
+      "download",
+      "install",
+      "partial upgrade"
+    ],
+    "contextual": true
+  },
+  "palette": {
+    "all_actions": true
+  },
+  "footer": {
+    "from_registry": true
+  },
+  "states": [
+    "empty",
+    "loading",
+    "error",
+    "blocked",
+    "stale",
+    "unavailable",
+    "running"
+  ],
+  "first_run": true,
+  "blocked": {
+    "gate": true,
+    "fix": true,
+    "exit_code": true
+  },
+  "install_teaches": [
+    "news",
+    "trust",
+    "reboot"
+  ],
+  "render_once": {
+    "linear": true,
+    "tty_exempt": true,
+    "fixed_clock": true,
+    "demo": true
+  },
+  "ascii": {
+    "covers_borders": true,
+    "covers_gauges": true,
+    "covers_arrows": true,
+    "covers_checkboxes": true,
+    "covers_markers": true
+  },
+  "color_alone": false,
+  "responsive": {
+    "breakpoints": [
+      80,
+      120
+    ],
+    "clipping": false
+  },
+  "reduced_motion": true,
+  "absolute_timestamps": true,
+  "disabled_reasons": true,
+  "empty_next_command": true,
+  "actions_single_source": true,
+  "theme_registry": true,
+  "section_enum": true,
+  "activity_records": [
+    "argv",
+    "exit",
+    "gate"
+  ],
+  "post_install_cases": [
+    "success",
+    "failure",
+    "disk_full",
+    "pacdiff",
+    "kernel",
+    "reboot"
+  ],
+  "clean": {
+    "dry_run_default": true,
+    "absolute_exe": true,
+    "env_warning": true
+  },
+  "trust": {
+    "missing": "second_confirm",
+    "empty": "refuse"
+  },
+  "news": {
+    "attestation": "session_only"
+  },
+  "gates": [
+    "root",
+    "lock",
+    "official_list",
+    "aur_list",
+    "news",
+    "trust",
+    "yay"
+  ],
+  "list_nav": [
+    "ArrowUp",
+    "ArrowDown",
+    "j",
+    "k",
+    "PgUp",
+    "PgDn",
+    "g",
+    "G"
+  ],
+  "modal_keys": [
+    "Enter",
+    "Esc",
+    "Tab",
+    "Shift-Tab",
+    "y"
+  ],
+  "tokens": {
+    "fg": "default",
+    "muted": "dim",
+    "accent": "cyan",
+    "ok": "green",
+    "warn": "yellow",
+    "block": "magenta",
+    "error": "red",
+    "running": "blue",
+    "selected": "reverse"
+  },
+  "raw_colors": []
+}

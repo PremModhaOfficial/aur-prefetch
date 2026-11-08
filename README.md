@@ -121,6 +121,8 @@ remain the merge gate; this is the review layer on top.
 
 - [`NEXT.md`](NEXT.md) — the working plan: decisions, phases, acceptance criteria
 - [`spec.md`](spec.md) — plain-language flow and the five ways to break an Arch box
+- [`PROGRESS.md`](PROGRESS.md) — prefetch-aware dependency tree: states, edges, tree, replay
+- [`TUI.md`](TUI.md) — terminal UI spec: screens, keys, action safety
 - [`context.md`](context.md) — implementation notes and edge cases
 - [`sim/README.md`](sim/README.md) — simulation harness
 - [`AGENTS.md`](AGENTS.md) — operating rules and definition of done

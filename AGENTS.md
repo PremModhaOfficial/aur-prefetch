@@ -10,8 +10,9 @@ Before planning or writing code, read [`NEXT.md`](NEXT.md). It is the
 authoritative order of work. If a chat summary, `context.md`, or an old plan
 disagrees with it, `NEXT.md` wins.
 
-Current position: Phase 0 decisions, then Phase 1 scaffolding, then `fetch`.
-Do not start from `src/main.rs`.
+Current position: all six commands are implemented and sim-covered. Phases 4-6
+(chaos, VM, packaging) remain release hardening. The next ordered work is
+Phase 7 T0, the report layer, before any TUI code.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -79,6 +80,8 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 | Path | Role |
 |---|---|
 | `spec.md` | User-facing, plain-language flow and failure modes |
+| `PROGRESS.md` | Prefetch-aware dependency tree: states, edges, replay |
+| `TUI.md` | Terminal UI spec: screens, keys, action safety |
 | `NEXT.md` | Working plan: decisions, phases, acceptance criteria |
 | `context.md` | Implementation notes and edge cases |
 | `src/main.rs` | CLI surface (subcommands) |
@@ -93,10 +96,9 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 
 ## Current status
 
-All six subcommands are stubs. `NEXT.md` is the authoritative order of work.
-`sim/` proves the harness works and enforces the read-only safety invariants;
-positive assertions (fetch actually downloads, install actually installs) get
-added with each command's implementation.
+All six subcommands are implemented and every one has sim coverage. `NEXT.md`
+is the authoritative order of work. The TUI is specified in `TUI.md` and
+`PROGRESS.md`; no TUI code exists yet.
 
-Next action: Phase 0 decisions in `NEXT.md`, then the runner trait, then
-`fetch`.
+Next action: Phase 7 T0 in `NEXT.md`, the report layer. Build it before any
+`ratatui` code, so the CLI and the TUI read one snapshot instead of two.

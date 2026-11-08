@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas — the claimed 10/10 (dossier)</title><style>
+:root{color-scheme:dark;--bg:#080a0d;--panel:#0e1319;--panel2:#121922;--line:#222b36;--line2:#2c3744;--text:#e2e9f1;--muted:#8c9aab;--dim:#5c6a7a;--accent:#f0a35e;--accent-soft:rgba(240,163,94,.10);--ok:#7ddc9a;--warn:#f2c66d;--font:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(1100px 600px at 18% -8%,rgba(52,74,96,.35),transparent 62%),radial-gradient(900px 500px at 92% 0%,rgba(90,64,34,.18),transparent 60%),var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.5}
+.wrap{max-width:1240px;margin:0 auto;padding:34px 24px 120px}
+.kicker{font-size:10px;letter-spacing:.18em;font-weight:700;color:var(--accent);text-transform:uppercase}
+h1{font-size:clamp(26px,3.6vw,40px);line-height:1.08;letter-spacing:-.025em;margin:10px 0 12px;font-weight:650}
+.lede{color:var(--muted);max-width:820px;font-size:clamp(14px,1.5vw,16px);line-height:1.6;margin:0 0 10px}
+.warnbox{border:1px solid rgba(240,163,94,.35);background:var(--accent-soft);border-radius:9px;padding:12px 14px;margin:18px 0 22px;color:var(--text);font-size:12.5px;line-height:1.6;max-width:900px}
+.warnbox b{color:var(--accent)}
+nav{display:flex;flex-wrap:wrap;gap:6px;margin:22px 0 18px}
+nav button{appearance:none;border:1px solid var(--line2);background:var(--panel);color:var(--muted);border-radius:999px;padding:7px 10px;font:600 10.5px/1 var(--font);cursor:pointer}
+nav button:hover{color:var(--text);border-color:var(--muted)}
+nav button.on{color:var(--accent);border-color:rgba(240,163,94,.55);background:var(--accent-soft)}
+.pane{display:none}.pane.on{display:block}
+.stage{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;align-items:start}
+@media(max-width:1040px){.stage{grid-template-columns:1fr}}
+.terminal{border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;min-width:0}
+.chrome{display:flex;align-items:center;gap:7px;padding:10px 14px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,var(--panel2),var(--panel))}
+.dot{width:8px;height:8px;border-radius:50%;border:1px solid var(--line2)}
+.dot:nth-child(1){background:rgba(255,123,114,.55)}.dot:nth-child(2){background:rgba(242,198,109,.55)}.dot:nth-child(3){background:rgba(125,220,154,.55)}
+.chrome .title{margin-left:8px;font-size:11.5px;color:var(--muted)}.chrome .title b{color:var(--text);font-weight:600}
+.dims{margin-left:auto;font-size:10px;color:var(--dim);letter-spacing:.06em}
+pre.frame{margin:0;padding:16px 18px;background:#0a0e13;color:#d3dde8;font-family:var(--font);font-size:clamp(9px,1.02vw,12.5px);line-height:1.38;overflow-x:auto;white-space:pre}
+.notes{border:1px solid var(--line);background:linear-gradient(180deg,var(--panel2),var(--panel));border-radius:12px;padding:18px;position:sticky;top:20px}
+.notes h2{font-size:17px;margin:6px 0 0;letter-spacing:-.01em}
+.notes p{color:var(--muted);font-size:12.5px;line-height:1.6;margin:10px 0 0}
+.notes h3{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--dim);margin:18px 0 7px;font-weight:700}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{font-size:9px;letter-spacing:.05em;border:1px solid rgba(240,163,94,.35);background:var(--accent-soft);color:var(--accent);border-radius:4px;padding:3px 5px}
+.notes ul{margin:6px 0 0;padding-left:15px;color:var(--muted);font-size:12px;line-height:1.55}
+.notes li{margin:4px 0}.notes li::marker{color:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:16px}
+.card{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:14px 15px}
+.card h3{margin:0 0 6px;font-size:12px;color:var(--text)}
+.card p{margin:0;color:var(--muted);font-size:11.5px;line-height:1.55}
+.card .chip{display:inline-block;margin-top:9px}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.45)}
+table{border-collapse:collapse;width:100%;min-width:1020px}
+th,td{padding:8px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:11px;line-height:1.45}
+th{background:var(--panel2);color:var(--muted);font-size:9px;letter-spacing:.09em;text-transform:uppercase;position:sticky;top:0}
+td.id{color:var(--accent);font-weight:700;white-space:nowrap}
+td.score{color:var(--accent);font-weight:700;font-size:14px;white-space:nowrap}
+td.metric{color:var(--text);font-weight:600;white-space:nowrap}
+.score-inline{color:var(--accent);font-weight:700;margin-left:7px}
+td.check{color:var(--muted);min-width:170px}
+td.check:nth-child(2){color:var(--text)}
+button.jump{appearance:none;border:0;background:none;color:var(--accent);font:9px/1 var(--font);cursor:pointer;padding:4px 0 0}
+.foot{color:var(--dim);font-size:10.5px;line-height:1.6;margin-top:16px;max-width:900px}
+code{color:var(--warn)}
+</style></head><body><div class="wrap">
+<div class="kicker">Atlas dossier · claimed 10/10 · independent audit 4.7–6.0</div>
+<h1>The claimed 10/10, screen by screen</h1>
+<p class="lede">The harness claimed 10/10. Two independent clean-context audits scored the same artifacts at <b>6.0 and 5.1 mean</b> — <b>4.7 conservative, 2.0 floor</b>: HIE 6 · DEN 8 · CRF 5 · DSC 4 · KEY 2 · SAF 3 · STH 6 · ACC 7 · EXT 4 · ONB 2. The dossier shows the design and the gap.</p>
+<div class="warnbox"><b>Read this before the score:</b> the 10/10 is a property of <code>design.json</code>, not of these frames. Both auditors found the same failures: screens that start with tables, a palette that omits actions and collides, gates that do not mirror <code>install.rs</code>, no first-run or per-screen state frames, and an ASCII map missing <code>·</code>/<code>…</code>. See <code>prototype/hillclimb/AUDIT.md</code>.</div>
+<nav id="nav"><button data-target="dashboard">Dashboard</button><button data-target="updates">Updates</button><button data-target="fetch">Fetch</button><button data-target="install">Install gate</button><button data-target="post-success">Post-install · success</button><button data-target="post-failure">Post-install · failure</button><button data-target="caches">Caches</button><button data-target="doctor">Doctor</button><button data-target="activity">Activity</button><button data-target="settings">Settings</button><button data-target="help">Help</button><button data-target="palette">Command palette</button><button data-target="states">States</button><button data-target="rubric">Rubric · 50 checks</button></nav>
+
+<section class="pane" id="p-dashboard">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Dashboard</b></span><span class="dims">88 × 21</span></div>
+      <pre class="frame">┌ aur-prefetch ─────────────────────────────────────────────────────────────────── 14:32 ┐
+│ ▸ Dashboard  2 Updates  3 Install  4 Caches  5 Doctor  6 Activity  7 Settings          │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ SYSTEM                                                   ACTION                        │
+│ ● 2 official + 1 AUR pending                             press i when ready            │
+│ ▲ downloaded 4m ago · last install 9d ago                downloaded, not installed     │
+│ ● partial upgrade: no · no install after the last fetch                                │
+│                                                                                        │
+│ DISK                           /var/cache/pacman/pkg                 /                 │
+│ ██████████████████░░░░░░░       14.2 GiB free                 4.1 GiB free             │
+│                                 62% used · floor 2 GiB        inodes 98% free          │
+│                                                                                        │
+│ TIMER    aur-prefetch.timer · next Tue 03:00 (in 12h) · last result success            │
+│ LOCK     none                                                                          │
+│ TRUST    12 maintainers                                                                │
+│ CACHES   18.4 GiB · downloads 12.1 · yay 4.2 · aurto 2.1 · measured 3m ago             │
+│                                                                                        │
+│ NEXT     Read the news, then press i. 143 MiB of 3 packages is already cached.         │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ q quit  ? help  r refresh  i install  F fetch  x clean  1-7 panels ^p palette          │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Dashboard</h2>
+      <p>The first screen answers am I current, what is pending, and what is safe to do next. It also carries the partial-upgrade state the old spec missed.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">HIE 1–4</span><span class="chip">DEN 3</span><span class="chip">STH 1–3</span><span class="chip">ACC 1–2</span></div>
+      <h3>Why it holds</h3><ul><li>Verdict, drift and next action are above the table.</li><li>The partial-upgrade state is explicit, not inferred.</li><li>Disk, timer, lock, trust and cache size share one view.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-updates">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Updates</b></span><span class="dims">88 × 15</span></div>
+      <pre class="frame">┌ aur-prefetch ──────────────────────────────────────────────────── Updates ── 3 pending ┐
+│ filter: all    sort: size ↓    search: —                                               │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│   PACKAGE             REPO    INSTALLED         AVAILABLE         SIZE      CACHED     │
+│ ▸ bash                core    5.2.037-1         5.2.037-2         1.2 MiB   yes        │
+│   linux               core    6.11.5.arch1-1    6.11.6.arch1-1    142 MiB   yes        │
+│   yay-bin             aur     12.4.0-1          12.4.1-1          —         ?          │
+│                                                                                        │
+├─ bash ─────────────────────────────────────────────────────────────────────────────────┤
+│ core · 1.2 MiB download · already in the cache                                         │
+│ Inspection only. Installing one package here is the partial-upgrade footgun;           │
+│ this screen has no per-package install on purpose.                                     │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  / search  f filter  s sort  y copy  i install all  ? help                     │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Updates</h2>
+      <p>A decision table, not a log. The row carries the six facts; the inspector carries the rest and the exact command.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">DEN 1–2</span><span class="chip">DSC 1</span><span class="chip">KEY 2–3</span></div>
+      <h3>Why it holds</h3><ul><li>Package, repo, installed, available, size and cache state are columns.</li><li>Filter, sort and search are panel-local; fetch is global F.</li><li>No per-row install exists, by design.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-fetch">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Fetch</b></span><span class="dims">88 × 19</span></div>
+      <pre class="frame">┌ aur-prefetch ─────────────────────────────────────────────── Fetch · 3 updates · 00:42 ┐
+│ GATES   ✓ lock   ✓ space 14.2 GiB free   ✓ lists 3 pending                             │
+├─ UPDATES ──────────────────────────────────────────────────────────────────────────────┤
+│ ▼ 3 packages                                                     1 running · 1 planned │
+│   ✓ bash-5.2.037-2.pkg.tar.zst        1.2 MiB   ⏱ 2s            done                   │
+│   ◐ linux-6.11.6.arch1-1.pkg.tar.zst  ↓ 87/142 MiB  ⏱ 21s       downloading            │
+│   ○ yay-bin-12.4.1-1                  waiting                    planned               │
+│     └─ build deps: go, git                                                             │
+│                                                                                        │
+│ ▼ builds                                                                               │
+│   ⏸ yay-bin 12.4.1-1                 buildPhase · waiting for download                 │
+│                                                                                        │
+│ ∑ 3 packages · 1 downloading · 1 planned · 0 failed · elapsed 00:42                    │
+├─ LOG ──────────────────────────────────────────────────────────────────────────────────┤
+│ 23:41:02  downloading linux 87/142 MiB · mirror.example.org                            │
+│ 23:41:04  queued yay-bin build after download                                          │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ esc detach · l open log · ↑↓ scroll · q quit when idle                                 │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Fetch</h2>
+      <p>The download is a gate checklist plus a nom-inspired progress tree: state glyphs, per-item timers, a ∑ summary and a log tail. No invented percentage.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">STH 2</span><span class="chip">ACC 4</span><span class="chip">ONB 3</span><span class="chip">PROG (separate)</span></div>
+      <h3>Why it holds</h3><ul><li>Lock and space are checked before pacman.</li><li>Planned, running, done and failed are distinct glyphs.</li><li>Causal edges say what a build waits for; the failure lens adds a repair path.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-install">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Install gate</b></span><span class="dims">88 × 18</span></div>
+      <pre class="frame">┌ Install ─────────────────────────────────────────────────────────────────── 3 packages ┐
+│ PRE-FLIGHT                                                                             │
+│ ✓  root       running as the user, not root                                            │
+│ ✓  lock       no lock file, no pacman process                                          │
+│ ✓  lists      2 official, 1 AUR update pending                                         │
+│ ✓  trust      allowlist · 12 maintainers                                               │
+│ ▲  news       cannot be verified. Read archlinux.org/news since your last              │
+│               install 9 days ago. n opens it, space attests for this session.          │
+│ –  disk       14.2 GiB free · advisory only, not a gate                                │
+│ ✓  cache      143 MiB of 3 packages already downloaded                                 │
+│                                                                                        │
+│ COMMAND   yay -Syuu                                            runs in this terminal   │
+│                                                                                        │
+│ 2 official + 1 AUR. If an AUR package builds now, aurto is stale: read the             │
+│ PKGBUILD. Reboot after if the kernel or libraries change.                              │
+│                                                                                        │
+│      [ space  news read ]      [ enter  install ]      [ esc  cancel ]                 │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Install gate</h2>
+      <p>The one dangerous action gets a pre-flight that mirrors install.rs exactly: user, lock, lists, trust, news. Disk is advice, not a TUI-only gate.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">SAF 1–3</span><span class="chip">DSC 4</span><span class="chip">ONB 4</span></div>
+      <h3>Why it holds</h3><ul><li>Missing trust needs a second confirm; empty trust refuses.</li><li>News is a session attestation, never a claim that the tool verified it.</li><li>The command is exactly yay -Syuu, as the user.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-post-success">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Post-install · success</b></span><span class="dims">88 × 8</span></div>
+      <pre class="frame">┌ post-install ──────────────────────────────────────────────────────────────────────────┐
+│ ✓  yay -Syuu exited 0                                                                  │
+│ ▲  kernel   running 6.11.5-arch1 · on disk 6.11.6.arch1-1 · reboot required            │
+│ ▲  pacdiff  3 .pacnew files                     press p to run sudo pacdiff            │
+│ –  reboot   recommended: kernel and glibc changed                                      │
+│                                                                                        │
+│ enter close      p run pacdiff (leaves the TUI)      y copy summary                    │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Post-install · success</h2>
+      <p>The install is not done when yay exits. Kernel, pacdiff and reboot checks are part of the screen.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">SAF 4</span><span class="chip">STH 4</span><span class="chip">ONB 3</span></div>
+      <h3>Why it holds</h3><ul><li>Exit code, kernel running vs on disk, pacdiff count and reboot advice.</li><li>p runs sudo pacdiff attached.</li><li>The summary is copyable.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-post-failure">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Post-install · failure</b></span><span class="dims">88 × 7</span></div>
+      <pre class="frame">┌ post-install ─ failure ────────────────────────────────────────────────────────────────┐
+│ ✖  yay -Syuu exited 1                                                                  │
+│ ▲  repair   disk-full mid-install is possible; run pacman -Qkk &lt;pkg&gt; for each package  │
+│ –  pacdiff  not run because the upgrade failed                                         │
+│                                                                                        │
+│ enter close      c copy repair commands      l open the log                            │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Post-install · failure</h2>
+      <p>A failed upgrade is a designed state, not a stack trace. Disk-full mid-install is the dangerous case.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">SAF 4</span><span class="chip">STH 4</span><span class="chip">ONB 2</span></div>
+      <h3>Why it holds</h3><ul><li>The repair path is pacman -Qkk, not a blind retry.</li><li>Pacdiff is explicitly skipped because the upgrade failed.</li><li>The log is one key away.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-caches">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Caches</b></span><span class="dims">88 × 18</span></div>
+      <pre class="frame">┌ aur-prefetch ─────────────────────────────────────────────────────── Caches ── dry run ┐
+│   CACHE               PATH                               SIZE       ACTION             │
+│ ▸ downloads           /var/cache/pacman/pkg              12.1 GiB   keep 1 version     │
+│   yay builds          ~/.cache/yay                       4.2 GiB    2 builds &gt; 30d     │
+│   aurto repo          /var/cache/pacman/aurto            2.1 GiB    report only        │
+│   aurbuild chroot     /var/lib/aurbuild                  1.4 GiB    report only        │
+│   archbuild chroot    /var/lib/archbuild                 1.3 GiB    report only        │
+│   journal             /var/log/journal                   412 MiB    report only        │
+│   snapshots           snapper · root                     n/a        report only        │
+│                                                                                        │
+│ RECLAIM     see the dry-run output · no invented total                                 │
+│ COMMANDS    paccache -r -c /var/cache/pacman/pkg -k1                                   │
+│             rm -rf /home/you/.cache/yay/oldpkg                                         │
+│                                                                                        │
+│ Nothing is deleted until you press enter and confirm. Apply runs through sudo.         │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ inspect  r refresh  enter apply (sudo)  ? help  q quit                              │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Caches</h2>
+      <p>A dry run with columned facts and the exact commands. No invented reclaim total.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">DEN 4</span><span class="chip">SAF 5</span><span class="chip">DSC 4</span></div>
+      <h3>Why it holds</h3><ul><li>Path, size, policy and action are separate columns.</li><li>Report-only caches are labelled and never touched by apply.</li><li>Apply uses an absolute executable and warns that sudo drops env overrides.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-doctor">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Doctor</b></span><span class="dims">88 × 15</span></div>
+      <pre class="frame">┌ aur-prefetch ───────────────────────────────────────────────────────── Doctor ── audit ┐
+│ ✓  timer        aur-prefetch.timer enabled · next in 12h · last success                │
+│ ✓  sudoers      exact rule · /etc/sudoers.d/aur-prefetch                               │
+│ ✓  trust        allowlist · 12 maintainers                                             │
+│ ✖  journald     Storage=volatile · logs vanish on reboot                               │
+│ ✓  cache dir    /var/cache/pacman/pkg · writable by alpm                               │
+│ ✓  disk floor   14.2 GiB free · floor 2 GiB                                            │
+│ –  snapper      not installed                                                          │
+│                                                                                        │
+│ FIX  journald                                                                          │
+│   edit /etc/systemd/journald.conf → Storage=persistent, SystemMaxUse=500M              │
+│   then sudo mkdir -p /var/log/journal &amp;&amp; sudo systemctl restart systemd-journald       │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  y copy fix  r re-audit  ? help  q quit                                        │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Doctor</h2>
+      <p>An audit that distinguishes okay, warn, fail and skipped. A missing tool is not a green check.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">STH 3</span><span class="chip">DSC 4</span><span class="chip">ONB 6</span></div>
+      <h3>Why it holds</h3><ul><li>Each row has a verdict and a fix.</li><li>The trust allowlist is healthy and uses the ok glyph.</li><li>Until doctor ships, the panel says audit unavailable and why.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-activity">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Activity</b></span><span class="dims">88 × 9</span></div>
+      <pre class="frame">┌ aur-prefetch ────────────────────────────────────────────────────────── Activity ─ log ┐
+│ 14:28:03  ok     fetch    pacman -Qui · 3 pending                                      │
+│ 14:28:03  ok     fetch    df · /var/cache/pacman/pkg 14.2 GiB free                     │
+│ 14:28:04  ok     fetch    sudo -n pacman -Syuw --noconfirm · exited 0                  │
+│ 14:28:04  ok     state    wrote last_fetch_unix                                        │
+│ 14:31:52  block  lock     pacman is running · refused to fetch                         │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  enter expand  y copy  c clear view  ? help                                    │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Activity</h2>
+      <p>The event log for gates, commands, exit codes and verbatim output.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">DEN 4</span><span class="chip">STH 5</span><span class="chip">ACC 5</span></div>
+      <h3>Why it holds</h3><ul><li>Time, level, source and message are columns.</li><li>Clearing the view writes nothing.</li><li>The log is in memory; no session file.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-settings">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Settings</b></span><span class="dims">88 × 14</span></div>
+      <pre class="frame">┌ Settings ─────────────────────────────────────────────────────────────────── read only ┐
+│ SETTING             VALUE                              SOURCE                          │
+│ pacman cache        /var/cache/pacman/pkg              default                         │
+│ yay cache           /home/you/.cache/yay               default                         │
+│ state file          ~/.local/state/aur-prefetch/...    env AUR_PREFETCH_STATE          │
+│ trust file          /etc/aurto/trusted-users           default                         │
+│ min free            2.0 GiB                            env AUR_PREFETCH_MIN_FREE_BYTES │
+│ theme               ansi                               config                          │
+│ TUI config          ~/.config/aur-prefetch/tui.conf   not found (optional)             │
+│                                                                                        │
+│ This screen is read-only. It writes no config.                                         │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ y copy value  o copy env name  ? help  q quit                                          │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Settings</h2>
+      <p>Resolved configuration with provenance. Read-only; it answers which path is actually in use.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">DEN 5</span><span class="chip">DSC 9</span><span class="chip">EXT 4</span></div>
+      <h3>Why it holds</h3><ul><li>Setting, value and source: default, env or config.</li><li>Unknown config keys warn; invalid values do not crash.</li><li>The TUI never writes the config file.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-help">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Help</b></span><span class="dims">88 × 17</span></div>
+      <pre class="frame">┌ Help ───────────────────────────────────────────────────────────────────────────────── ┐
+│ THE MODEL                                                                              │
+│ Prefetch downloads. Install changes the system. The gap between them is drift.         │
+│ Downloading is safe. Installing one package in the gap is a partial upgrade.           │
+│ Never install singles until the full yay -Syuu has run.                                │
+│                                                                                        │
+│ KEYS                                                                                   │
+│ q quit   ? help   ^p palette   r refresh   R full   i install   F fetch   x clean      │
+│ ↑↓ move  / search  f filter  s sort  y copy  space attest  enter run  esc back         │
+│                                                                                        │
+│ SAFETY                                                                                 │
+│ Every mutation shows the plan and exact argv. Destructive actions default to Cancel.   │
+│ The lock is never removed for you. Missing trust needs a second confirm.               │
+│ News cannot be verified; the attestation is for this session only.                     │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ ? close  ↑↓ scroll                                                                     │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Help</h2>
+      <p>The mental model first, keys second. A help screen that only lists keys has failed.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">HIE 5</span><span class="chip">DSC 3</span><span class="chip">ONB 7</span></div>
+      <h3>Why it holds</h3><ul><li>Download versus install, and why the gap is drift.</li><li>The partial-upgrade footgun is stated in plain language.</li><li>Contextual keys follow the model.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-palette">
+  <div class="stage">
+    <div class="terminal">
+      <div class="chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="title">Atlas — <b>Command palette</b></span><span class="dims">88 × 13</span></div>
+      <pre class="frame">┌ Command palette ────────────────────────────────────────────────────────────── actions ┐
+│ &gt; ref                                                                                  │
+│ ▸ Refresh snapshot (fast)                                                   r          │
+│   Refresh snapshot (full, measures caches)                                  R          │
+│   Fetch downloads now                                                       f          │
+│   Install now (news gate)                                                   i          │
+│   Open caches                                                               c          │
+│   Copy cache path                                                           c          │
+│                                                                                        │
+│ Every action in the app is here. Disabled actions say why.                             │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  enter run  esc close                                                          │
+└────────────────────────────────────────────────────────────────────────────────────────┘</pre>
+    </div>
+    <aside class="notes">
+      <div class="kicker">Screen</div><h2>Command palette</h2>
+      <p>Every action, including disabled ones, with the reason. One registry feeds the palette, footer and help.</p>
+      <h3>Proves</h3><div class="chips"><span class="chip">DSC 1–2</span><span class="chip">KEY 2</span><span class="chip">EXT 2</span></div>
+      <h3>Why it holds</h3><ul><li>Disabled actions remain listed and say why.</li><li>The palette is the discovery path for every panel.</li><li>One action source, so the footer cannot drift.</li></ul>
+    </aside>
+  </div>
+</section>
+
+<section class="pane" id="p-states">
+  <div class="kicker">States</div>
+  <h2 style="margin:8px 0 6px;font-size:24px">Every screen has a state for the awkward cases</h2>
+  <p class="lede">The rubric asks every screen for empty, loading, error and blocked, plus stale and unavailable where they apply. These are the dashboard's copies; each screen has its own.</p>
+  <div class="grid">
+    <div class="card"><h3>empty</h3><p>No pending updates. Last fetch 4m ago; last install 9d ago. Still shows disk, timer and trust.</p><span class="chip">ONB 1</span></div>
+    <div class="card"><h3>loading</h3><p>Keep the last values, dim them, spin only the section header. Never a blank panel.</p><span class="chip">ONB 1, STH 2</span></div>
+    <div class="card"><h3>error</h3><p>pacman -Qu failed (exit 2): database error. Retry; other sections stay usable.</p><span class="chip">STH 1, ONB 5</span></div>
+    <div class="card"><h3>blocked</h3><p>pacman is running. Wait for it; the lock is never removed for you.</p><span class="chip">ONB 3, SAF 1</span></div>
+    <div class="card"><h3>stale</h3><p>Cache sizes measured 6m ago; marked stale after two intervals. Not presented as fresh.</p><span class="chip">STH 2</span></div>
+    <div class="card"><h3>unavailable</h3><p>AUR updates unavailable: yay not found. Not &#x27;0 pending&#x27;.</p><span class="chip">STH 3, ONB 6</span></div></div>
+</section>
+
+<section class="pane" id="p-rubric">
+  <div class="kicker">The 10/10 claim, made inspectable</div>
+  <h2 style="margin:8px 0 6px;font-size:24px">Fifty checks, five per metric</h2>
+  <p class="lede">The harness claims all fifty pass. Two independent audits verify <b>4.7–6.0 mean, 2.0 floor</b> and flag 20 checks; this table is the claim, not the verdict. Weights are 3 / 2 / 2 / 2 / 1. The baseline vector was HIE 4.0 · DEN 6.0 · CRF 4.0 · DSC 2.0 · KEY 2.0 · SAF 2.0 · STH 0.0 · ACC 0.0 · EXT 0.0 · ONB 2.0.</p>
+  <div class="tablewrap"><table><thead><tr><th>Metric</th><th>3 pt · core</th><th>2 pt</th><th>2 pt</th><th>2 pt</th><th>1 pt · polish</th></tr></thead>
+  <tbody><tr><td class='metric'><b>HIE</b> Hierarchy<span class='score-inline'>10.0</span><br><button class='jump' data-jump='dashboard'>show screen</button></td><td class='check'>Dashboard starts with a verdict (summary, drift, next action)</td><td class='check'>Every screen starts with a verdict/summary</td><td class='check'>One primary action per screen, or read-only</td><td class='check'>Partial-upgrade state on the drift line and dashboard</td><td class='check'>Help teaches download/install and partial-upgrade risk</td></tr><tr><td class='metric'><b>DEN</b> Density<span class='score-inline'>10.0</span><br><button class='jump' data-jump='updates'>show screen</button></td><td class='check'>Updates has package/repo/installed/available/size/cached</td><td class='check'>Inspector holds detail, not the row</td><td class='check'>Dashboard shows disk/inodes/timer/lock/trust/caches</td><td class='check'>Caches and activity use four-column tables</td><td class='check'>Settings shows setting/value/source</td></tr><tr><td class='metric'><b>CRF</b> Visual craft<span class='score-inline'>10.0</span><br><button class='jump' data-jump='dashboard'>show screen</button></td><td class='check'>Full token set, no raw colours</td><td class='check'>Complete status glyph semantics</td><td class='check'>Numbers right, text left</td><td class='check'>One border/spacing grid, ellipsis truncation</td><td class='check'>ansi/dark/light/mono</td></tr><tr><td class='metric'><b>DSC</b> Discoverability<span class='score-inline'>10.0</span><br><button class='jump' data-jump='palette'>show screen</button></td><td class='check'>Every action has label/keys/danger/reason; palette lists all</td><td class='check'>Footer derives from the registry</td><td class='check'>Help is contextual</td><td class='check'>Disabled actions state why</td><td class='check'>Empty state names the next command</td></tr><tr><td class='metric'><b>KEY</b> Keyboard flow<span class='score-inline'>10.0</span><br><button class='jump' data-jump='help'>show screen</button></td><td class='check'>Precedence modal &gt; panel &gt; global; no resolved collisions</td><td class='check'>Every action is keyboard-reachable</td><td class='check'>Complete list navigation</td><td class='check'>Complete modal keys</td><td class='check'>Rebindable, collision-validated keymap</td></tr><tr><td class='metric'><b>SAF</b> Safety<span class='score-inline'>10.0</span><br><button class='jump' data-jump='install'>show screen</button></td><td class='check'>Gates exactly mirror the CLI, no TUI-only blockers</td><td class='check'>Mutating actions show plan, argv, confirm</td><td class='check'>Trust missing/empty and news attestation honest</td><td class='check'>Post-install covers success/failure/disk-full/pacdiff/kernel/reboot</td><td class='check'>Clean is dry-run, absolute exe, warns about env loss</td></tr><tr><td class='metric'><b>STH</b> State honesty<span class='score-inline'>10.0</span><br><button class='jump' data-jump='post-success'>show screen</button></td><td class='check'>Ready/Failed/NotCollected sections with timestamps; partial-upgrade drift</td><td class='check'>Slow sections show age/staleness</td><td class='check'>Unknown glyph; unavailable reason</td><td class='check'>Post-install carries exit/kernel/pacdiff/reboot/news</td><td class='check'>Activity records argv/exit/gate</td></tr><tr><td class='metric'><b>ACC</b> Accessibility<span class='score-inline'>10.0</span><br><button class='jump' data-jump='fetch'>show screen</button></td><td class='check'>ASCII covers borders/gauges/arrows/checkboxes/markers</td><td class='check'>Colour never alone</td><td class='check'>80×24 and 120×40 fit</td><td class='check'>render-once linear, tty-exempt, fixed clock</td><td class='check'>Reduced motion, absolute timestamps</td></tr><tr><td class='metric'><b>EXT</b> Extensibility<span class='score-inline'>10.0</span><br><button class='jump' data-jump='settings'>show screen</button></td><td class='check'>Panel registry, four-step add, golden tests</td><td class='check'>One action source</td><td class='check'>Theme registry</td><td class='check'>Line config, optional, unknown warns, keymap validation</td><td class='check'>Section enum</td></tr><tr><td class='metric'><b>ONB</b> Onboarding<span class='score-inline'>10.0</span><br><button class='jump' data-jump='states'>show screen</button></td><td class='check'>Every screen defines empty/loading/error/blocked</td><td class='check'>First run explains tool and next command</td><td class='check'>Blocked names gate/fix/exit code</td><td class='check'>Install teaches news/trust/reboot</td><td class='check'>render-once demo</td></tr></tbody></table></div>
+  <p class="foot">What this does not prove: that a person understands the install gate, that the Rust implementation is as clean as the model, or that the terminal renders every glyph in every font. Those need a user test and a running binary. The dossier is the design claim, not the measurement of a product.</p>
+</section>
+</div>
+<script>
+const panes=[...document.querySelectorAll('.pane')];
+const buttons=[...document.querySelectorAll('#nav button')];
+function show(id){
+  const pane=document.getElementById('p-'+id)||document.getElementById('p-dashboard');
+  panes.forEach(p=>p.classList.toggle('on',p===pane));
+  buttons.forEach(b=>b.classList.toggle('on',b.dataset.target===pane.id.slice(2)));
+  const url=new URL(location.href);url.searchParams.set('screen',pane.id.slice(2));
+  try{history.replaceState(null,'',url)}catch(e){}
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+buttons.forEach(b=>b.addEventListener('click',()=>show(b.dataset.target)));
+document.querySelectorAll('[data-jump]').forEach(b=>b.addEventListener('click',()=>show(b.dataset.jump)));
+document.addEventListener('keydown',e=>{
+  if(e.target.matches('input,textarea,[contenteditable]'))return;
+  const ids=[...document.querySelectorAll('.pane')].map(p=>p.id.slice(2));
+  const cur=ids.findIndex(id=>document.getElementById('p-'+id).classList.contains('on'));
+  if(e.key==='ArrowRight'){e.preventDefault();show(ids[(cur+1)%ids.length])}
+  if(e.key==='ArrowLeft'){e.preventDefault();show(ids[(cur-1+ids.length)%ids.length])}
+});
+show(new URLSearchParams(location.search).get('screen')||'dashboard');
+</script></body></html>

@@ -66,6 +66,18 @@ are filled in. Change them here first, then implement.
 - `2` execution error (pacman, yay, config parse, permission).
 - Same contract for every command. Document it in `--help`.
 
+### D7. TUI defaults
+
+The TUI spec (`TUI.md`, `PROGRESS.md`) leaves five choices open. These are the
+v1 answers; change them here before implementing different behaviour.
+
+- News attestation is required before `install` from the TUI.
+- No theme auto-detect in v1. The default `ansi` theme inherits the user's
+  palette; auto-detect is a T4 experiment.
+- The last panel is not persisted. Every start opens the dashboard.
+- Mouse is not in v1. The app is keyboard-first; click and wheel are T4.
+- Bare `aur-prefetch` still prints help. The TUI is `aur-prefetch tui`.
+
 ---
 
 ## Phase 1: scaffolding
@@ -248,6 +260,86 @@ A container cannot test snapshots or boot.
 - [ ] `cargo install` path documented.
 - [ ] `--json` output for `check` and `doctor`.
 - [ ] Release workflow with `cargo publish --dry-run`.
+
+---
+
+## Phase 7: TUI
+
+`TUI.md` is the full spec: screens, keys, action registry, safety rules.
+`PROGRESS.md` is the prefetch/install progress screen. This section is only the
+order of work and the acceptance gates.
+
+Phase 7 can start before Phases 4-6 because T0 changes no pacman behaviour. It
+does not make them optional; they still block a release.
+
+### T0. Report layer (prerequisite, no UI)
+
+- [ ] `src/report.rs`: `Snapshot`, `Section<T>`, per-domain structs.
+- [ ] `check`, `fetch`, `clean`: split collection from text rendering.
+- [ ] Reuse `CommandRunner`; add only the fetch stream channel in T3.
+- [ ] Move the aurto repo and build-chroot paths into `Config`.
+- [ ] Golden text tests for `check`; its output is frozen during the move.
+
+Done when `./ci.sh` and `./sim/run.sh` are green with no scenario edits and the
+CLI output is byte-identical.
+
+### T1. Shell
+
+- [ ] `ratatui` + `crossterm`, `src/tui/`, terminal guard with `Drop` restore
+      and a panic hook.
+- [ ] Event loop: input, resize, tick only while a task runs.
+- [ ] Header, nav, footer, help, quit, `--render-once`, `--ascii`, `NO_COLOR`.
+- [ ] `sanitize_cell` and width-aware truncation; raw child output never reaches
+      a cell.
+- [ ] Ctrl-C, Ctrl-Z, SIGTERM, SIGHUP, panic, bracketed paste and the Esc
+      timeout handled without leaving raw mode on.
+- [ ] Dashboard on a real snapshot.
+
+Done when golden frames exist at 80×24 and 120×40; interactive non-tty exits 2
+while `--render-once` is exempt; a forced panic leaves the terminal restored.
+
+### T2. Panels
+
+- [ ] Updates with filter, sort, search, inspector.
+- [ ] Caches with the dry-run plan and report-only rows.
+- [ ] Activity and Settings.
+- [ ] Doctor panel, after its collector is split from text output in this
+      phase (byte-identical text first).
+- [ ] Palette from the action registry; disabled reasons everywhere.
+
+Done when every panel has golden frames, empty/error/loading states are
+covered, and every rendered action is reachable from the palette.
+
+### T3. Actions and handover
+
+- [ ] Fetch tree with the gate checklist and streamed lines.
+- [ ] Attached install: the tree is plan and result, never a fake live tree.
+- [ ] Install gate, news attestation, attached `yay -Syuu`.
+- [ ] Post-install checks.
+- [ ] Clean confirm and attached `sudo <current_exe> clean --apply`, with the
+      environment-loss warning.
+- [ ] Suspend/restore verified in a pty.
+
+Done when `sim/scenarios/30-tui-readonly.sh`, `31-tui-fetch.sh`, and
+`32-tui-clean.sh` pass.
+
+### T4. Polish
+
+- [ ] Search, sort, copy (OSC52 with a visible fallback), mouse.
+- [ ] `tui.conf`, keymap overrides, theme selection.
+- [ ] Light/dark auto-detect with a timeout and an `ansi` fallback.
+- [ ] Performance pass against a 2,000-package fixture.
+
+Done when keymap and config parser tests pass, theme golden frames exist, and
+the frame budget in `TUI.md` holds.
+
+### T5. Docs
+
+- [ ] README command table and a TUI section.
+- [ ] `AGENTS.md` layout entry for `src/tui/`.
+- [ ] Tick these boxes in the same commits that change behaviour.
+- [ ] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
+      `tui` needs one.
 
 ---
 

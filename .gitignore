@@ -1,2 +1,6 @@
 /target
 /.gpg/
+/prototype/hillclimb/decision.tsv
+/prototype/hillclimb/scores.json
+/prototype/hillclimb/baseline.json
+/.ds-ledger.tsv
