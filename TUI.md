@@ -41,12 +41,61 @@ command layer, so `check` and the dashboard can never disagree.
 
 ---
 
+## v1 scope: copy the tree, not the shell
+
+v1 is one full-screen dependency tree, the way nom is one tree. It copies the
+tree, phase glyphs and counters, and fills them with pacman/AUR state. The
+dashboard, panels, palette, doctor and settings later in this file are the v2
+shell. They are specified so the report layer can feed them later, not because
+v1 ships them.
+
+```text
+┌ aur-prefetch ───────────────────── Progress · 3 pending · prefetched 2 · built 0 ┐
+│ Dependency tree                                         static prefetch · ghost  │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│ ▾ install 3 packages                                             ghost · press i │
+│   ├── bash 5.2.037-2                    ✓ cached 4m ago            1.2 MiB       │
+│   ├── linux 6.11.6.arch1-1              ✓ cached 4m ago            142 MiB       │
+│   └── yay-bin 12.4.1-1                  ○ missing · build pending                │
+│       ├── go 1.23.4                     ✓ installed                              │
+│       └── git 2.47.1                    ✓ installed                              │
+│                                                                                  │
+│ ▾ builds                                          0 running · 1 planned          │
+│   └── yay-bin 12.4.1-1                  ⏸ planned           waiting for download │
+│                                                                                  │
+│ Builds   ⏵ 0   ✔ 0   ⏸ 1   ⚠ 0     Downloads  ↓ 0   ✔ 2   ⏸ 1                    │
+│ Host     mirror.example.org · aurto local                                        │
+│ Σ        3 packages · 143 MiB cached · 1 build planned · 0 failed                │
+├──────────────────────────────────────────────────────────────────────────────────┤
+│ space pause · enter focus · g tree/ledger · f failures · i install · ? help      │
+└──────────────────────────────────────────────────────────────────────────────────┘
+```
+
+| In v1 | v2 |
+|---|---|
+| Dependency tree with prefetch badges | Dashboard |
+| Ghost install branch | Updates table and filters |
+| Live fetch tree | Caches panel |
+| Install gate overlay | Doctor panel |
+| Post-install receipt | Activity, Settings, Palette |
+| Help, refresh, quit | Mouse, themes, `tui.conf` |
+
+The CLI keeps `check`, `doctor`, `clean` and `init`. The TUI is the update flow:
+see the gap, fetch, install, confirm the result.
+
+The tree is animated only by observed state; `PROGRESS.md` has the source
+table. The attached `yay -Syuu` install is plan and result, never a fake live
+tree.
+
+---
+
 ## Why
 
-The CLI answers one question per command. The TUI answers them on one screen:
-am I current, what is pending, is the timer alive, what is eating disk, and
-what is safe to do next. It exists because this tool's job is to make the
+The CLI answers one question per command. The tree answers the update question
+on one screen: what is pending, what is already fetched or built, and what the
+install will do. It exists because this tool's job is to make the
 download/install split visible — and a split is easier to see than to read.
+The v2 dashboard adds timer, disk and trust at a glance.
 
 ## What it is not
 
@@ -292,9 +341,19 @@ check for the UI.
 If a fact cannot be collected, the UI says so and why. Unknown is a value, not
 an empty list.
 
+v1 answers "Am I current?", "What is pending?", "Is it downloaded?", "What
+will install do?" and "What is the graph?" on the tree. The Dashboard, Caches,
+Activity and Doctor rows are v2; the tree is not a reduced dashboard, it is
+the screen.
+
 ---
 
 ## Screens
+
+The panels in this section are the **v2 shell**. v1 ships the tree, the Fetch
+view, the install gate and the post-install receipt. Dashboard, Updates,
+Caches, Doctor, Activity, Settings and Palette are not required for the first
+release.
 
 All frames below are 90 columns. The real layout is responsive; see
 "Layout".
@@ -1042,13 +1101,13 @@ commit of T0.
 Done when: `./ci.sh` and `./sim/run.sh` are green with no scenario edits, and
 CLI output is byte-identical.
 
-### T1. Shell
+### T1. Tree shell
 
 - [ ] `ratatui` + `crossterm`, `src/tui/`, terminal guard with `Drop` restore
       and a panic hook.
-- [ ] Event loop: input, resize, tick only while a task runs.
-- [ ] Header, nav, footer, help, quit, `--render-once`, `--ascii`, `NO_COLOR`.
-- [ ] Dashboard on a real snapshot.
+- [ ] Event loop: input, resize, tick only while a captured task runs.
+- [ ] Header, footer, help, quit, `--render-once`, `--ascii`, `NO_COLOR`.
+- [ ] The tree at 80×24 and 120×40. No dashboard.
 - [ ] `sanitize_cell` and width-aware truncation; raw child output never
       reaches a cell.
 - [ ] Ctrl-C, Ctrl-Z, SIGTERM, SIGHUP, panic, bracketed paste and the Esc
@@ -1056,42 +1115,42 @@ CLI output is byte-identical.
 
 Done when: golden frames at 80×24 and 120×40; interactive non-tty exits 2 while
 `--render-once` is exempt; `--render-once` produces the same text as the golden;
-a forced panic in a test leaves the terminal restored.
+a forced panic in a test leaves the terminal restored; ASCII has no non-ASCII
+bytes.
 
-### T2. Panels
+### T2. The tree
 
-- [ ] Updates with filter, sort, search, inspector.
-- [ ] Caches with the dry-run plan and report-only rows.
-- [ ] Activity and Settings.
-- [ ] Doctor panel wired to the existing `doctor` data, after T2 splits its
-      collector from text output (byte-identical text first).
-- [ ] Palette from the action registry; disabled reasons everywhere.
+- [ ] Prefetch badges: cached, built, stale, partial, missing, unknown.
+- [ ] Ghost install branch, counters, `Σ`, host.
+- [ ] Live fetch: real state changes and counters; timers after 1s.
+- [ ] No duplicate nodes; `↑ see above` for a repeat.
+- [ ] Failure freeze, repair card, downstream blocked.
+- [ ] Ledger fallback (`g`). No timeline in v1.
 
-Done when: every panel has golden frames, empty/error/loading states are
-covered, and every rendered action is reachable from the palette.
+Done when: a prefetched fixture shows the correct tree, no state is invented,
+and sim 33 proves the counts.
 
-### T3. Actions and handover
+### T3. Actions
 
-- [ ] Fetch with the gate checklist and streamed lines.
-- [ ] Install gate, news attestation, attached `yay -Syuu`.
-- [ ] Post-install checks.
-- [ ] Clean confirm and attached `sudo <current_exe> clean --apply`, with the env-loss warning.
+- [ ] Fetch tree with the gate checklist and streamed lines.
+- [ ] Install gate overlay, news attestation, exact argv.
+- [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
+- [ ] Post-install receipt.
 - [ ] Suspend/restore verified in a pty.
+- [ ] No clean action in v1; `aur-prefetch clean` stays CLI.
 
 Done when: `sim/scenarios/30-tui-readonly.sh`, `31-tui-fetch.sh`, and
-`32-tui-clean.sh` pass. 30 launches, asserts no writes, quits. 31 presses `F`,
-waits for `fetch: ok`, quits, asserts the cache grew and `/usr` did not. 32
-shows the plan, cancels, and asserts nothing changed.
+`32-tui-install.sh` pass. 30 launches, asserts no writes, quits. 31 presses
+`F`, waits for a live row, quits, asserts the cache grew and `/usr` did not. 32
+opens the install gate, cancels, and asserts nothing changed.
 
 ### T4. Polish
 
-- [ ] Search, sort, copy (OSC52 with a visible fallback), mouse.
-- [ ] `tui.conf`, keymap overrides, theme selection.
-- [ ] Light/dark auto-detect with a timeout and `ansi` fallback.
-- [ ] Performance pass against a 2,000-package fixture.
+- [ ] `--no-motion`, ASCII, 2,000-package performance pass.
+- [ ] Keymap overrides for the v1 keys.
+- [ ] No mouse, themes, or `tui.conf` in v1.
 
-Done when: keymap and config parser tests pass; theme golden frames exist; the
-frame budget below holds.
+Done when: the frame budget below holds and ASCII preserves meaning.
 
 ### T5. Docs
 
@@ -1132,7 +1191,7 @@ What the tests must prove:
 
 - Start and quit write nothing (compare `pkg_state`, cache files, state file).
 - Fetch from the TUI writes only the cache and the sync DB, same as the CLI.
-- Cancel on the clean confirm deletes nothing.
+- Cancel on the install gate changes nothing.
 - A missing `yay` renders `unavailable`, not zero.
 - Terminal restore works after normal quit, panic, and a failed attached run.
 

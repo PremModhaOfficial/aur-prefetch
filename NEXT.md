@@ -283,55 +283,55 @@ does not make them optional; they still block a release.
 Done when `./ci.sh` and `./sim/run.sh` are green with no scenario edits and the
 CLI output is byte-identical.
 
-### T1. Shell
+### T1. Tree shell
 
 - [ ] `ratatui` + `crossterm`, `src/tui/`, terminal guard with `Drop` restore
       and a panic hook.
-- [ ] Event loop: input, resize, tick only while a task runs.
-- [ ] Header, nav, footer, help, quit, `--render-once`, `--ascii`, `NO_COLOR`.
+- [ ] Event loop: input, resize, tick only while a captured task runs.
+- [ ] Header, footer, help, quit, `--render-once`, `--ascii`, `NO_COLOR`.
 - [ ] `sanitize_cell` and width-aware truncation; raw child output never reaches
       a cell.
 - [ ] Ctrl-C, Ctrl-Z, SIGTERM, SIGHUP, panic, bracketed paste and the Esc
       timeout handled without leaving raw mode on.
-- [ ] Dashboard on a real snapshot.
+- [ ] The tree at 80×24 and 120×40. No dashboard.
 
 Done when golden frames exist at 80×24 and 120×40; interactive non-tty exits 2
-while `--render-once` is exempt; a forced panic leaves the terminal restored.
+while `--render-once` is exempt; a forced panic leaves the terminal restored;
+ASCII has no non-ASCII bytes.
 
-### T2. Panels
+### T2. The tree
 
-- [ ] Updates with filter, sort, search, inspector.
-- [ ] Caches with the dry-run plan and report-only rows.
-- [ ] Activity and Settings.
-- [ ] Doctor panel, after its collector is split from text output in this
-      phase (byte-identical text first).
-- [ ] Palette from the action registry; disabled reasons everywhere.
+- [ ] Prefetch badges: cached, built, stale, partial, missing, unknown.
+- [ ] Ghost install branch, counters, `Σ`, host.
+- [ ] Live fetch: real state changes and counters; timers after 1s.
+- [ ] No duplicate nodes; `↑ see above` for a repeat.
+- [ ] Failure freeze, repair card, downstream blocked.
+- [ ] Ledger fallback (`g`). No timeline in v1.
 
-Done when every panel has golden frames, empty/error/loading states are
-covered, and every rendered action is reachable from the palette.
+Done when a prefetched fixture shows the correct tree, no state is invented,
+and sim 33 proves the counts.
 
-### T3. Actions and handover
+### T3. Actions
 
 - [ ] Fetch tree with the gate checklist and streamed lines.
-- [ ] Attached install: the tree is plan and result, never a fake live tree.
-- [ ] Install gate, news attestation, attached `yay -Syuu`.
-- [ ] Post-install checks.
-- [ ] Clean confirm and attached `sudo <current_exe> clean --apply`, with the
-      environment-loss warning.
+- [ ] Install gate overlay, news attestation, exact argv.
+- [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
+- [ ] Post-install receipt.
 - [ ] Suspend/restore verified in a pty.
+- [ ] No clean action in v1; `aur-prefetch clean` stays CLI.
 
 Done when `sim/scenarios/30-tui-readonly.sh`, `31-tui-fetch.sh`, and
-`32-tui-clean.sh` pass.
+`32-tui-install.sh` pass. 30 launches, asserts no writes, quits. 31 presses
+`F`, waits for a live row, quits, asserts the cache grew and `/usr` did not. 32
+opens the install gate, cancels, and asserts nothing changed.
 
 ### T4. Polish
 
-- [ ] Search, sort, copy (OSC52 with a visible fallback), mouse.
-- [ ] `tui.conf`, keymap overrides, theme selection.
-- [ ] Light/dark auto-detect with a timeout and an `ansi` fallback.
-- [ ] Performance pass against a 2,000-package fixture.
+- [ ] `--no-motion`, ASCII, 2,000-package performance pass.
+- [ ] Keymap overrides for the v1 keys.
+- [ ] No mouse, themes, or `tui.conf` in v1.
 
-Done when keymap and config parser tests pass, theme golden frames exist, and
-the frame budget in `TUI.md` holds.
+Done when the frame budget in `TUI.md` holds and ASCII preserves meaning.
 
 ### T5. Docs
 
@@ -340,6 +340,18 @@ the frame budget in `TUI.md` holds.
 - [ ] Tick these boxes in the same commits that change behaviour.
 - [ ] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
       `tui` needs one.
+
+---
+
+## Phase 8: TUI v2 shell
+
+Only if the tree earns it. The panels are not part of the first release.
+
+- [ ] Dashboard, Updates, Caches, Doctor, Activity, Settings.
+- [ ] Palette from the action registry.
+- [ ] Clean confirm and attached `sudo <current_exe> clean --apply`.
+- [ ] Mouse, themes, `tui.conf`.
+- [ ] Sim 36–38 for the shell.
 
 ---
 

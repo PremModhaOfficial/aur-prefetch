@@ -68,6 +68,41 @@ on one axis. It is not the dependency graph.
 - Nerd Font iconography. nom recommends a Nerd Font; this app cannot require
   one.
 
+## The animation is the state
+
+The tree does not animate on a timer. Every change is a real observation. This
+is the line between a monitor and a screensaver.
+
+| Observation | Source | Tree change |
+|---|---|---|
+| Pending set, versions, download size, deps | `pacman -Qu` + `-Qi` | Rows, columns, edges |
+| Cache artifact, version match, mtime, `.part`, `.sig` | CacheDir scan | `✓ cached`, `▲ stale`, `◔ partial`, `○ missing` |
+| AUR built artifact and metadata | aurto repo, `.PKGINFO` | `◆ built` / `⏸ build-pending` |
+| AUR runtime and build deps | `.SRCINFO`, `pacman -Si` | Child rows; unknown edges are `?` |
+| Download started, bytes, finished | `pacman -Syuw` `downloading` lines, `.part` size | `↓` running, real bytes, `✔` done |
+| Build phase started | `makepkg`/`yay` line: `Starting build()`, `check()`, `package()` | `⏵ buildPhase` |
+| Build finished or failed | exit code and last log line | `✔ done` / `⚠ failed` |
+| Package installed or upgraded | `pacman.log` `[ALPM] installed` / `upgraded` | `✔ installed` |
+| Last fetch and install | state file | Header ages |
+| Install plan and gates | existing `install` gate code | Ghost branch, gate overlay |
+
+Rules:
+
+- If an observation does not prove a transition, the tree does not change.
+- No synthetic percentage. `pacman` gives a percentage only when it prints one;
+  otherwise show bytes and elapsed time.
+- The 60s refresh only re-reads static facts. It is not animation.
+- Cached, built and installed nodes are static.
+- The live tree is allowed for captured phases: `fetch`, and an AUR build if
+  the TUI is the one running it.
+- The foreground `yay -Syuu` install is attached. It is plan and result, not a
+  live tree. A pty proxy could make it live, but that is a different contract
+  and a different risk. Not v1.
+
+v1 animates the captured fetch. The AUR build badge is static from the aurto
+repo; a live build tree needs a separate captured `build` action that owns
+`makepkg`, which is not in v1.
+
 ## The one hard constraint: the install owns the terminal
 
 `nom` is a pipe filter. It reads Nix's structured build log while the build
