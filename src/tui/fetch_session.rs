@@ -16,11 +16,12 @@ use std::thread;
 use std::time::SystemTime;
 
 use crate::commands::fetch;
-use crate::commands::fetch::{FetchPlan, Gate};
+use crate::commands::fetch::FetchPlan;
 use crate::config::Config;
 use crate::error::Error;
 use crate::fetch_source::{FetchExit, FetchMonitor, failure_evidence};
 use crate::frontier::Transition;
+use crate::gate::Gate;
 use crate::runner::{CommandOutput, CommandRunner, StreamLine};
 use crate::tui::live::{
     Activity, GroupCounts, LiveRun, LiveState, LiveView, Progress, timer_label,
@@ -661,7 +662,7 @@ mod tests {
         assert!(
             gates
                 .iter()
-                .all(|gate| gate.state == crate::commands::fetch::GateState::Pass),
+                .all(|gate| gate.state == crate::gate::GateState::Pass),
             "all gates passed: {gates:?}"
         );
         assert!(
@@ -689,10 +690,7 @@ mod tests {
 
         assert!(matches!(failure.error, Error::Blocked(_)));
         assert_eq!(failure.gates.len(), 1, "only the lock gate ran");
-        assert_eq!(
-            failure.gates[0].state,
-            crate::commands::fetch::GateState::Fail
-        );
+        assert_eq!(failure.gates[0].state, crate::gate::GateState::Fail);
         assert!(failure.gates[0].detail.contains("pacman is running"));
     }
 

@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::gate::{Gate, GateState};
 use crate::runner::{CommandOutput, CommandRunner, SystemRunner};
 use crate::state::State;
 use crate::util::{human_bytes, parse_size, path_str, resolve_cache_dir};
@@ -17,52 +18,6 @@ pub struct FetchPlan {
     pub cache_dir: PathBuf,
     pub need: u64,
     pub state: State,
-}
-
-/// How one gate ended. A warning did not block, but its input was incomplete;
-/// it is shown and never counts as a pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GateState {
-    Pass,
-    Warn,
-    Fail,
-}
-
-/// One gate in the order [`plan`] evaluates it.
-///
-/// The TUI renders these instead of re-running the gates. A gate after a
-/// failure is absent: it did not run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Gate {
-    pub name: &'static str,
-    pub state: GateState,
-    pub detail: String,
-}
-
-impl Gate {
-    pub fn pass(name: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            name,
-            state: GateState::Pass,
-            detail: detail.into(),
-        }
-    }
-
-    pub fn warn(name: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            name,
-            state: GateState::Warn,
-            detail: detail.into(),
-        }
-    }
-
-    pub fn fail(name: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            name,
-            state: GateState::Fail,
-            detail: detail.into(),
-        }
-    }
 }
 
 pub fn run() -> Result<(), Error> {

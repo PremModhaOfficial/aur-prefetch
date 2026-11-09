@@ -76,8 +76,15 @@ covers where things stand and the first move. Do not re-plan.
   free space), so the gates are never duplicated and a gate after a failure is
   never invented. `l` opens a bounded, sanitized log of the real captured
   lines; `Esc` closes the log before it can detach. Sim 34 proves the
-  checklist and a real pacman log line. The install gate, attached install
-  and post-install block remain.
+  checklist and a real pacman log line.
+- T3b is landed: `i` opens a read-only install gate overlay.
+  `install::preflight` reuses the CLI's own helpers and shows only checks that
+  ran: root, lock, the real official/AUR counts, the trust allowlist or its
+  missing/empty reason, and the news URL with the last-install age. The exact
+  `yay -Syuu` command is shown; `space` records a session-only attestation and
+  writes nothing. Sim 32 proves the gate cancels with no change and no
+  `yay -Syuu`. The `enter` action (attached install) and the post-install
+  block remain.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -103,13 +110,16 @@ covers where things stand and the first move. Do not re-plan.
 
 ## Do this first: T3
 
-1. T2 is closed and T3a is landed: the forest, the pure live view and palette,
-   the bars and viewport, the real `FetchMonitor`, the live fetch loop, the
-   repair card, the ledger, the PRE-FLIGHT checklist and the `l` log are done.
-   The next TUI work is the install gate overlay with news attestation, then
-   the attached install and post-install block. Use `check::collect`,
-   `progress::collect` and `fetch::plan`; do not add a second update collector.
-   The ready set is a set, not a queue.
+1. T2 is closed and T3a/T3b are landed: the forest, the pure live view and
+   palette, the bars and viewport, the real `FetchMonitor`, the live fetch loop,
+   the repair card, the ledger, the PRE-FLIGHT checklist, the `l` log and the
+   read-only install gate are done. The next TUI work is the attached install:
+   enable `enter` only after attestation, call `install::run_with` with the same
+   `Options` the CLI uses (`yes: true`, `force: false`, `stdin_is_tty: true`,
+   real euid), suspend/restore the terminal, re-collect, then add the
+   post-install block. Use `check::collect`, `progress::collect` and
+   `fetch::plan`; do not add a second update collector. The ready set is a set,
+   not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;

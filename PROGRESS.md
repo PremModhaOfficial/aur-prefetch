@@ -2,8 +2,8 @@
 
 Status: **spec + implementation plan. The shared report layer, the T1 shell,
 the static bottom-up dependency forest (T2a), the pure live grammar/palette
-(T2b), the real live fetch (T2e), the repair card and the ledger (T2f), and
-the fetch checklist and log (T3a) exist.**
+(T2b), the real live fetch (T2e), the repair card and the ledger (T2f), the
+fetch checklist and log (T3a), and the read-only install gate (T3b) exist.**
 Written 2026-11-08. Revised after review: the live tree is borrowed from
 `nix-output-monitor` (nom), not competed with.
 
@@ -603,7 +603,9 @@ the evidence, a hint keyed to it and the blocked count instead of the status
 line, and `g` flattens the same rows into a ledger. Sim 35 proves the real
 failure and the freeze under a pty. T3a renders the PRE-FLIGHT gates from
 `fetch::plan_observed` and buffers the real child lines for the `l` log; sim 34
-proves both.
+proves both. T3b renders the install gate from `install::preflight` with the
+same checks the CLI runs, a session-only news attestation and the exact command;
+sim 32 proves it cancels without installing.
 
 Done when: sim proves cached nodes never animate, live fetch nodes do, failure
 freezes instead of retrying, and the attached install still shows the raw

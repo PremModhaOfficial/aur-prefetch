@@ -1,8 +1,8 @@
 # TUI.md — terminal UI spec
 
-Status: **spec. T0 report layer, the T1 read-only shell, T2a–T2f and T3's
-fetch checklist and log are implemented; the install gate and later screens
-are not.** Written 2026-11-08.
+Status: **spec. T0 report layer, the T1 read-only shell, T2a–T2f, T3's fetch
+checklist/log and its read-only install gate are implemented; the attached
+install and later screens are not.** Written 2026-11-08.
 
 Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
 explorations plus Atlas, the hillclimbed target, and a reviewed cross-tool
@@ -501,6 +501,10 @@ list.
 ### Install gate
 
 The one screen allowed to leave the TUI.
+
+Status: T3b implements this overlay read-only — the checks, the exact command
+and the session-local news attestation. The `enter` action belongs to the
+attached-install slice and is not advertised until it exists.
 
 ```
 ┌ Install ─────────────────────────────────────────────────────────────────── 3 packages ┐
@@ -1205,10 +1209,18 @@ real captured lines, sanitized cell by cell, and `Esc` closes the log before it
 can detach. Sim 34 proves both the checklist and a real pacman log line. The
 install gate and post-install block remain open.
 
+T3b landed: `i` opens the install gate overlay. `install::preflight` reuses the
+CLI's helpers and shows only checks that ran: root, lock, the official/AUR
+counts, the trust allowlist or its missing/empty reason, and the news URL with
+the last-install age. The exact `yay -Syuu` command is displayed; `space`
+records a session-only attestation and writes nothing. Sim 32 proves the gate
+cancels with no change and no `yay -Syuu`. The `enter` action is the next
+slice; the overlay does not offer it yet.
+
 ### T3. Actions
 
 - [x] Fetch tree with the gate checklist and streamed lines.
-- [ ] Install gate overlay, news attestation, exact argv.
+- [x] Install gate overlay, news attestation, exact argv.
 - [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
 - [ ] Post-install receipt.
 - [ ] Suspend/restore verified in a pty.

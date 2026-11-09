@@ -13,7 +13,8 @@ use ratatui::{Frame, Terminal};
 use std::collections::{BTreeSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::commands::fetch::{Gate, GateState};
+use crate::commands::install::{INSTALL_COMMAND, Preflight};
+use crate::gate::{Gate, GateState};
 use crate::report::{ArtifactState, PrefetchReport, Snapshot, Update};
 use crate::runner::{StreamKind, StreamLine};
 use crate::util::human_bytes;
@@ -322,6 +323,138 @@ fn log_lines(
             Line::styled(cell_text(&line.line, width, ascii), style)
         })
         .collect()
+}
+
+/// Draw the read-only install gate overlay.
+///
+/// It shows the checks that actually ran, the exact command the CLI would run,
+/// and the session-local news attestation. The action key arrives with the
+/// attached-install slice; this overlay never runs `yay`.
+pub fn draw_install_gate(
+    frame: &mut Frame,
+    preflight: &Preflight,
+    attested: bool,
+    ascii: bool,
+    color: bool,
+) {
+    let area = frame.area();
+    if area.width < 40 || area.height < 12 {
+        return;
+    }
+    // The gate is a screen, not a small modal: it covers the frame so no stale
+    // footer advertises keys that the modal does not accept.
+    frame.render_widget(Clear, area);
+    let separator = if ascii { "|" } else { "·" };
+    let title = format!(
+        " Install {separator} {} ",
+        package_count(preflight.official + preflight.aur)
+    );
+    let block = if ascii {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_set(border::PLAIN)
+            .title(title)
+    } else {
+        Block::default().borders(Borders::ALL).title(title)
+    };
+    frame.render_widget(block, area);
+    let inner = Rect::new(
+        area.x.saturating_add(2),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(4),
+        area.height.saturating_sub(2),
+    );
+    let text = install_gate_lines(preflight, attested, inner.width as usize, ascii, color);
+    frame.render_widget(Paragraph::new(text), inner);
+}
+
+fn install_gate_lines(
+    preflight: &Preflight,
+    attested: bool,
+    width: usize,
+    ascii: bool,
+    color: bool,
+) -> Vec<Line<'static>> {
+    let separator = if ascii { "|" } else { "·" };
+    let mut lines = vec![Line::styled(cell_text("PRE-FLIGHT", width, ascii), bold())];
+    for gate in &preflight.gates {
+        if gate.name == "news" && attested {
+            lines.push(gate_line(
+                &Gate::pass("news", "attested for this session"),
+                width,
+                ascii,
+                color,
+            ));
+        } else {
+            lines.push(gate_line(gate, width, ascii, color));
+        }
+    }
+    if !attested {
+        lines.push(Line::styled(
+            cell_text(
+                "  press space to attest after reading the news",
+                width,
+                ascii,
+            ),
+            dim(color),
+        ));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        cell_text(&format!("COMMAND   {INSTALL_COMMAND}"), width, ascii),
+        bold(),
+    ));
+    let total = preflight.official + preflight.aur;
+    if total > 0 {
+        let summary = if preflight.aur == 0 {
+            format!("{} official update(s).", preflight.official)
+        } else {
+            format!(
+                "{} official + {} AUR. If an AUR package builds now, aurto is stale: read the PKGBUILD.",
+                preflight.official, preflight.aur
+            )
+        };
+        lines.push(Line::styled(
+            cell_text(&summary, width, ascii),
+            Style::default(),
+        ));
+        lines.push(Line::styled(
+            cell_text(
+                "Reboot after if the kernel or libraries change.",
+                width,
+                ascii,
+            ),
+            Style::default(),
+        ));
+    }
+    lines.push(Line::from(""));
+    let keys = if attested {
+        format!("esc cancel {separator} ? help")
+    } else {
+        format!("space attest {separator} esc cancel")
+    };
+    lines.push(Line::styled(cell_text(&keys, width, ascii), dim(color)));
+    lines
+}
+
+/// The install gate in a test backend, for goldens.
+pub fn render_install_gate(
+    preflight: &Preflight,
+    attested: bool,
+    width: u16,
+    height: u16,
+    ascii: bool,
+    color: bool,
+) -> String {
+    if width == 0 || height == 0 {
+        return String::new();
+    }
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("test backend");
+    terminal
+        .draw(|frame| draw_install_gate(frame, preflight, attested, ascii, color))
+        .expect("draw install gate");
+    buffer_text(terminal.backend().buffer(), width)
 }
 
 /// The log overlay in a test backend, for goldens and sanitizer tests.
@@ -763,16 +896,22 @@ fn gate_lines(gates: &[Gate], width: usize, ascii: bool, color: bool) -> Vec<Lin
         return Vec::new();
     }
     let mut lines = vec![Line::styled(cell_text("PRE-FLIGHT", width, ascii), bold())];
-    for gate in gates {
-        let (glyph, style) = match gate.state {
-            GateState::Pass => (if ascii { "+" } else { "✓" }, accent_bold(color, DONE)),
-            GateState::Warn => (if ascii { "!" } else { "▲" }, accent_bold(color, PLANNED)),
-            GateState::Fail => (if ascii { "x" } else { "✗" }, accent_bold(color, FAILURE)),
-        };
-        let text = format!("{glyph}  {:<8} {}", gate.name, gate.detail);
-        lines.push(Line::styled(cell_text(&text, width, ascii), style));
-    }
+    lines.extend(
+        gates
+            .iter()
+            .map(|gate| gate_line(gate, width, ascii, color)),
+    );
     lines
+}
+
+fn gate_line(gate: &Gate, width: usize, ascii: bool, color: bool) -> Line<'static> {
+    let (glyph, style) = match gate.state {
+        GateState::Pass => (if ascii { "+" } else { "✓" }, accent_bold(color, DONE)),
+        GateState::Warn => (if ascii { "!" } else { "▲" }, accent_bold(color, PLANNED)),
+        GateState::Fail => (if ascii { "x" } else { "✗" }, accent_bold(color, FAILURE)),
+    };
+    let text = format!("{glyph}  {:<8} {}", gate.name, gate.detail);
+    Line::styled(cell_text(&text, width, ascii), style)
 }
 
 #[allow(clippy::too_many_arguments)] // the frame carries the full view state
@@ -1711,6 +1850,7 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
         Line::from("? / esc close help"),
         Line::from("F       fetch downloads"),
         Line::from("g       tree/ledger"),
+        Line::from("i       install gate"),
         Line::from("l       fetch log"),
         Line::from("r       refresh"),
         Line::from("ctrl-c  quit with 130"),
@@ -1728,11 +1868,12 @@ mod tests {
     use ratatui::style::{Color, Modifier};
 
     use super::{
-        Footer, RepairCard, display_width, render_frame, render_live_frame,
+        Footer, RepairCard, display_width, render_frame, render_install_gate, render_live_frame,
         render_live_frame_status, render_log_frame, repair_hint,
     };
-    use crate::commands::fetch::Gate;
+    use crate::commands::install::Preflight;
     use crate::frontier::Observed;
+    use crate::gate::Gate;
     use crate::report::{
         ArtifactState, Cached, PackageView, PrefetchReport, Repo, Section, Snapshot, Update,
     };
@@ -2176,6 +2317,24 @@ mod tests {
             });
         }
         lines
+    }
+
+    fn install_preflight() -> Preflight {
+        Preflight {
+            gates: vec![
+                Gate::pass("root", "running as the user, not root"),
+                Gate::pass("lock", "no lock file, no pacman process"),
+                Gate::pass("lists", "1 official, 0 AUR update(s) pending"),
+                Gate::pass("trust", "allowlist · 2 maintainer(s)"),
+                Gate::warn(
+                    "news",
+                    "cannot be verified; read https://archlinux.org/news/ since 2026-11-01T00:00:00+0000",
+                ),
+            ],
+            official: 1,
+            aur: 0,
+            news_since: "2026-11-01T00:00:00+0000".to_string(),
+        }
     }
 
     fn long_log_fixture() -> VecDeque<StreamLine> {
@@ -2924,6 +3083,55 @@ mod tests {
 
         let empty = render_log_frame(&VecDeque::new(), 80, 24, false, false);
         assert!(empty.contains("(no output yet)"), "{empty}");
+    }
+
+    #[test]
+    fn the_install_gate_shows_the_checks_and_the_exact_command() {
+        let frame = render_install_gate(&install_preflight(), false, 120, 40, false, false);
+
+        for needle in [
+            "Install · 1 package",
+            "PRE-FLIGHT",
+            "✓  root",
+            "✓  lock",
+            "✓  lists",
+            "✓  trust",
+            "▲  news",
+            "archlinux.org/news",
+            "COMMAND   yay -Syuu",
+            "space attest",
+            "esc cancel",
+        ] {
+            assert!(frame.contains(needle), "missing {needle:?}\n{frame}");
+        }
+        assert!(
+            !frame.contains("enter"),
+            "the action key is not advertised before it exists\n{frame}"
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-install-gate-120x40.txt")
+        );
+    }
+
+    #[test]
+    fn attestation_marks_the_news_gate_for_this_session() {
+        let frame = render_install_gate(&install_preflight(), true, 120, 40, false, false);
+
+        assert!(frame.contains("✓  news"), "{frame}");
+        assert!(frame.contains("attested for this session"), "{frame}");
+        assert!(!frame.contains("press space"), "{frame}");
+        assert!(!frame.contains("space attest"), "{frame}");
+    }
+
+    #[test]
+    fn the_install_gate_is_ascii_safe() {
+        let frame = render_install_gate(&install_preflight(), false, 120, 40, true, false);
+
+        assert!(frame.contains("Install | 1 package"), "{frame}");
+        assert!(frame.contains("!  news"), "{frame}");
+        assert!(frame.contains("+  root"), "{frame}");
+        assert!(!frame.contains('·'), "no unicode separator\n{frame}");
     }
 
     #[test]
@@ -3848,5 +4056,11 @@ mod tests {
             render_log_frame(&long_log_fixture(), 120, 40, false, false),
         )
         .expect("write log 120x40");
+
+        std::fs::write(
+            dir.join("tui-install-gate-120x40.txt"),
+            render_install_gate(&install_preflight(), false, 120, 40, false, false),
+        )
+        .expect("write install gate 120x40");
     }
 }

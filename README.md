@@ -59,8 +59,10 @@ leaves the child running; the result stays on screen until dismissed. A failed
 fetch freezes the tree and shows the failed row, the exit evidence, a repair
 hint and the blocked count. `g` toggles a flat ledger of the same rows. The
 running screen shows the gates that actually ran, and `l` opens the captured
-log of pacman's own lines. The fetch's only write is its existing state file
-after a successful exit.
+log of pacman's own lines. `i` opens a read-only install gate with the same
+checks the CLI runs, the exact `yay -Syuu` command, and a session-only news
+attestation; the attached install is not wired yet. The fetch's only write is
+its existing state file after a successful exit.
 
 ### `check`
 

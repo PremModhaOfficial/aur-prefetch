@@ -422,7 +422,7 @@ not implementation.
 ### T3. Actions
 
 - [x] Fetch tree with the gate checklist and streamed lines.
-- [ ] Install gate overlay, news attestation, exact argv.
+- [x] Install gate overlay, news attestation, exact argv.
 - [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
 - [ ] Post-install receipt.
 - [ ] Suspend/restore verified in a pty.
@@ -443,6 +443,17 @@ the real child lines and `Esc` closes it before it can detach. The static
 checklist, a real pacman log line and the existing fetch result. The install
 gate, attached install and post-install block remain open, so T3 is not
 ticked.
+
+T3b landed: `i` opens a read-only install gate overlay. `install::preflight`
+reuses the CLI's own helpers (`effective_uid`, `check_lock`, `collect_lists`,
+`trust_state`, `install_since`) and reports the checks that actually ran: root,
+lock, the real official/AUR counts, the trust allowlist or its missing/empty
+reason, and the news URL with the last-install age. The exact `yay -Syuu`
+command is shown; `space` records a session-only news attestation and no state
+is written. Sim 32 opens the gate, attests, cancels, and proves `/usr`, the
+package DB, the cache, the state file and the sudo log are untouched and `yay
+-Syuu` never ran. The `enter` action is the attached-install slice, so the
+overlay does not advertise it yet.
 
 ### T4. Polish
 

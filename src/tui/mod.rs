@@ -24,9 +24,10 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::flag;
 
 use crate::commands::check;
-use crate::commands::fetch::Gate;
+use crate::commands::install;
 use crate::config::Config;
 use crate::error::Error;
+use crate::gate::Gate;
 use crate::progress;
 use crate::report::Snapshot;
 use crate::runner::SystemRunner;
@@ -101,6 +102,10 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     let mut help = false;
     let mut ledger = false;
     let mut log_open = false;
+    let mut install_gate: Option<InstallGate> = None;
+    // The news attestation lasts for this TUI session, not just one opening
+    // of the gate, and is never written to disk.
+    let mut news_attested = false;
     let mut dirty = true;
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -178,6 +183,15 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             render::draw_log(frame, live.lines(), ascii, color);
                         }
                     }
+                    if let Some(open) = install_gate.as_ref() {
+                        render::draw_install_gate(
+                            frame,
+                            &open.preflight,
+                            news_attested,
+                            ascii,
+                            color,
+                        );
+                    }
                 })
                 .map_err(|err| Error::failed(format!("cannot draw the terminal: {err}")))?;
             dirty = false;
@@ -197,92 +211,115 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
         match event::read()
             .map_err(|err| Error::failed(format!("cannot read the terminal: {err}")))?
         {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('q') => {
-                    // Detach, never kill: the drop below closes our end of the
-                    // stream, but the worker keeps the child alive.
-                    break;
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    return Err(Error::Interrupted);
-                }
-                KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    drop(terminal);
-                    guard
-                        .suspend()
-                        .map_err(|err| Error::failed(format!("cannot suspend: {err}")))?;
-                    terminal =
-                        Terminal::new(CrosstermBackend::new(io::stdout())).map_err(|err| {
-                            Error::failed(format!("cannot restart the terminal: {err}"))
-                        })?;
-                    terminal.clear().map_err(|err| {
-                        Error::failed(format!("cannot clear the terminal: {err}"))
-                    })?;
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                // The install gate is modal: only attest, cancel and quit are
+                // live while it is open, and it never runs yay by itself.
+                if install_gate.is_some() {
+                    match key.code {
+                        KeyCode::Esc => install_gate = None,
+                        KeyCode::Char(' ') => news_attested = true,
+                        KeyCode::Char('q') => break,
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Err(Error::Interrupted);
+                        }
+                        _ => {}
+                    }
                     dirty = true;
+                    continue;
                 }
-                KeyCode::Char('?') => {
-                    help = !help;
-                    dirty = true;
-                }
-                KeyCode::Esc => {
-                    if help {
-                        help = false;
-                    } else if log_open {
-                        log_open = false;
-                    } else if session.as_ref().is_some_and(FetchSession::running) {
-                        // Detach while the command runs. No result is claimed.
+                match key.code {
+                    KeyCode::Char('q') => {
+                        // Detach, never kill: the drop below closes our end of the
+                        // stream, but the worker keeps the child alive.
                         break;
-                    } else if session.take().is_some() {
-                        snapshot = collect_snapshot(config, SystemTime::now())?;
-                    } else {
-                        notice = None;
                     }
-                    dirty = true;
-                }
-                KeyCode::Char('g') => {
-                    // A view toggle only; it never touches the fetch or a file.
-                    ledger = !ledger;
-                    dirty = true;
-                }
-                KeyCode::Char('l') => {
-                    // The log exists only after a fetch session starts.
-                    if session.is_some() {
-                        log_open = !log_open;
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Err(Error::Interrupted);
+                    }
+                    KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        drop(terminal);
+                        guard
+                            .suspend()
+                            .map_err(|err| Error::failed(format!("cannot suspend: {err}")))?;
+                        terminal =
+                            Terminal::new(CrosstermBackend::new(io::stdout())).map_err(|err| {
+                                Error::failed(format!("cannot restart the terminal: {err}"))
+                            })?;
+                        terminal.clear().map_err(|err| {
+                            Error::failed(format!("cannot clear the terminal: {err}"))
+                        })?;
                         dirty = true;
                     }
-                }
-                KeyCode::Char('r') => {
-                    if session.as_ref().is_some_and(FetchSession::running) {
-                        // The live poll owns the refresh while the fetch runs.
-                    } else {
-                        session = None;
-                        notice = None;
-                        log_open = false;
-                        snapshot = collect_snapshot(config, SystemTime::now())?;
+                    KeyCode::Char('?') => {
+                        help = !help;
                         dirty = true;
                     }
-                }
-                KeyCode::Char('F') => {
-                    if session.as_ref().is_some_and(FetchSession::running) {
-                        // One fetch at a time. No second child.
-                    } else {
-                        if session.is_some() || notice.is_some() {
-                            session = None;
+                    KeyCode::Esc => {
+                        if help {
+                            help = false;
+                        } else if log_open {
+                            log_open = false;
+                        } else if session.as_ref().is_some_and(FetchSession::running) {
+                            // Detach while the command runs. No result is claimed.
+                            break;
+                        } else if session.take().is_some() {
                             snapshot = collect_snapshot(config, SystemTime::now())?;
-                        }
-                        match start_fetch(config, &snapshot, SystemTime::now()) {
-                            Ok(started) => {
-                                session = Some(started);
-                                notice = None;
-                                log_open = false;
-                            }
-                            Err(failure) => notice = Some(Notice::from_failure(failure)),
+                        } else {
+                            notice = None;
                         }
                         dirty = true;
                     }
+                    KeyCode::Char('g') => {
+                        // A view toggle only; it never touches the fetch or a file.
+                        ledger = !ledger;
+                        dirty = true;
+                    }
+                    KeyCode::Char('l') => {
+                        // The log exists only after a fetch session starts.
+                        if session.is_some() {
+                            log_open = !log_open;
+                            dirty = true;
+                        }
+                    }
+                    KeyCode::Char('i') => {
+                        install_gate = Some(InstallGate {
+                            preflight: install::preflight(config, &SystemRunner),
+                        });
+                        dirty = true;
+                    }
+                    KeyCode::Char('r') => {
+                        if session.as_ref().is_some_and(FetchSession::running) {
+                            // The live poll owns the refresh while the fetch runs.
+                        } else {
+                            session = None;
+                            notice = None;
+                            log_open = false;
+                            snapshot = collect_snapshot(config, SystemTime::now())?;
+                            dirty = true;
+                        }
+                    }
+                    KeyCode::Char('F') => {
+                        if session.as_ref().is_some_and(FetchSession::running) {
+                            // One fetch at a time. No second child.
+                        } else {
+                            if session.is_some() || notice.is_some() {
+                                session = None;
+                                snapshot = collect_snapshot(config, SystemTime::now())?;
+                            }
+                            match start_fetch(config, &snapshot, SystemTime::now()) {
+                                Ok(started) => {
+                                    session = Some(started);
+                                    notice = None;
+                                    log_open = false;
+                                }
+                                Err(failure) => notice = Some(Notice::from_failure(failure)),
+                            }
+                            dirty = true;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             Event::Resize(_, _) => dirty = true,
             Event::Paste(_) => {}
             _ => {}
@@ -298,6 +335,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
         eprintln!("aur-prefetch: fetch detached; pacman may still be running");
     }
     Ok(())
+}
+
+/// The install gate screen. It is read-only and never runs `yay`.
+struct InstallGate {
+    preflight: install::Preflight,
 }
 
 /// A refused action or an observation error shown over the static tree. It has
