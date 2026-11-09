@@ -19,6 +19,52 @@ pub struct FetchPlan {
     pub state: State,
 }
 
+/// How one gate ended. A warning did not block, but its input was incomplete;
+/// it is shown and never counts as a pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateState {
+    Pass,
+    Warn,
+    Fail,
+}
+
+/// One gate in the order [`plan`] evaluates it.
+///
+/// The TUI renders these instead of re-running the gates. A gate after a
+/// failure is absent: it did not run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gate {
+    pub name: &'static str,
+    pub state: GateState,
+    pub detail: String,
+}
+
+impl Gate {
+    pub fn pass(name: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            name,
+            state: GateState::Pass,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn warn(name: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            name,
+            state: GateState::Warn,
+            detail: detail.into(),
+        }
+    }
+
+    pub fn fail(name: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            name,
+            state: GateState::Fail,
+            detail: detail.into(),
+        }
+    }
+}
+
 pub fn run() -> Result<(), Error> {
     let config = Config::from_env()?;
     run_with(&config, &SystemRunner)
@@ -29,7 +75,11 @@ pub fn run() -> Result<(), Error> {
 /// `pacman -Qui` sits between the lock and the space gate because the size
 /// estimate needs it. It only reads.
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    let plan = plan(config, runner)?;
+    let plan = plan_observed(config, runner, &mut |gate| {
+        if gate.state == GateState::Warn {
+            eprintln!("warning: {}", gate.detail);
+        }
+    })?;
     print!("{}", render_plan(&plan));
     let argv = command_argv(config, runner)?;
     print!("{}", render_running(&argv));
@@ -67,39 +117,122 @@ pub fn record_success(config: &Config, plan: &FetchPlan, at: SystemTime) -> Resu
 
 /// Read the gates and the pending set. This runs no transaction.
 pub fn plan(config: &Config, runner: &dyn CommandRunner) -> Result<FetchPlan, Error> {
-    check_lock(config, runner)?;
+    plan_observed(config, runner, &mut |_| {})
+}
 
-    let pacman = path_str(&config.pacman)?;
-    let quiet = runner.run(pacman, &["-Qui"])?;
+/// Evaluate the gates in order and report each result as it happens.
+///
+/// The first blocking gate returns its error and ends the sequence; later gates
+/// are not run and not reported. [`plan`] is this function with no observer.
+pub fn plan_observed(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    observe: &mut dyn FnMut(Gate),
+) -> Result<FetchPlan, Error> {
+    match check_lock(config, runner) {
+        Ok(()) => observe(Gate::pass("lock", "no lock file, no pacman process")),
+        Err(error) => {
+            observe(Gate::fail("lock", error.to_string()));
+            return Err(error);
+        }
+    }
+
+    let pacman = match path_str(&config.pacman) {
+        Ok(path) => path,
+        Err(error) => {
+            observe(Gate::fail("lists", error.to_string()));
+            return Err(error);
+        }
+    };
+    let quiet = match runner.run(pacman, &["-Qui"]) {
+        Ok(output) => output,
+        Err(error) => {
+            observe(Gate::fail("lists", error.to_string()));
+            return Err(error);
+        }
+    };
     let (pending_bytes, pending) = if quiet.code == 0 {
-        parse_pending(&quiet.stdout)
+        let parsed = parse_pending(&quiet.stdout);
+        observe(Gate::pass(
+            "lists",
+            format!(
+                "{} pending, {} to download",
+                parsed.1.len(),
+                human_bytes(parsed.0)
+            ),
+        ));
+        parsed
     } else {
-        eprintln!(
-            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
-            quiet.code
-        );
+        observe(Gate::warn(
+            "lists",
+            format!(
+                "pacman -Qui exited {}; assuming the minimum free-space floor",
+                quiet.code
+            ),
+        ));
         (0, Vec::new())
     };
 
-    let cache_dir = resolve_cache_dir(config, runner)?;
+    let cache_dir = match resolve_cache_dir(config, runner) {
+        Ok(dir) => dir,
+        Err(error) => {
+            observe(Gate::fail("cache", error.to_string()));
+            return Err(error);
+        }
+    };
+    observe(Gate::pass("cache", cache_dir.display().to_string()));
+
     let floor = if config.snapper_config_dir.is_dir() {
         config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
     } else {
         config.min_free_bytes
     };
     let need = floor.saturating_add(pending_bytes.saturating_mul(2));
-    check_space(runner, &cache_dir, need)?;
+    match check_space(runner, &cache_dir, need) {
+        Ok(available) => observe(Gate::pass(
+            "space",
+            format!(
+                "{}: need {}, have {}",
+                cache_dir.display(),
+                human_bytes(need),
+                human_bytes(available)
+            ),
+        )),
+        Err(error) => {
+            observe(Gate::fail("space", error.to_string()));
+            return Err(error);
+        }
+    }
     if cache_dir != PathBuf::from("/") {
-        check_space(runner, Path::new("/"), need)?;
+        match check_space(runner, Path::new("/"), need) {
+            Ok(available) => observe(Gate::pass(
+                "space",
+                format!(
+                    "/: need {}, have {}",
+                    human_bytes(need),
+                    human_bytes(available)
+                ),
+            )),
+            Err(error) => {
+                observe(Gate::fail("space", error.to_string()));
+                return Err(error);
+            }
+        }
     }
 
-    Ok(FetchPlan {
-        pending,
-        pending_bytes,
-        cache_dir,
-        need,
-        state: State::load(&config.state_file)?,
-    })
+    match State::load(&config.state_file) {
+        Ok(state) => Ok(FetchPlan {
+            pending,
+            pending_bytes,
+            cache_dir,
+            need,
+            state,
+        }),
+        Err(error) => {
+            observe(Gate::fail("state", error.to_string()));
+            Err(error)
+        }
+    }
 }
 
 /// The one line printed before the command is chosen.
@@ -157,7 +290,7 @@ fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> 
     )))
 }
 
-fn check_space(runner: &dyn CommandRunner, path: &Path, need: u64) -> Result<(), Error> {
+fn check_space(runner: &dyn CommandRunner, path: &Path, need: u64) -> Result<u64, Error> {
     let path = path_str(path)?;
     let output = runner.run("df", &["-B1", "--output=avail", path])?;
     if output.code != 0 {
@@ -181,7 +314,7 @@ fn check_space(runner: &dyn CommandRunner, path: &Path, need: u64) -> Result<(),
             human_bytes(available)
         )));
     }
-    Ok(())
+    Ok(available)
 }
 
 fn is_root(runner: &dyn CommandRunner) -> Result<bool, Error> {
@@ -227,7 +360,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{parse_pending, run_with};
+    use super::{GateState, parse_pending, plan_observed, run_with};
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -349,6 +482,62 @@ mod tests {
         let message = result.unwrap_err().to_string();
         assert!(message.contains("free space"), "message was: {message}");
         assert_eq!(runner.calls().len(), 3, "no command may run after the gate");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn plan_reports_each_gate_in_order_with_real_details() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(ok(QUI));
+        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok(HIGH));
+        runner.push_output(ok(HIGH));
+
+        let mut gates = Vec::new();
+        plan_observed(&config, &runner, &mut |gate| gates.push(gate)).expect("plan");
+
+        let names: Vec<&str> = gates.iter().map(|gate| gate.name).collect();
+        assert_eq!(names, ["lock", "lists", "cache", "space", "space"]);
+        assert!(gates.iter().all(|gate| gate.state == GateState::Pass));
+        assert!(
+            gates[1].detail.contains("2 pending"),
+            "the lists gate carries the real count: {}",
+            gates[1].detail
+        );
+        assert!(
+            gates[2].detail.contains("/var/cache/pacman/pkg/"),
+            "the cache gate names the resolved path"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn plan_stops_reporting_after_the_first_failed_gate() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(ok(QUI));
+        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok(LOW));
+
+        let mut gates = Vec::new();
+        let error = plan_observed(&config, &runner, &mut |gate| gates.push(gate))
+            .expect_err("low space blocks");
+
+        assert!(matches!(error, Error::Blocked(_)));
+        let names: Vec<&str> = gates.iter().map(|gate| gate.name).collect();
+        assert_eq!(names, ["lock", "lists", "cache", "space"]);
+        assert_eq!(gates.last().map(|gate| gate.state), Some(GateState::Fail));
+        assert!(
+            gates
+                .last()
+                .is_some_and(|gate| gate.detail.contains("free space")),
+            "the failed gate keeps its exact reason"
+        );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

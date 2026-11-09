@@ -70,8 +70,14 @@ covers where things stand and the first move. Do not re-plan.
   statically and live; the static `--render-once` frame is unchanged. Sim 35
   corrupts the repo artifact behind the paced transfer and proves the running
   row, the real failure, the frozen frontier, the card, no install, no state
-  write and the one allowed escalation. The fetch log and the T3 actions
-  remain.
+  write and the one allowed escalation.
+- T3a is landed: the fetch action renders the PRE-FLIGHT gates from
+  `fetch::plan_observed` (lock, real pending count/bytes, resolved cache path,
+  free space), so the gates are never duplicated and a gate after a failure is
+  never invented. `l` opens a bounded, sanitized log of the real captured
+  lines; `Esc` closes the log before it can detach. Sim 34 proves the
+  checklist and a real pacman log line. The install gate, attached install
+  and post-install block remain.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -97,12 +103,13 @@ covers where things stand and the first move. Do not re-plan.
 
 ## Do this first: T3
 
-1. T2 is closed: the forest, the pure live view and palette, the bars and
-   viewport, the real `FetchMonitor`, the live fetch loop, the repair card and
-   the ledger are landed. The next TUI work is T3: the fetch gate checklist and
-   the streamed log panel, then the install gate overlay and post-install
-   block. Use `check::collect`, `progress::collect` and `fetch::plan`; do not
-   add a second update collector. The ready set is a set, not a queue.
+1. T2 is closed and T3a is landed: the forest, the pure live view and palette,
+   the bars and viewport, the real `FetchMonitor`, the live fetch loop, the
+   repair card, the ledger, the PRE-FLIGHT checklist and the `l` log are done.
+   The next TUI work is the install gate overlay with news attestation, then
+   the attached install and post-install block. Use `check::collect`,
+   `progress::collect` and `fetch::plan`; do not add a second update collector.
+   The ready set is a set, not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;

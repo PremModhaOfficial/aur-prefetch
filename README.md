@@ -58,7 +58,9 @@ captured, never attached, and nothing is installed. `Esc` or `q` detaches and
 leaves the child running; the result stays on screen until dismissed. A failed
 fetch freezes the tree and shows the failed row, the exit evidence, a repair
 hint and the blocked count. `g` toggles a flat ledger of the same rows. The
-fetch's only write is its existing state file after a successful exit.
+running screen shows the gates that actually ran, and `l` opens the captured
+log of pacman's own lines. The fetch's only write is its existing state file
+after a successful exit.
 
 ### `check`
 

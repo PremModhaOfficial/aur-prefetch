@@ -2,6 +2,7 @@
 //! lays it out and never shells out.
 
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
@@ -9,10 +10,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::commands::fetch::{Gate, GateState};
 use crate::report::{ArtifactState, PrefetchReport, Snapshot, Update};
+use crate::runner::{StreamKind, StreamLine};
 use crate::util::human_bytes;
 
 use super::live::{
@@ -132,6 +135,7 @@ pub fn render_frame(
         color,
         help,
         false,
+        None,
     )
 }
 
@@ -156,6 +160,7 @@ pub fn render_live_frame(
         color,
         help,
         false,
+        None,
     )
 }
 
@@ -172,6 +177,7 @@ pub fn render_live_frame_status(
     color: bool,
     help: bool,
     ledger: bool,
+    gates: Option<&[Gate]>,
 ) -> String {
     render_with(
         snapshot,
@@ -183,6 +189,7 @@ pub fn render_live_frame_status(
         color,
         help,
         ledger,
+        gates,
     )
 }
 
@@ -198,9 +205,10 @@ pub fn render_frame_status(
     color: bool,
     help: bool,
     ledger: bool,
+    gates: Option<&[Gate]>,
 ) -> String {
     render_with(
-        snapshot, None, footer, width, height, ascii, color, help, ledger,
+        snapshot, None, footer, width, height, ascii, color, help, ledger, gates,
     )
 }
 
@@ -215,6 +223,7 @@ fn render_with(
     color: bool,
     help: bool,
     ledger: bool,
+    gates: Option<&[Gate]>,
 ) -> String {
     if width == 0 || height == 0 {
         return String::new();
@@ -223,10 +232,17 @@ fn render_with(
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test backend");
     terminal
-        .draw(|frame| draw_with(frame, snapshot, run, footer, ascii, color, help, ledger))
+        .draw(|frame| {
+            draw_with(
+                frame, snapshot, run, footer, ascii, color, help, ledger, gates,
+            )
+        })
         .expect("draw frame");
 
-    let buffer = terminal.backend().buffer();
+    buffer_text(terminal.backend().buffer(), width)
+}
+
+fn buffer_text(buffer: &Buffer, width: u16) -> String {
     let mut out = String::new();
     let mut line = String::new();
     for (index, cell) in buffer.content().iter().enumerate() {
@@ -240,6 +256,93 @@ fn render_with(
     out
 }
 
+/// Draw the captured fetch log over the frame. The newest lines that fit are
+/// shown; every line crosses the same untrusted-cell gate as the tree.
+pub fn draw_log(frame: &mut Frame, lines: &VecDeque<StreamLine>, ascii: bool, color: bool) {
+    let area = frame.area();
+    if area.width < 24 || area.height < 6 {
+        return;
+    }
+    let width = area.width.min(100);
+    let height = area.height.min(20);
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = if ascii {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_set(border::PLAIN)
+            .title("fetch log")
+    } else {
+        Block::default().borders(Borders::ALL).title("fetch log")
+    };
+    frame.render_widget(block, popup);
+    let inner = Rect::new(
+        popup.x.saturating_add(1),
+        popup.y.saturating_add(1),
+        popup.width.saturating_sub(2),
+        popup.height.saturating_sub(2),
+    );
+    let text = log_lines(
+        lines,
+        inner.width as usize,
+        inner.height as usize,
+        ascii,
+        color,
+    );
+    frame.render_widget(Paragraph::new(text), inner);
+}
+
+fn log_lines(
+    lines: &VecDeque<StreamLine>,
+    width: usize,
+    height: usize,
+    ascii: bool,
+    color: bool,
+) -> Vec<Line<'static>> {
+    if lines.is_empty() {
+        return vec![Line::styled(
+            cell_text("(no output yet)", width, ascii),
+            dim(color),
+        )];
+    }
+    let start = lines.len().saturating_sub(height);
+    lines
+        .iter()
+        .skip(start)
+        .map(|line| {
+            let style = match line.kind {
+                StreamKind::Stdout => Style::default(),
+                StreamKind::Stderr => accent(color, FAILURE),
+            };
+            Line::styled(cell_text(&line.line, width, ascii), style)
+        })
+        .collect()
+}
+
+/// The log overlay in a test backend, for goldens and sanitizer tests.
+pub fn render_log_frame(
+    lines: &VecDeque<StreamLine>,
+    width: u16,
+    height: u16,
+    ascii: bool,
+    color: bool,
+) -> String {
+    if width == 0 || height == 0 {
+        return String::new();
+    }
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("test backend");
+    terminal
+        .draw(|frame| draw_log(frame, lines, ascii, color))
+        .expect("draw log");
+    buffer_text(terminal.backend().buffer(), width)
+}
+
 pub fn draw(frame: &mut Frame, snapshot: &Snapshot, ascii: bool, color: bool, help: bool) {
     draw_with(
         frame,
@@ -250,6 +353,7 @@ pub fn draw(frame: &mut Frame, snapshot: &Snapshot, ascii: bool, color: bool, he
         color,
         help,
         false,
+        None,
     );
 }
 
@@ -270,6 +374,7 @@ pub fn draw_live(
         color,
         help,
         false,
+        None,
     );
 }
 
@@ -283,6 +388,7 @@ pub fn draw_live_status(
     color: bool,
     help: bool,
     ledger: bool,
+    gates: Option<&[Gate]>,
 ) {
     draw_with(
         frame,
@@ -293,9 +399,11 @@ pub fn draw_live_status(
         color,
         help,
         ledger,
+        gates,
     );
 }
 
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 pub fn draw_status(
     frame: &mut Frame,
     snapshot: &Snapshot,
@@ -304,8 +412,11 @@ pub fn draw_status(
     color: bool,
     help: bool,
     ledger: bool,
+    gates: Option<&[Gate]>,
 ) {
-    draw_with(frame, snapshot, None, footer, ascii, color, help, ledger);
+    draw_with(
+        frame, snapshot, None, footer, ascii, color, help, ledger, gates,
+    );
 }
 
 #[allow(clippy::too_many_arguments)] // the frame carries the full view state
@@ -318,6 +429,7 @@ fn draw_with(
     color: bool,
     help: bool,
     ledger: bool,
+    gates: Option<&[Gate]>,
 ) {
     let area = frame.area();
     if area.width < 40 || area.height < 12 {
@@ -351,8 +463,16 @@ fn draw_with(
         (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
         _ => None,
     };
+    let gate_rows = gates.map_or(0, |gates| {
+        if gates.is_empty() {
+            0
+        } else {
+            gates.len() as u16 + 1
+        }
+    });
+    let tree_height = area.height.saturating_sub(gate_rows);
     let window = match (live.as_ref(), tree.as_ref()) {
-        (Some(live), Some(Ok(tree))) => Some(live.window(tree, tree_row_budget(area.height))),
+        (Some(live), Some(Ok(tree))) => Some(live.window(tree, tree_row_budget(tree_height))),
         _ => None,
     };
 
@@ -377,6 +497,7 @@ fn draw_with(
         chunks[1].width as usize,
         color,
         ledger,
+        gates,
     );
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
@@ -564,6 +685,7 @@ fn body_lines(
     width: usize,
     color: bool,
     ledger: bool,
+    gates: Option<&[Gate]>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -574,6 +696,10 @@ fn body_lines(
             ascii,
         )));
         return lines;
+    }
+
+    if let Some(gates) = gates {
+        lines.extend(gate_lines(gates, width, ascii, color));
     }
 
     if let Some(error) = snapshot.prefetch.error() {
@@ -626,6 +752,25 @@ fn body_lines(
             width,
             ascii,
         )));
+    }
+    lines
+}
+
+/// The fetch gates, in the order they ran. A later gate after a failure is
+/// absent because it never ran; no status is invented for it.
+fn gate_lines(gates: &[Gate], width: usize, ascii: bool, color: bool) -> Vec<Line<'static>> {
+    if gates.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![Line::styled(cell_text("PRE-FLIGHT", width, ascii), bold())];
+    for gate in gates {
+        let (glyph, style) = match gate.state {
+            GateState::Pass => (if ascii { "+" } else { "✓" }, accent_bold(color, DONE)),
+            GateState::Warn => (if ascii { "!" } else { "▲" }, accent_bold(color, PLANNED)),
+            GateState::Fail => (if ascii { "x" } else { "✗" }, accent_bold(color, FAILURE)),
+        };
+        let text = format!("{glyph}  {:<8} {}", gate.name, gate.detail);
+        lines.push(Line::styled(cell_text(&text, width, ascii), style));
     }
     lines
 }
@@ -1566,6 +1711,7 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
         Line::from("? / esc close help"),
         Line::from("F       fetch downloads"),
         Line::from("g       tree/ledger"),
+        Line::from("l       fetch log"),
         Line::from("r       refresh"),
         Line::from("ctrl-c  quit with 130"),
         Line::from("ctrl-z  suspend"),
@@ -1583,14 +1729,17 @@ mod tests {
 
     use super::{
         Footer, RepairCard, display_width, render_frame, render_live_frame,
-        render_live_frame_status, repair_hint,
+        render_live_frame_status, render_log_frame, repair_hint,
     };
+    use crate::commands::fetch::Gate;
     use crate::frontier::Observed;
     use crate::report::{
         ArtifactState, Cached, PackageView, PrefetchReport, Repo, Section, Snapshot, Update,
     };
+    use crate::runner::{StreamKind, StreamLine};
     use crate::tui::live::{Activity, LiveRun};
     use crate::tui::tree::Tree;
+    use std::collections::VecDeque;
 
     fn at() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_760_000_000)
@@ -1997,6 +2146,49 @@ mod tests {
         }
     }
 
+    fn fetch_gates() -> Vec<Gate> {
+        vec![
+            Gate::pass("lock", "no lock file, no pacman process"),
+            Gate::pass("lists", "1 pending, 825 B to download"),
+            Gate::pass("cache", "/var/cache/pacman/pkg"),
+            Gate::pass(
+                "space",
+                "/var/cache/pacman/pkg: need 5.0 GiB, have 14.2 GiB",
+            ),
+            Gate::pass("space", "/: need 5.0 GiB, have 40.1 GiB"),
+        ]
+    }
+
+    fn log_fixture() -> VecDeque<StreamLine> {
+        let mut lines = VecDeque::new();
+        for (kind, line) in [
+            (StreamKind::Stdout, ":: Synchronizing package databases..."),
+            (StreamKind::Stdout, ":: Starting full system upgrade..."),
+            (StreamKind::Stderr, "error: failed retrieving file 'x'"),
+            (
+                StreamKind::Stdout,
+                "\x1b[31mdownloading\x1b[0m\tsimapp-2.0.0-1...",
+            ),
+        ] {
+            lines.push_back(StreamLine {
+                kind,
+                line: line.to_string(),
+            });
+        }
+        lines
+    }
+
+    fn long_log_fixture() -> VecDeque<StreamLine> {
+        let mut lines = log_fixture();
+        for index in 0..100 {
+            lines.push_back(StreamLine {
+                kind: StreamKind::Stdout,
+                line: format!("line {index}"),
+            });
+        }
+        lines
+    }
+
     /// Exactly 200 packages: 195 independent roots plus a done/running chain
     /// and a failed/blocked chain. The window cannot show them all.
     fn window_snapshot() -> Snapshot {
@@ -2236,6 +2428,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(
             frame.contains("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
@@ -2270,6 +2463,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(frame.contains("fetch: running"));
         assert!(frame.contains('%'));
@@ -2295,6 +2489,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(frame.contains("fetch blocked: pacman is running"));
         assert!(frame.contains("r refresh"));
@@ -2401,6 +2596,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
 
         assert!(
@@ -2439,6 +2635,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert_eq!(
             frame,
@@ -2455,6 +2652,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
         assert!(ascii.contains("! base 2.0.0-1 | exit 2"), "{ascii}");
         assert!(ascii.contains("repair: "), "{ascii}");
@@ -2483,6 +2681,7 @@ mod tests {
             false,
             false,
             false,
+            None,
         );
 
         assert!(
@@ -2508,6 +2707,7 @@ mod tests {
             false,
             false,
             true,
+            None,
         );
         assert!(frame.contains("Ledger:"), "{frame}");
         assert!(!frame.contains("├─ "), "no tree connectors\n{frame}");
@@ -2533,6 +2733,7 @@ mod tests {
             false,
             false,
             true,
+            None,
         );
         assert_eq!(
             frame,
@@ -2552,12 +2753,177 @@ mod tests {
             false,
             false,
             true,
+            None,
         );
         assert_eq!(
             tree,
             include_str!("../../tests/golden/tui-prefetch-120x40.txt")
         );
         assert!(ledger.contains("Ledger:"));
+    }
+
+    #[test]
+    fn the_fetch_frame_shows_every_gate_that_ran() {
+        let gates = fetch_gates();
+        let frame = render_live_frame_status(
+            &progress_snapshot(),
+            &fetch_run(),
+            fetch_footer(),
+            120,
+            40,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+        );
+
+        assert!(frame.contains("PRE-FLIGHT"), "{frame}");
+        for needle in ["✓  lock", "✓  lists", "✓  cache", "✓  space"] {
+            assert!(frame.contains(needle), "missing {needle:?}\n{frame}");
+        }
+        assert!(
+            frame.contains("1 pending, 825 B to download"),
+            "the lists gate carries the real plan\n{frame}"
+        );
+        assert!(
+            frame.contains("need 5.0 GiB, have 14.2 GiB"),
+            "the space gate carries the real numbers\n{frame}"
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-gates-120x40.txt")
+        );
+    }
+
+    #[test]
+    fn the_gate_frame_is_stable_at_80x24() {
+        let gates = fetch_gates();
+        let frame = render_live_frame_status(
+            &progress_snapshot(),
+            &fetch_run(),
+            fetch_footer(),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-gates-80x24.txt")
+        );
+    }
+
+    #[test]
+    fn a_refused_gate_shows_only_the_gates_that_ran() {
+        let gates = vec![
+            Gate::pass("lock", "no lock file, no pacman process"),
+            Gate::pass("lists", "1 pending, 825 B to download"),
+            Gate::pass("cache", "/var/cache/pacman/pkg"),
+            Gate::fail(
+                "space",
+                "not enough free space on /: need 5.0 GiB, have 1000 B",
+            ),
+        ];
+        let frame = super::render_frame_status(
+            &prefetch_snapshot(),
+            Footer {
+                status: Some(
+                    "fetch blocked: not enough free space on /: need 5.0 GiB, have 1000 B",
+                ),
+                keys: Some("F retry · g ledger · r refresh · q quit · ? help"),
+                failure: true,
+                repair: None,
+            },
+            120,
+            40,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+        );
+
+        assert!(frame.contains("PRE-FLIGHT"), "{frame}");
+        assert!(
+            frame.contains("✗  space"),
+            "the failed gate is named\n{frame}"
+        );
+        assert!(
+            frame.contains("not enough free space"),
+            "the exact reason is kept\n{frame}"
+        );
+        assert!(frame.contains("fetch blocked:"), "{frame}");
+    }
+
+    #[test]
+    fn a_warning_gate_is_not_a_pass() {
+        let gates = vec![
+            Gate::pass("lock", "no lock file, no pacman process"),
+            Gate::warn(
+                "lists",
+                "pacman -Qui exited 1; assuming the minimum free-space floor",
+            ),
+            Gate::pass("cache", "/var/cache/pacman/pkg"),
+            Gate::pass("space", "/: need 1.0 MiB, have 40.1 GiB"),
+        ];
+        let frame = render_live_frame_status(
+            &progress_snapshot(),
+            &fetch_run(),
+            fetch_footer(),
+            120,
+            40,
+            false,
+            false,
+            false,
+            true,
+            Some(&gates),
+        );
+
+        assert!(frame.contains("▲  lists"), "{frame}");
+        assert!(
+            frame.contains("assuming the minimum free-space floor"),
+            "{frame}"
+        );
+        assert!(
+            !frame.contains("✓  lists"),
+            "a warning is never a green check\n{frame}"
+        );
+    }
+
+    #[test]
+    fn the_log_shows_the_newest_lines_through_the_untrusted_gate() {
+        let frame = render_log_frame(&long_log_fixture(), 120, 40, false, false);
+
+        assert!(frame.contains("fetch log"), "{frame}");
+        assert!(
+            frame.contains("line 99"),
+            "the newest line is visible\n{frame}"
+        );
+        assert!(
+            !frame.contains("Synchronizing"),
+            "the tail is shown, not the head\n{frame}"
+        );
+        assert!(!frame.contains('\x1b'), "ESC is dropped\n{frame}");
+        assert!(!frame.contains('\t'), "tabs are expanded\n{frame}");
+        assert_eq!(frame, include_str!("../../tests/golden/tui-log-120x40.txt"));
+    }
+
+    #[test]
+    fn the_log_sanitizes_child_output_and_names_an_empty_log() {
+        let frame = render_log_frame(&log_fixture(), 120, 40, false, false);
+        assert!(frame.contains("downloading"), "{frame}");
+        assert!(
+            frame.contains("downloading simapp-2.0.0-1"),
+            "the tab became a space\n{frame}"
+        );
+        assert!(!frame.contains('\x1b'), "ESC is dropped\n{frame}");
+
+        let empty = render_log_frame(&VecDeque::new(), 80, 24, false, false);
+        assert!(empty.contains("(no output yet)"), "{empty}");
     }
 
     #[test]
@@ -3355,6 +3721,7 @@ mod tests {
                 false,
                 false,
                 false,
+                None,
             ),
         )
         .expect("write live fetch 120x40");
@@ -3370,6 +3737,7 @@ mod tests {
                 false,
                 false,
                 false,
+                None,
             ),
         )
         .expect("write live fetch 80x24");
@@ -3387,6 +3755,7 @@ mod tests {
                 false,
                 false,
                 false,
+                None,
             ),
         )
         .expect("write repair 120x40");
@@ -3402,6 +3771,7 @@ mod tests {
                 false,
                 false,
                 false,
+                None,
             ),
         )
         .expect("write repair 80x24");
@@ -3418,6 +3788,7 @@ mod tests {
                 false,
                 false,
                 true,
+                None,
             ),
         )
         .expect("write ledger 120x40");
@@ -3433,8 +3804,49 @@ mod tests {
                 false,
                 false,
                 true,
+                None,
             ),
         )
         .expect("write ledger 80x24");
+
+        let gates = fetch_gates();
+        std::fs::write(
+            dir.join("tui-gates-120x40.txt"),
+            render_live_frame_status(
+                &fetch,
+                &fetch_run,
+                fetch_footer(),
+                120,
+                40,
+                false,
+                false,
+                false,
+                false,
+                Some(&gates),
+            ),
+        )
+        .expect("write gates 120x40");
+        std::fs::write(
+            dir.join("tui-gates-80x24.txt"),
+            render_live_frame_status(
+                &fetch,
+                &fetch_run,
+                fetch_footer(),
+                80,
+                24,
+                false,
+                false,
+                false,
+                false,
+                Some(&gates),
+            ),
+        )
+        .expect("write gates 80x24");
+
+        std::fs::write(
+            dir.join("tui-log-120x40.txt"),
+            render_log_frame(&long_log_fixture(), 120, 40, false, false),
+        )
+        .expect("write log 120x40");
     }
 }

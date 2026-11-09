@@ -421,7 +421,7 @@ not implementation.
 
 ### T3. Actions
 
-- [ ] Fetch tree with the gate checklist and streamed lines.
+- [x] Fetch tree with the gate checklist and streamed lines.
 - [ ] Install gate overlay, news attestation, exact argv.
 - [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
 - [ ] Post-install receipt.
@@ -433,8 +433,16 @@ Done when `sim/scenarios/30-tui-readonly.sh`, `31-tui-fetch.sh`, and
 `F`, waits for a live row, quits, asserts the cache grew and `/usr` did not. 32
 opens the install gate, cancels, and asserts nothing changed.
 
-T2e runs the fetch and streams its lines, but it does not draw the T3 gate
-checklist or a log panel. Those stay open, so T3 is not ticked.
+T3a landed: the fetch action shows the PRE-FLIGHT checklist from
+`fetch::plan_observed`, so the gates run once and the TUI renders the exact
+gates that ran with their real details: the lock, the pending count and bytes,
+the resolved cache path and the free-space numbers. A failed gate ends the
+list; a later gate is never invented. `l` opens a bounded, sanitized log of
+the real child lines and `Esc` closes it before it can detach. The static
+`--render-once` frame and its goldens are unchanged. Sim 34 proves the
+checklist, a real pacman log line and the existing fetch result. The install
+gate, attached install and post-install block remain open, so T3 is not
+ticked.
 
 ### T4. Polish
 

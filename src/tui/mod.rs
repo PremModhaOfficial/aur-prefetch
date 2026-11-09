@@ -24,12 +24,13 @@ use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::flag;
 
 use crate::commands::check;
+use crate::commands::fetch::Gate;
 use crate::config::Config;
 use crate::error::Error;
 use crate::progress;
 use crate::report::Snapshot;
 use crate::runner::SystemRunner;
-use crate::tui::fetch_session::FetchSession;
+use crate::tui::fetch_session::{FetchSession, StartFailure};
 use crate::tui::tree::Tree;
 
 pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
@@ -99,6 +100,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     let mut notice: Option<Notice> = None;
     let mut help = false;
     let mut ledger = false;
+    let mut log_open = false;
     let mut dirty = true;
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -116,7 +118,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
             let tick = session
                 .as_mut()
                 .expect("a running session is present")
-                .tick(SystemTime::now());
+                .tick(SystemTime::now(), log_open);
             if tick.changed {
                 dirty = true;
             }
@@ -124,47 +126,57 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
 
         if dirty {
             terminal
-                .draw(|frame| match (session.as_ref(), notice.as_ref()) {
-                    (Some(live), _) => render::draw_live_status(
-                        frame,
-                        &snapshot,
-                        live.live(),
-                        live.footer(ascii),
-                        ascii,
-                        color,
-                        help,
-                        ledger,
-                    ),
-                    (None, Some(notice)) => render::draw_status(
-                        frame,
-                        &snapshot,
-                        render::Footer {
-                            status: Some(&notice.status),
-                            keys: Some(notice_keys(ascii)),
-                            failure: notice.failure,
-                            repair: None,
-                        },
-                        ascii,
-                        color,
-                        help,
-                        ledger,
-                    ),
-                    (None, None) => {
-                        let keys = static_keys(ascii, ledger);
-                        render::draw_status(
+                .draw(|frame| {
+                    match (session.as_ref(), notice.as_ref()) {
+                        (Some(live), _) => render::draw_live_status(
+                            frame,
+                            &snapshot,
+                            live.live(),
+                            live.footer(ascii),
+                            ascii,
+                            color,
+                            help,
+                            ledger,
+                            Some(live.gates()),
+                        ),
+                        (None, Some(notice)) => render::draw_status(
                             frame,
                             &snapshot,
                             render::Footer {
-                                status: None,
-                                keys: Some(keys),
-                                failure: false,
+                                status: Some(&notice.status),
+                                keys: Some(notice_keys(ascii)),
+                                failure: notice.failure,
                                 repair: None,
                             },
                             ascii,
                             color,
                             help,
                             ledger,
-                        )
+                            Some(&notice.gates),
+                        ),
+                        (None, None) => {
+                            let keys = static_keys(ascii, ledger);
+                            render::draw_status(
+                                frame,
+                                &snapshot,
+                                render::Footer {
+                                    status: None,
+                                    keys: Some(keys),
+                                    failure: false,
+                                    repair: None,
+                                },
+                                ascii,
+                                color,
+                                help,
+                                ledger,
+                                None,
+                            )
+                        }
+                    }
+                    if log_open {
+                        if let Some(live) = session.as_ref() {
+                            render::draw_log(frame, live.lines(), ascii, color);
+                        }
                     }
                 })
                 .map_err(|err| Error::failed(format!("cannot draw the terminal: {err}")))?;
@@ -215,6 +227,8 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                 KeyCode::Esc => {
                     if help {
                         help = false;
+                    } else if log_open {
+                        log_open = false;
                     } else if session.as_ref().is_some_and(FetchSession::running) {
                         // Detach while the command runs. No result is claimed.
                         break;
@@ -230,12 +244,20 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     ledger = !ledger;
                     dirty = true;
                 }
+                KeyCode::Char('l') => {
+                    // The log exists only after a fetch session starts.
+                    if session.is_some() {
+                        log_open = !log_open;
+                        dirty = true;
+                    }
+                }
                 KeyCode::Char('r') => {
                     if session.as_ref().is_some_and(FetchSession::running) {
                         // The live poll owns the refresh while the fetch runs.
                     } else {
                         session = None;
                         notice = None;
+                        log_open = false;
                         snapshot = collect_snapshot(config, SystemTime::now())?;
                         dirty = true;
                     }
@@ -252,8 +274,9 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             Ok(started) => {
                                 session = Some(started);
                                 notice = None;
+                                log_open = false;
                             }
-                            Err(error) => notice = Some(Notice::from_error(error)),
+                            Err(failure) => notice = Some(Notice::from_failure(failure)),
                         }
                         dirty = true;
                     }
@@ -282,18 +305,22 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
 struct Notice {
     status: String,
     failure: bool,
+    /// The gates that ran before the refusal. Empty when the action failed
+    /// before any gate, so the checklist never invents a row.
+    gates: Vec<Gate>,
 }
 
 impl Notice {
-    fn from_error(error: Error) -> Self {
-        let prefix = match &error {
+    fn from_failure(failure: StartFailure) -> Self {
+        let prefix = match &failure.error {
             Error::Blocked(_) => "fetch blocked",
             Error::Failed(_) => "fetch failed",
             Error::Interrupted => "fetch interrupted",
         };
         Self {
-            status: format!("{prefix}: {error}"),
+            status: format!("{prefix}: {}", failure.error),
             failure: true,
+            gates: failure.gates,
         }
     }
 }
@@ -321,15 +348,20 @@ fn start_fetch(
     config: &Config,
     snapshot: &Snapshot,
     now: SystemTime,
-) -> Result<FetchSession, Error> {
+) -> Result<FetchSession, StartFailure> {
+    let failure = |error: Error| StartFailure {
+        error,
+        gates: Vec::new(),
+    };
     let Some(report) = snapshot.prefetch.data() else {
         let message = snapshot
             .prefetch
             .error()
             .unwrap_or("prefetch data is not available");
-        return Err(Error::failed(message.to_string()));
+        return Err(failure(Error::failed(message.to_string())));
     };
-    let tree = Tree::build(&report.packages).map_err(|error| Error::failed(error.to_string()))?;
+    let tree =
+        Tree::build(&report.packages).map_err(|error| failure(Error::failed(error.to_string())))?;
     FetchSession::start(config, SystemRunner, tree, now)
 }
 

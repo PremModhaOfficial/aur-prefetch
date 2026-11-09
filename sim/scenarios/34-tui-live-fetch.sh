@@ -30,9 +30,11 @@ script -qec "stty rows 40 cols 120; aur-prefetch tui" /dev/null
 EOF
 chmod 755 "$driver"
 
-# One second for the static frame, F, five seconds for the paced transfer and
-# the result frame, then q. A timeout catches a TUI that never returns.
-( sleep 1; printf 'F'; sleep 5; printf 'q' ) \
+# One second for the static frame, F, four seconds for the paced transfer and
+# the result frame, l to open the captured log, one second to prove a real
+# line, esc to close the log (not detach), then q. pacman's stdout is
+# block-buffered when piped, so its lines are complete only after it exits.
+( sleep 1; printf 'F'; sleep 4; printf 'l'; sleep 1; printf '\033'; sleep 1; printf 'q' ) \
     | timeout 30 runuser -l builder -c "$driver" >"$screen" 2>&1
 status=$?
 assert_eq "$status" "0" "the TUI exited 0 after the fetch result"
@@ -59,6 +61,16 @@ assert_contains "$clean" "■" "the bar is drawn"
 assert_contains "$clean" "fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm" \
     "the status names the exact argv"
 assert_contains "$clean" "esc detach" "a running fetch offers detach only"
+
+# 1b. The gates that ran are on screen with their real inputs, and the captured
+#     log shows pacman's own line rather than a rendered guess. The delta
+#     stream skips cells whose content did not change, so a space between two
+#     words can be absent; a single word is durable.
+assert_contains "$clean" "PRE-FLIGHT" "the gate checklist is visible"
+assert_contains "$clean" "lock" "the lock gate ran"
+assert_contains "$clean" "1 pending" "the lists gate carries the real count"
+assert_contains "$clean" "fetch log" "l opens the captured log"
+assert_contains "$clean" "Synchronizing" "the log shows a real pacman line"
 
 # 2. The row becomes done from the final artifact.
 assert_contains "$clean" "✔ simapp" "the final artifact finishes the row"

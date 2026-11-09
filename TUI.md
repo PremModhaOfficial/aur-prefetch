@@ -1,8 +1,8 @@
 # TUI.md — terminal UI spec
 
-Status: **spec. T0 report layer, the T1 read-only shell and T2a–T2f are
-implemented; T3 actions and later screens are not.**
-Written 2026-11-08.
+Status: **spec. T0 report layer, the T1 read-only shell, T2a–T2f and T3's
+fetch checklist and log are implemented; the install gate and later screens
+are not.** Written 2026-11-08.
 
 Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
 explorations plus Atlas, the hillclimbed target, and a reviewed cross-tool
@@ -807,7 +807,8 @@ No fake progress. `pacman` does not emit machine-readable progress when piped,
 so the tree shows the gate checklist, the output it does emit, `.part` growth
 observed with `stat`, and elapsed time. A percentage appears only if both
 observed bytes and a known total exist. The install owns the terminal; it is not
-a captured tree.
+a captured tree. `l` opens the captured log; `Esc` closes the log first, so a
+closed log is never mistaken for a detach.
 
 ---
 
@@ -1196,9 +1197,17 @@ artifact behind the paced transfer and proves the running row, the real
 failure, the frozen frontier, the card, no install, no state write and the one
 allowed escalation.
 
+T3a landed: the fetch action renders the PRE-FLIGHT gates from
+`fetch::plan_observed`, with the real lock result, pending count and bytes,
+resolved cache path and free-space numbers. A blocked gate ends the list; a
+later gate never gets an invented status. `l` opens the bounded log of the
+real captured lines, sanitized cell by cell, and `Esc` closes the log before it
+can detach. Sim 34 proves both the checklist and a real pacman log line. The
+install gate and post-install block remain open.
+
 ### T3. Actions
 
-- [ ] Fetch tree with the gate checklist and streamed lines.
+- [x] Fetch tree with the gate checklist and streamed lines.
 - [ ] Install gate overlay, news attestation, exact argv.
 - [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
 - [ ] Post-install receipt.

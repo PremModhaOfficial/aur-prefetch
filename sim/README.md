@@ -90,7 +90,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `30-doctor-missing-aurto.sh` | an `Include` line whose aurto file is missing makes `doctor` exit 1 |
 | `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and pty quit, Ctrl-C, forced panic, and Ctrl-Z all restore the terminal |
 | `33-tui-prefetch.sh` | the prefetch frame reads the real cache: missing, cached, stale, partial and built, with no writes |
-| `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows real `.part` bytes and a bar, finishes from the final artifact, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
+| `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows the PRE-FLIGHT gates, opens the captured log with a real pacman line, shows real `.part` bytes and a bar, finishes from the final artifact, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
 | `35-tui-failure-freeze.sh` | a corrupted repo artifact behind the paced transfer makes the real fetch fail: the running row freezes, the repair card names the evidence and the hint, `/usr` is unchanged, no state is written, and only the allowed argv is escalated |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could

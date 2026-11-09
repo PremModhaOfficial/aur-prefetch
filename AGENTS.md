@@ -19,8 +19,8 @@ viewport (T2c) are landed. T2d's real cache observation source is landed in
 `src/fetch_source.rs`. T2e runs the real fetch from `F`: `src/tui/fetch_session.rs`
 streams the command on a worker, polls the real cache, and redraws on real
 changes; sim 34 proves it under a pty. T2f adds the repair card on a real
-failure and the `g` ledger; sim 35 proves both. T2 is closed; T3 actions are
-next.
+failure and the `g` ledger; sim 35 proves both. T3a adds the fetch PRE-FLIGHT
+gates and the `l` log. T2 is closed; the install gate is the next T3 slice.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -120,10 +120,11 @@ header context, not a tree row. T2b adds the live glyphs, waiting counts,
 timers, grouped summary and ANSI-16 palette. T2e streams the real fetch command
 and polls the real cache for `.part` bytes. T2f turns a nonzero exit into the
 repair card, freezes the failed row and blocked dependents, and adds the `g`
-ledger. Sim 33 proves the badges; sim 34 proves the live fetch, the real bytes
-and the one state write; sim 35 proves the failure freeze.
+ledger. T3a adds the PRE-FLIGHT gates from `fetch::plan_observed` and the `l`
+log of the real captured lines. Sim 33 proves the badges; sim 34 proves the
+live fetch, the real bytes, the gates, the log and the one state write; sim 35
+proves the failure freeze.
 
-Next action: T3. Add the fetch gate checklist and the streamed log panel, then
-the install gate overlay and post-install block. The tree reads
-`check::collect`, `progress::collect` and `fetch::plan`; it does not collect its
-own facts.
+Next action: T3. Add the install gate overlay with news attestation, then the
+attached install and post-install block. The tree reads `check::collect`,
+`progress::collect` and `fetch::plan`; it does not collect its own facts.

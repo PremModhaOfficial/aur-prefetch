@@ -10,12 +10,13 @@
 //! success. Detaching is the caller's decision: this module never kills the
 //! child and never claims its result after the UI leaves.
 
+use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::SystemTime;
 
 use crate::commands::fetch;
-use crate::commands::fetch::FetchPlan;
+use crate::commands::fetch::{FetchPlan, Gate};
 use crate::config::Config;
 use crate::error::Error;
 use crate::fetch_source::{FetchExit, FetchMonitor, failure_evidence};
@@ -27,11 +28,26 @@ use crate::tui::live::{
 use crate::tui::render::{Footer, RepairCard, repair_hint};
 use crate::tui::tree::{RowId, Tree};
 
-/// One worker message. Lines are kept for the T3 log; the exit is folded.
+/// The captured log keeps the newest lines only. A child that floods output
+/// cannot grow the session without bound.
+const LOG_LINES: usize = 400;
+const LOG_LINE_CHARS: usize = 512;
+
+/// One worker message. Lines feed the log; the exit is folded.
 #[derive(Debug)]
 enum FetchEvent {
     Line(StreamLine),
     Exit(CommandOutput),
+}
+
+/// Why [`FetchSession::start`] did not start a command.
+///
+/// The gates run in order and stop at the first block, so `gates` is exactly
+/// what ran: a later gate after a failure did not run and is absent.
+#[derive(Debug)]
+pub struct StartFailure {
+    pub error: Error,
+    pub gates: Vec<Gate>,
 }
 
 /// Where the action is. A gate refusal never reaches this type: it is a
@@ -77,6 +93,8 @@ pub struct FetchSession {
     tree: Tree,
     monitor: FetchMonitor,
     receiver: Receiver<FetchEvent>,
+    gates: Vec<Gate>,
+    lines: VecDeque<StreamLine>,
     phase: Phase,
     /// A read error from the cache scan. Shown in the footer; it never turns
     /// the command's real exit code into a different result.
@@ -93,15 +111,30 @@ pub struct FetchSession {
 impl FetchSession {
     /// Run the gates, build the monitor and start the exact fetch argv.
     ///
-    /// The gates and the argv come from [`fetch::plan`] and
+    /// The gates and the argv come from [`fetch::plan_observed`] and
     /// [`fetch::command_argv`]; this function duplicates neither.
-    pub fn start<R>(config: &Config, runner: R, tree: Tree, now: SystemTime) -> Result<Self, Error>
+    pub fn start<R>(
+        config: &Config,
+        runner: R,
+        tree: Tree,
+        now: SystemTime,
+    ) -> Result<Self, StartFailure>
     where
         R: CommandRunner + Send + 'static,
     {
-        let plan = fetch::plan(config, &runner)?;
-        let argv = fetch::command_argv(config, &runner)?;
-        let monitor = FetchMonitor::new(&tree, &plan, now)?;
+        let mut gates = Vec::new();
+        let plan = match fetch::plan_observed(config, &runner, &mut |gate| gates.push(gate)) {
+            Ok(plan) => plan,
+            Err(error) => return Err(StartFailure { error, gates }),
+        };
+        let argv = match fetch::command_argv(config, &runner) {
+            Ok(argv) => argv,
+            Err(error) => return Err(StartFailure { error, gates }),
+        };
+        let monitor = match FetchMonitor::new(&tree, &plan, now) {
+            Ok(monitor) => monitor,
+            Err(error) => return Err(StartFailure { error, gates }),
+        };
 
         let (sender, receiver) = mpsc::channel();
         let stream_argv = argv.clone();
@@ -129,6 +162,8 @@ impl FetchSession {
             tree,
             monitor,
             receiver,
+            gates,
+            lines: VecDeque::new(),
             phase: Phase::Running,
             observation_error: None,
             status,
@@ -164,22 +199,33 @@ impl FetchSession {
         &self.argv
     }
 
+    /// The gates that actually ran, in order. A later gate after a failure is
+    /// absent because it never ran.
+    pub fn gates(&self) -> &[Gate] {
+        &self.gates
+    }
+
+    /// The captured log, oldest first, bounded by [`LOG_LINES`].
+    pub fn lines(&self) -> &VecDeque<StreamLine> {
+        &self.lines
+    }
+
     /// The action line and the keys that are legal in this phase.
     pub fn footer(&self, ascii: bool) -> Footer<'_> {
         let keys = match (&self.phase, ascii) {
-            (Phase::Running, false) => "esc detach · g ledger · ? help",
-            (Phase::Running, true) => "esc detach | g ledger | ? help",
+            (Phase::Running, false) => "esc detach · g ledger · l log · ? help",
+            (Phase::Running, true) => "esc detach | g ledger | l log | ? help",
             (Phase::Finished { .. }, false) => {
-                "esc dismiss · F fetch again · g ledger · q quit · ? help"
+                "esc dismiss · F fetch again · g ledger · l log · q quit · ? help"
             }
             (Phase::Finished { .. }, true) => {
-                "esc dismiss | F fetch again | g ledger | q quit | ? help"
+                "esc dismiss | F fetch again | g ledger | l log | q quit | ? help"
             }
             (Phase::Failed { .. }, false) => {
-                "esc dismiss · F fetch again · g ledger · q quit · ? help"
+                "esc dismiss · F fetch again · g ledger · l log · q quit · ? help"
             }
             (Phase::Failed { .. }, true) => {
-                "esc dismiss | F fetch again | g ledger | q quit | ? help"
+                "esc dismiss | F fetch again | g ledger | l log | q quit | ? help"
             }
         };
         Footer {
@@ -194,13 +240,17 @@ impl FetchSession {
     ///
     /// The clock is `at`, supplied by the caller. A frozen run stops moving,
     /// so a failure never animates.
-    pub fn tick(&mut self, at: SystemTime) -> Tick {
+    pub fn tick(&mut self, at: SystemTime, log_open: bool) -> Tick {
         let mut tick = Tick::quiet();
+        let mut new_lines = false;
         loop {
             match self.receiver.try_recv() {
                 Ok(FetchEvent::Line(line)) => {
-                    // The log is T2f. A line alone does not change the tree.
-                    let _ = line;
+                    self.lines.push_back(bounded_line(line));
+                    while self.lines.len() > LOG_LINES {
+                        self.lines.pop_front();
+                    }
+                    new_lines = true;
                 }
                 Ok(FetchEvent::Exit(output)) => {
                     self.fold_exit(output, at, &mut tick);
@@ -236,6 +286,11 @@ impl FetchSession {
                     tick.changed = true;
                 }
             }
+        }
+
+        // A line only changes the visible frame while the log is open.
+        if log_open && new_lines {
+            tick.changed = true;
         }
 
         let key = self.frame_key();
@@ -335,6 +390,15 @@ impl FetchSession {
     }
 }
 
+/// Keep one captured line small enough that the bounded log stays bounded in
+/// bytes too. The renderer's cell gate handles control characters later.
+fn bounded_line(mut line: StreamLine) -> StreamLine {
+    if line.line.chars().count() > LOG_LINE_CHARS {
+        line.line = line.line.chars().take(LOG_LINE_CHARS).collect();
+    }
+    line
+}
+
 /// The visible state, at a coarser grain than the whole frame. A tick that
 /// does not change it does not redraw.
 type RowKey = (
@@ -368,12 +432,12 @@ mod tests {
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::{Duration, UNIX_EPOCH};
 
-    use super::{FetchSession, Phase};
+    use super::{FetchSession, LOG_LINE_CHARS, Phase};
     use crate::config::Config;
     use crate::error::Error;
     use crate::frontier::NodeState;
     use crate::report::{ArtifactState, PackageView, Repo};
-    use crate::runner::{CommandOutput, CommandRunner, FakeRunner, StreamLine};
+    use crate::runner::{CommandOutput, CommandRunner, FakeRunner, StreamKind, StreamLine};
     use crate::tui::tree::Tree;
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -540,8 +604,8 @@ mod tests {
         .err()
         .expect("lock gate");
 
-        assert!(matches!(error, Error::Blocked(_)));
-        assert!(error.to_string().contains("pacman is running"));
+        assert!(matches!(error.error, Error::Blocked(_)));
+        assert!(error.error.to_string().contains("pacman is running"));
         assert_eq!(
             fake.calls(),
             vec![(
@@ -571,9 +635,100 @@ mod tests {
             footer.status,
             Some("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm")
         );
-        assert_eq!(footer.keys, Some("esc detach · g ledger · ? help"));
+        assert_eq!(footer.keys, Some("esc detach · g ledger · l log · ? help"));
         assert!(!footer.failure);
         assert!(session.running());
+    }
+
+    #[test]
+    fn a_start_records_the_gates_that_actually_ran() {
+        let fixture = Fixture::new();
+        let fake = Arc::new(FakeRunner::new());
+        fixture.queue_gates(&fake);
+        fake.push_stream(0, &[], &[]);
+
+        let session = FetchSession::start(
+            &fixture.config,
+            BlockingRunner::new(Arc::clone(&fake)),
+            fixture.tree(),
+            at(1),
+        )
+        .expect("session starts");
+
+        let gates = session.gates();
+        let names: Vec<&str> = gates.iter().map(|gate| gate.name).collect();
+        assert_eq!(names, ["lock", "lists", "cache", "space", "space"]);
+        assert!(
+            gates
+                .iter()
+                .all(|gate| gate.state == crate::commands::fetch::GateState::Pass),
+            "all gates passed: {gates:?}"
+        );
+        assert!(
+            gates[1].detail.contains("1 pending"),
+            "the real pending count: {}",
+            gates[1].detail
+        );
+    }
+
+    #[test]
+    fn a_refused_start_keeps_the_gates_it_reached() {
+        let fixture = Fixture::new();
+        fs::write(fixture.root.join("db.lck"), "").expect("lock");
+        let fake = Arc::new(FakeRunner::new());
+        fake.push_output(ok("1234\n"));
+
+        let failure = FetchSession::start(
+            &fixture.config,
+            BlockingRunner::new(Arc::clone(&fake)),
+            fixture.tree(),
+            at(1),
+        )
+        .err()
+        .expect("lock gate");
+
+        assert!(matches!(failure.error, Error::Blocked(_)));
+        assert_eq!(failure.gates.len(), 1, "only the lock gate ran");
+        assert_eq!(
+            failure.gates[0].state,
+            crate::commands::fetch::GateState::Fail
+        );
+        assert!(failure.gates[0].detail.contains("pacman is running"));
+    }
+
+    #[test]
+    fn the_captured_log_keeps_real_lines_in_order() {
+        let fixture = Fixture::new();
+        let fake = Arc::new(FakeRunner::new());
+        fixture.queue_gates(&fake);
+        fake.push_stream(0, &["first line", "second line"], &["stderr line"]);
+        let runner = BlockingRunner::new(Arc::clone(&fake));
+
+        let mut session =
+            FetchSession::start(&fixture.config, runner.clone(), fixture.tree(), at(1))
+                .expect("session starts");
+        runner.release();
+        assert!(wait_until(|| {
+            session.tick(at(2), false);
+            !session.running()
+        }));
+
+        let lines: Vec<&str> = session
+            .lines()
+            .iter()
+            .map(|line| line.line.as_str())
+            .collect();
+        assert_eq!(lines, ["first line", "second line", "stderr line"]);
+    }
+
+    #[test]
+    fn one_log_line_is_bounded() {
+        let long = "x".repeat(LOG_LINE_CHARS + 100);
+        let line = super::bounded_line(StreamLine {
+            kind: StreamKind::Stdout,
+            line: long,
+        });
+        assert_eq!(line.line.chars().count(), LOG_LINE_CHARS);
     }
 
     #[test]
@@ -589,7 +744,7 @@ mod tests {
                 .expect("session starts");
 
         fs::write(fixture.part(), [0u8; 400]).expect("write part");
-        let tick = session.tick(at(2));
+        let tick = session.tick(at(2), false);
         assert!(tick.changed);
         assert_eq!(session.live().state("tool"), Some(NodeState::Running));
         let view = crate::tui::live::LiveView::build(session.tree(), session.live());
@@ -605,13 +760,13 @@ mod tests {
         assert_eq!(progress.total(), 1000);
 
         fs::rename(fixture.part(), fixture.final_artifact()).expect("rename");
-        let tick = session.tick(at(3));
+        let tick = session.tick(at(3), false);
         assert!(tick.changed);
         assert_eq!(session.live().state("tool"), Some(NodeState::Done));
 
         runner.release();
         assert!(wait_until(|| {
-            session.tick(at(4));
+            session.tick(at(4), false);
             !session.running()
         }));
         assert!(matches!(session.phase(), Phase::Finished { unproven: 0 }));
@@ -619,7 +774,7 @@ mod tests {
         assert_eq!(footer.status, Some("fetch: exit 0"));
         assert_eq!(
             footer.keys,
-            Some("esc dismiss · F fetch again · g ledger · q quit · ? help")
+            Some("esc dismiss · F fetch again · g ledger · l log · q quit · ? help")
         );
         assert!(!footer.failure);
         let state = fs::read_to_string(fixture.root.join("state.json")).expect("state file");
@@ -643,7 +798,7 @@ mod tests {
         session.tree(); // the tree stays available for the result frame
         runner.release();
         assert!(wait_until(|| {
-            session.tick(at(2));
+            session.tick(at(2), false);
             !session.running()
         }));
 
@@ -690,12 +845,12 @@ mod tests {
             FetchSession::start(&fixture.config, runner.clone(), fixture.tree(), at(1))
                 .expect("session starts");
         fs::write(fixture.part(), [0u8; 400]).expect("write part");
-        assert!(session.tick(at(2)).changed);
+        assert!(session.tick(at(2), false).changed);
         assert_eq!(session.live().state("tool"), Some(NodeState::Running));
 
         runner.release();
         assert!(wait_until(|| {
-            session.tick(at(3));
+            session.tick(at(3), false);
             !session.running()
         }));
 
@@ -732,7 +887,7 @@ mod tests {
         let mut session =
             FetchSession::start(&fixture.config, runner.clone(), fixture.tree(), at(1))
                 .expect("session starts");
-        assert!(!session.tick(at(2)).changed);
+        assert!(!session.tick(at(2), false).changed);
     }
 
     #[test]
@@ -747,10 +902,10 @@ mod tests {
             FetchSession::start(&fixture.config, runner.clone(), fixture.tree(), at(1))
                 .expect("session starts");
         fs::remove_dir_all(&fixture.cache).expect("remove cache");
-        assert!(session.tick(at(2)).changed);
+        assert!(session.tick(at(2), false).changed);
         runner.release();
         assert!(wait_until(|| {
-            session.tick(at(3));
+            session.tick(at(3), false);
             !session.running()
         }));
 

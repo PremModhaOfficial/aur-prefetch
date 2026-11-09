@@ -38,6 +38,8 @@ pub fn sanitize_cell(input: &str) -> String {
                 }
                 _ => {}
             },
+            // The spec expands tabs; every other control character is dropped.
+            '\t' => out.push(' '),
             ch if ch.is_control() => {}
             ch if is_bidi(ch) => {}
             _ => out.push(ch),
@@ -114,6 +116,12 @@ fn is_bidi(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{cell_text, display_width, sanitize_cell, to_ascii, truncate_width};
+
+    #[test]
+    fn expands_tabs_and_drops_other_controls() {
+        assert_eq!(sanitize_cell("a\tb"), "a b");
+        assert_eq!(sanitize_cell("a\u{7}b"), "ab");
+    }
 
     #[test]
     fn strips_csi_sequences() {
