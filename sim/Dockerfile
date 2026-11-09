@@ -14,7 +14,7 @@ WORKDIR /src
 # Manifest first so dependency compilation survives src-only changes.
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --release --locked
+RUN cargo build --release --locked --features sim-hooks
 
 FROM archlinux:base-devel
 

@@ -298,7 +298,7 @@ error. Section failures such as an unavailable `yay` render as their own line.
 - [x] Header, footer, help, quit, `--render-once`, `--ascii`, `NO_COLOR`.
 - [x] `sanitize_cell` and width-aware truncation; raw child output never reaches
       a cell.
-- [ ] Ctrl-C, Ctrl-Z, SIGTERM, SIGHUP, panic, bracketed paste and the Esc
+- [x] Ctrl-C, Ctrl-Z, SIGTERM, SIGHUP, panic, bracketed paste and the Esc
       timeout handled without leaving raw mode on.
 - [x] The tree at 80×24 and 120×40. No dashboard.
 
@@ -306,9 +306,8 @@ Done when golden frames exist at 80×24 and 120×40; interactive non-tty exits 2
 while `--render-once` is exempt; a forced panic leaves the terminal restored;
 ASCII has no non-ASCII bytes.
 
-T1 shell landed. The pty scenario proves a normal quit restores the terminal
-and Ctrl-C exits 130. A forced panic and a Ctrl-Z pty check remain before T1
-closes.
+T1 closed. Sim 31 proves a normal quit, Ctrl-C exit 130, a forced-panic restore,
+and Ctrl-Z re-entry/clear with raw mode restored.
 
 ### T2. The tree
 

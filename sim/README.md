@@ -44,6 +44,10 @@ Requires Docker or Podman. The container runs with `--network none`.
   under `/usr/local/lib/sim/fixtures`
 - `/usr/local/bin/aur-prefetch`, built inside the image so the glibc matches
 
+The sim binary is built with the `sim-hooks` feature. It adds one env-gated
+forced panic after the terminal guard is active, used to prove the panic hook
+restores the pty. A packaged build does not enable the feature.
+
 No mirrors, no keys, no network at scenario time. If a scenario needs another
 package, add it to `sim/make-repo.sh`, do not open the network.
 
@@ -81,7 +85,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `28-doctor-symlinked-cache.sh` | a symlinked `CacheDir` is resolved before checking `alpm` traversal |
 | `29-init-visudo-root.sh` | root `visudo -cf` accepts the user-owned temp rule that `init` validates through sudo |
 | `30-doctor-missing-aurto.sh` | an `Include` line whose aurto file is missing makes `doctor` exit 1 |
-| `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and a pty quit restores the terminal |
+| `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and pty quit, Ctrl-C, forced panic, and Ctrl-Z all restore the terminal |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

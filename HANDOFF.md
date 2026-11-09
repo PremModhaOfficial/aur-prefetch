@@ -1,6 +1,6 @@
 # HANDOFF.md
 
-Updated 2026-11-08. Orientation for a fresh agent. The plan is
+Updated 2026-11-09. Orientation for a fresh agent. The plan is
 [`NEXT.md`](NEXT.md), the rules are [`AGENTS.md`](AGENTS.md). This file only
 covers where things stand and the first move. Do not re-plan.
 
@@ -16,24 +16,20 @@ covers where things stand and the first move. Do not re-plan.
   `Config`, and frozen `check` text. The full CI and all 31 sim scenarios pass.
 - Phase 7 T1's shell is landed: `aur-prefetch tui`, `--render-once`, `--ascii`,
   `NO_COLOR`, the Drop guard, the panic hook, the static tree frame, the
-  sanitizer, and sim `31-tui-readonly.sh`. The pty check proves a normal quit
-  restores the terminal and Ctrl-C exits 130.
+  sanitizer, and sim `31-tui-readonly.sh`. The pty checks prove a normal quit,
+  Ctrl-C exit 130, a forced-panic restore, and Ctrl-Z re-entry/clear with raw
+  mode restored.
 - The DAG execution model is landed in `docs/ANIMATION.md`: states, readiness,
   parallel fronts, replay, and the `.part` byte source. `TUI.md` and
   `PROGRESS.md` now point at it.
 - The T1 read-only shell is implemented. The prefetch/install progress tree is
   still **specified, not implemented**: `TUI.md` (shell, keys, actions) and
   `PROGRESS.md` (progress screen). `prototype/` holds the design sketches.
-- `NEXT.md` Phase 7 is the TUI order of work. T1 is open only for the forced
-  panic and Ctrl-Z pty checks; T2 is next.
+- `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is next.
 
-## Do this first: close T1, then T2
+## Do this first: T2
 
-1. Add a forced-panic path for the test binary and a pty check that `stty -a`
-   still has `icanon` after the panic.
-2. Add a Ctrl-Z pty check: send SIGTSTP, resume with SIGCONT, and assert the
-   next frame draws and raw mode is back.
-3. Then start T2: prefetch badges, the ghost install branch, live fetch, no
+1. Start T2: prefetch badges, the ghost install branch, live fetch, no
    duplicate nodes, and the failure freeze. Use `check::collect` and
    `fetch::plan`; do not add a second collector. Implement the ready-frontier
    reducer from `docs/ANIMATION.md`; the ready set is a set, not a queue.

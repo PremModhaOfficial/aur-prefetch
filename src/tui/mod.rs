@@ -70,6 +70,15 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     guard::install_panic_hook();
     let mut guard = guard::Guard::enter()
         .map_err(|err| Error::failed(format!("cannot enter the terminal: {err}")))?;
+
+    // The sim image is built with `sim-hooks`; a packaged build never enables
+    // it. This panics after raw mode and the alternate screen are active, so
+    // the pty check proves the panic hook restores the terminal.
+    #[cfg(feature = "sim-hooks")]
+    if std::env::var_os("AUR_PREFETCH_TUI_TEST_PANIC").is_some() {
+        panic!("forced TUI panic for terminal-restore test");
+    }
+
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
         .map_err(|err| Error::failed(format!("cannot start the terminal: {err}")))?;
     let mut snapshot = check::collect(config, &SystemRunner, SystemTime::now())?;
