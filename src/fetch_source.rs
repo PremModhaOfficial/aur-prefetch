@@ -16,12 +16,17 @@
 //!   exit code and a stderr excerpt. The reducer then freezes and blocks
 //!   dependents.
 //!
-//! A zero exit code marks a running node done only when a final artifact
-//! exists. It never turns the remaining pending nodes into successes: AUR
-//! packages are not downloaded by `fetch`, and cached or built packages were
-//! already seeded `NoWork` by [`LiveRun::plan`]. A running node without a
-//! final artifact stays running, so the caller can report the mismatch instead
-//! of the model inventing one.
+//! A final artifact standing alone is proof the download finished even when a
+//! poll missed the `.part`: a tiny package can create and rename it between
+//! two polls. A pending or ready node with a final artifact is recorded as
+//! started and finished in that order, with the filename as evidence.
+//!
+//! A zero exit code finishes a running node only when a final artifact exists.
+//! It never turns the remaining pending nodes into successes: AUR packages are
+//! not downloaded by `fetch`, and cached or built packages were already seeded
+//! `NoWork` by [`LiveRun::plan`]. A running node without a final artifact stays
+//! running, so the caller can report the mismatch instead of the model
+//! inventing one.
 //!
 //! Cache filenames are matched with [`entry_version`], the parser
 //! `progress::collect` already uses, against every package name in the tree.
@@ -95,7 +100,10 @@ impl FetchMonitor {
     /// This reads no directory and runs no command. Cached and built rows are
     /// seeded `NoWork` by [`LiveRun::plan`], exactly as the pure view expects.
     pub fn new(tree: &Tree, plan: &FetchPlan, at: SystemTime) -> Result<Self, Error> {
-        let run = LiveRun::plan(tree, at).map_err(frontier_error)?;
+        // Downloads are independent and pacman starts them in parallel. The
+        // dependency edges stay on the graph for failure blocking; they do not
+        // serialize the transfer.
+        let run = LiveRun::plan_concurrent(tree, at).map_err(frontier_error)?;
         let known = tree
             .rows
             .iter()
@@ -160,8 +168,35 @@ impl FetchMonitor {
                     );
                     self.bytes.insert(package.name.clone(), partial.bytes);
                 }
-            } else if is_running {
-                if let Some(file_name) = scan.finals.get(&package.name) {
+            } else if let Some(file_name) = scan.finals.get(&package.name) {
+                if is_running {
+                    transitions.extend(
+                        self.run
+                            .observe(
+                                &package.name,
+                                Observed::Finished,
+                                at,
+                                None,
+                                format!("artifact {file_name}"),
+                            )
+                            .map_err(frontier_error)?,
+                    );
+                    self.bytes.remove(&package.name);
+                } else if matches!(state, Some(NodeState::Pending | NodeState::Ready)) {
+                    // The `.part` came and went between polls. The final
+                    // artifact is the proof; record the start and the finish
+                    // in that order, never a fake Pending-to-Done edge.
+                    transitions.extend(
+                        self.run
+                            .observe(
+                                &package.name,
+                                Observed::Started,
+                                at,
+                                Some(Activity::Download),
+                                format!("artifact {file_name} appeared"),
+                            )
+                            .map_err(frontier_error)?,
+                    );
                     transitions.extend(
                         self.run
                             .observe(
@@ -178,6 +213,9 @@ impl FetchMonitor {
             }
         }
 
+        // A tick may reveal an elapsed label that crossed the one-second
+        // floor. It moves no glyph, bar or counter.
+        self.run.advance(at);
         Ok(transitions)
     }
 
@@ -198,8 +236,9 @@ impl FetchMonitor {
         }
         self.sealed = true;
 
-        let running: Vec<String> = self.run.graph().running.iter().cloned().collect();
         let mut transitions = Vec::new();
+        let running: Vec<String> = self.run.graph().running.iter().cloned().collect();
+        self.run.advance(at);
 
         if exit.code != 0 {
             let evidence = failure_evidence(exit.code, &exit.stderr);
@@ -214,21 +253,59 @@ impl FetchMonitor {
         }
 
         let scan = self.scan()?;
-        for name in running {
+        let states: Vec<(String, NodeState)> = self
+            .known
+            .iter()
+            .filter_map(|package| {
+                self.run
+                    .state(&package.name)
+                    .map(|state| (package.name.clone(), state))
+            })
+            .collect();
+        for (name, state) in states {
             let Some(file_name) = scan.finals.get(&name) else {
                 continue;
             };
-            transitions.extend(
-                self.run
-                    .observe(
-                        &name,
-                        Observed::Finished,
-                        at,
-                        None,
-                        format!("artifact {file_name}"),
-                    )
-                    .map_err(frontier_error)?,
-            );
+            match state {
+                NodeState::Running => {
+                    transitions.extend(
+                        self.run
+                            .observe(
+                                &name,
+                                Observed::Finished,
+                                at,
+                                None,
+                                format!("artifact {file_name}"),
+                            )
+                            .map_err(frontier_error)?,
+                    );
+                }
+                NodeState::Pending | NodeState::Ready => {
+                    transitions.extend(
+                        self.run
+                            .observe(
+                                &name,
+                                Observed::Started,
+                                at,
+                                Some(Activity::Download),
+                                format!("artifact {file_name} appeared"),
+                            )
+                            .map_err(frontier_error)?,
+                    );
+                    transitions.extend(
+                        self.run
+                            .observe(
+                                &name,
+                                Observed::Finished,
+                                at,
+                                None,
+                                format!("artifact {file_name}"),
+                            )
+                            .map_err(frontier_error)?,
+                    );
+                }
+                _ => continue,
+            }
             self.bytes.remove(&name);
         }
         Ok(transitions)
@@ -312,7 +389,7 @@ fn frontier_error(error: FrontierError) -> Error {
 }
 
 /// `exit N: <first non-empty stderr line>`, trimmed to a bounded excerpt.
-fn failure_evidence(code: i32, stderr: &str) -> String {
+pub fn failure_evidence(code: i32, stderr: &str) -> String {
     let excerpt = stderr
         .lines()
         .map(str::trim)
@@ -669,6 +746,124 @@ mod tests {
         let transitions = monitor.poll(at(3)).expect("poll");
         assert!(transitions.is_empty());
         assert_eq!(monitor.live().graph().last_seq, seq);
-        assert_eq!(monitor.live().clock(), at(2));
+        assert_eq!(
+            monitor.live().clock(),
+            at(3),
+            "the tick clock moved; no state did"
+        );
+    }
+
+    #[test]
+    fn a_final_artifact_finishes_a_pending_node_whose_part_was_never_seen() {
+        let fixture = Fixture::new();
+        let tree =
+            Tree::build(&[package("tool", ArtifactState::Missing, Some(1000), &[])]).expect("tree");
+        let mut monitor = FetchMonitor::new(&tree, &fixture.plan(), at(1)).expect("monitor");
+        assert_eq!(monitor.live().state("tool"), Some(NodeState::Ready));
+
+        fixture.write(FINAL, &[0; 1000]);
+        let transitions = monitor.poll(at(2)).expect("poll");
+
+        assert!(
+            transitions
+                .iter()
+                .any(|transition| transition.to == NodeState::Running),
+            "the artifact records a real start before the finish"
+        );
+        assert!(
+            transitions
+                .iter()
+                .any(|transition| transition.to == NodeState::Done),
+            "the artifact finishes the node"
+        );
+        assert_eq!(monitor.live().state("tool"), Some(NodeState::Done));
+    }
+
+    #[test]
+    fn finish_finishes_a_ready_node_from_a_final_artifact() {
+        let fixture = Fixture::new();
+        let tree =
+            Tree::build(&[package("tool", ArtifactState::Missing, Some(1000), &[])]).expect("tree");
+        let mut monitor = FetchMonitor::new(&tree, &fixture.plan(), at(1)).expect("monitor");
+
+        fixture.write(FINAL, &[0; 1000]);
+        monitor
+            .finish(
+                FetchExit {
+                    code: 0,
+                    stderr: String::new(),
+                },
+                at(2),
+            )
+            .expect("finish");
+
+        assert_eq!(monitor.live().state("tool"), Some(NodeState::Done));
+        assert!(!monitor.live().graph().frozen);
+    }
+
+    #[test]
+    fn a_nonzero_exit_with_no_running_node_freezes_nothing_and_keeps_the_evidence() {
+        let fixture = Fixture::new();
+        let tree =
+            Tree::build(&[package("tool", ArtifactState::Missing, Some(1000), &[])]).expect("tree");
+        let mut monitor = FetchMonitor::new(&tree, &fixture.plan(), at(1)).expect("monitor");
+
+        let transitions = monitor
+            .finish(
+                FetchExit {
+                    code: 1,
+                    stderr: "error: failed to synchronise any database".to_string(),
+                },
+                at(2),
+            )
+            .expect("finish");
+
+        assert!(transitions.is_empty());
+        assert!(!monitor.live().graph().frozen);
+        assert_eq!(monitor.live().state("tool"), Some(NodeState::Ready));
+        assert_eq!(
+            super::failure_evidence(1, "error: failed to synchronise any database"),
+            "exit 1: error: failed to synchronise any database"
+        );
+    }
+
+    #[test]
+    fn a_diamond_downloads_both_children_before_the_base_finishes() {
+        let fixture = Fixture::new();
+        let tree = Tree::build(&[
+            package("base", ArtifactState::Missing, Some(1000), &[]),
+            package("left", ArtifactState::Missing, Some(1000), &["base"]),
+            package("right", ArtifactState::Missing, Some(1000), &["base"]),
+            package(
+                "join",
+                ArtifactState::Missing,
+                Some(1000),
+                &["left", "right"],
+            ),
+        ])
+        .expect("tree");
+        let mut monitor = FetchMonitor::new(&tree, &fixture.plan(), at(1)).expect("monitor");
+
+        fixture.write("base-2.0.0-1-x86_64.pkg.tar.zst.part", &[0; 10]);
+        monitor.poll(at(2)).expect("poll");
+        fixture.write("left-2.0.0-1-x86_64.pkg.tar.zst.part", &[0; 10]);
+        fixture.write("right-2.0.0-1-x86_64.pkg.tar.zst.part", &[0; 10]);
+        monitor.poll(at(3)).expect("poll");
+
+        assert_eq!(monitor.live().state("base"), Some(NodeState::Running));
+        assert_eq!(monitor.live().state("left"), Some(NodeState::Running));
+        assert_eq!(monitor.live().state("right"), Some(NodeState::Running));
+        assert_eq!(monitor.live().state("join"), Some(NodeState::Pending));
+
+        fs::rename(
+            fixture.path("base-2.0.0-1-x86_64.pkg.tar.zst.part"),
+            fixture.path("base-2.0.0-1-x86_64.pkg.tar.zst"),
+        )
+        .expect("rename base");
+        monitor.poll(at(4)).expect("poll");
+        assert_eq!(monitor.live().state("base"), Some(NodeState::Done));
+        assert_eq!(monitor.live().state("left"), Some(NodeState::Running));
+        assert_eq!(monitor.live().state("right"), Some(NodeState::Running));
+        assert_eq!(monitor.live().state("join"), Some(NodeState::Pending));
     }
 }

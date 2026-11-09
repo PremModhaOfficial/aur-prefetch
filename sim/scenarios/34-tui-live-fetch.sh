@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# The live fetch is the real fetch: F runs the allowed argv and the tree reads
+# real `.part` bytes from the pacman cache.
+#
+# The sim pacman config adds one transfer hook that writes the package `.part`
+# in two chunks with a pause. pacman still chooses the argv, creates the
+# `.part` path, verifies the package, and renames it; the hook only paces the
+# local copy so the 100 ms poll can see it.
+source /usr/local/lib/sim/lib.sh
+
+echo "scenario: live fetch streams real bytes from the real cache"
+
+cache=/var/cache/pacman/pkg
+package=simapp-2.0.0-1-x86_64.pkg.tar.zst
+state_dir=/home/builder/.local/state/aur-prefetch
+screen=$(mktemp)
+driver=$(mktemp)
+
+before_usr=$(usr_state)
+before_pkgs=$(pkg_state)
+
+cp /usr/local/lib/sim/fixtures/pacman-slow-xfer.conf /etc/pacman.conf
+rm -f "$cache"/simapp-*
+rm -rf "$state_dir"
+: >/var/log/sim-sudo.log
+
+cat >"$driver" <<'EOF'
+#!/bin/bash
+script -qec "stty rows 40 cols 120; aur-prefetch tui" /dev/null
+EOF
+chmod 755 "$driver"
+
+# One second for the static frame, F, five seconds for the paced transfer and
+# the result frame, then q. A timeout catches a TUI that never returns.
+( sleep 1; printf 'F'; sleep 5; printf 'q' ) \
+    | timeout 30 runuser -l builder -c "$driver" >"$screen" 2>&1
+status=$?
+assert_eq "$status" "0" "the TUI exited 0 after the fetch result"
+
+# `script` records a delta stream. Strip the CSI sequences so a row written
+# across several cells can be asserted as one string.
+clean=$(sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b[()][A-Za-z0-9]//g' "$screen" | tr -d '\r')
+
+# 1. A running row with real `.part` bytes and a bar. The package size depends
+#    on the builddate the repo was produced with, so derive it from the real
+#    repo file. The paced transfer writes the first half, so both sizes are
+#    observed and the bar is drawn. The live footer names the exact command.
+total=$(stat -c %s "/srv/simrepo/$package")
+half=$((total / 2))
+pct=$(awk -v h="$half" -v t="$total" 'BEGIN { printf "%.1f%%", h * 100 / t }')
+assert_contains "$clean" "downloading" "the row is downloading"
+assert_contains "$clean" "$total B" "the row shows the real total"
+assert_contains "$clean" "$half B" "the row shows the observed .part size"
+# The first poll can catch the `.part` mid-copy, and ratatui's delta stream
+# then rewrites only the changed digits. The half-to-total ratio is durable
+# proof that both real sizes were observed.
+assert_contains "$clean" "$pct" "the percentage needs both observed sizes"
+assert_contains "$clean" "■" "the bar is drawn"
+assert_contains "$clean" "fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm" \
+    "the status names the exact argv"
+assert_contains "$clean" "esc detach" "a running fetch offers detach only"
+
+# 2. The row becomes done from the final artifact.
+assert_contains "$clean" "✔ simapp" "the final artifact finishes the row"
+assert_contains "$clean" "done" "the row says done"
+assert_contains "$clean" "exit 0" "the result footer carries the real exit"
+assert_contains "$clean" "F fetch again" "the result offers another fetch"
+
+# 3. /usr and the installed package set are unchanged.
+assert_eq "$(usr_state)" "$before_usr" "the live fetch left /usr unchanged"
+assert_eq "$(pkg_state)" "$before_pkgs" "the live fetch installed nothing"
+assert_eq "$(installed_version)" "1.0.0-1" "the pending upgrade is still pending"
+
+# 4. The cache changed only through the fetch, and it holds exactly the final
+#    artifact. No `.part` is left and the bytes match the repo.
+assert_eq "$(cache_files)" "$package" "the cache holds only the fetched package"
+assert_false "no partial file is left behind" test -e "$cache/$package.part"
+assert_true "the fetched bytes match the local repo" cmp -s "$cache/$package" "/srv/simrepo/$package"
+
+# 5. The only state write is fetch's existing file, written after success.
+state_files=$(find "$state_dir" -type f -printf '%P\n' 2>/dev/null | sort)
+assert_eq "$state_files" "state.json" "the TUI wrote only fetch's state file"
+assert_contains "$(cat "$state_dir/state.json" 2>/dev/null)" '"last_fetch_pending":1' \
+    "fetch recorded the one pending package"
+assert_eq "$(find /home/builder/.local/state -type f -printf '%P\n' 2>/dev/null | sort)" \
+    "aur-prefetch/state.json" "no other state file appeared"
+
+# 6. The only escalation is the one sudoers allows. No install, no AUR build,
+#    and no second pacman argv.
+assert_eq "$(grep -c . /var/log/sim-sudo.log 2>/dev/null || true)" "1" \
+    "the TUI escalated exactly once"
+assert_contains "$(cat /var/log/sim-sudo.log)" \
+    "-n /usr/bin/pacman -Syuw --noconfirm" "the one escalation is the fetch argv"
+assert_false "the live fetch never runs an AUR build" yay_built_something
+
+finish

@@ -1,7 +1,8 @@
 # TUI.md — terminal UI spec
 
-Status: **spec. T0 report layer and the T1 read-only shell are implemented; T2
-and later screens are not.** Written 2026-11-08.
+Status: **spec. T0 report layer, the T1 read-only shell and T2a–T2e are
+implemented; the repair card, the ledger and later screens are not.**
+Written 2026-11-08.
 
 Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
 explorations plus Atlas, the hillclimbed target, and a reviewed cross-tool
@@ -167,9 +168,11 @@ fn run_interactive(&self, program: &str, args: &[&str]) -> Result<i32, Error>;
 It inherits stdio and returns the exit code; `SystemRunner` and `FakeRunner`
 already implement it. Reuse it. Do not add a second "attached" method.
 
-Fetch is capture-only today. If the TUI needs live lines, add one streaming
-method with an explicit channel; the default stays capture. Attached commands
-run on the main thread so the terminal state has one owner.
+Fetch is capture-only. The one streaming method is
+`CommandRunner::run_streaming`: it takes an explicit line callback, returns the
+same captured `CommandOutput`, and its default falls back to `run`. The TUI
+runs the fetch on a worker with that method; attached commands still run on the
+main thread so the terminal state has one owner.
 
 ### T6. No cargo feature gate
 
@@ -1118,7 +1121,7 @@ commit of T0.
 
 - [x] `src/report.rs`: `Snapshot`, `Section<T>`, per-domain structs.
 - [x] `check`, `fetch`, `clean`: split `collect` from text rendering.
-- [ ] Reuse `CommandRunner::run_interactive`; add only the fetch stream channel.
+- [x] Reuse `CommandRunner::run_interactive`; add only the fetch stream channel.
 - [x] Move the three system cache paths into `Config`.
 - [x] Golden text tests for `check` (the output is frozen during the move).
 
@@ -1153,9 +1156,9 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 - [x] `install N packages` header context, counters, `Σ`, host.
 - [x] Pure ready/running/done reducer with diamond and two-root tests
       (`src/frontier.rs`).
-- [ ] Wire the tree to reducer observations; the ready set is a set, not a
+- [x] Wire the tree to reducer observations; the ready set is a set, not a
       queue.
-- [ ] Live fetch: real state changes and counters; timers after 1s.
+- [x] Live fetch: real state changes and counters; timers after 1s.
 - [x] No duplicate nodes; one placement per package, no repeated subtree.
 - [ ] Failure freeze, repair card, downstream blocked.
 - [ ] Ledger fallback (`g`). No timeline in v1.
@@ -1173,6 +1176,13 @@ package with no pending dependent, display-only `?` leaves for dependencies
 outside the pending set, deterministic siblings, and no duplicate subtree. The
 `install N packages` total is header context, not a row. An unrooted cycle is a
 deterministic error. Frontier wiring and live states remain.
+
+T2e landed: `src/tui/fetch_session.rs` runs the real `fetch` gates and argv on a
+worker, polls the real cache every 100 ms, and folds the real exit. The running
+frame shows real `.part` bytes and a bar when the total is known; the result
+frame keeps done and failed rows and an honest exit footer. `Esc`/`q` detach
+without killing the child. Sim 34 drives the pty path and proves the one state
+write and the allowed escalation.
 
 ### T3. Actions
 

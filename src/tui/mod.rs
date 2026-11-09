@@ -1,8 +1,10 @@
 //! Full-screen TUI entry point.
 //!
-//! T1 is the read-only tree. It reads the report layer, owns the terminal, and
-//! exits. Actions, fetch streaming and the install gate are later phases.
+//! The static tree is read-only. `F` runs the existing `fetch` command through
+//! [`fetch_session`] and draws the real cache until it exits. The install gate
+//! and the repair card are later phases.
 
+pub mod fetch_session;
 pub mod guard;
 pub mod live;
 pub mod render;
@@ -27,6 +29,8 @@ use crate::error::Error;
 use crate::progress;
 use crate::report::Snapshot;
 use crate::runner::SystemRunner;
+use crate::tui::fetch_session::FetchSession;
+use crate::tui::tree::Tree;
 
 pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
@@ -91,6 +95,8 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
         .map_err(|err| Error::failed(format!("cannot start the terminal: {err}")))?;
     let mut snapshot = collect_snapshot(config, SystemTime::now())?;
+    let mut session: Option<FetchSession> = None;
+    let mut notice: Option<Notice> = None;
     let mut help = false;
     let mut dirty = true;
 
@@ -105,14 +111,52 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
             return Err(Error::Interrupted);
         }
 
+        if session.as_ref().is_some_and(FetchSession::running) {
+            let tick = session
+                .as_mut()
+                .expect("a running session is present")
+                .tick(SystemTime::now());
+            if tick.changed {
+                dirty = true;
+            }
+        }
+
         if dirty {
             terminal
-                .draw(|frame| render::draw(frame, &snapshot, ascii, color, help))
+                .draw(|frame| match (session.as_ref(), notice.as_ref()) {
+                    (Some(live), _) => render::draw_live_status(
+                        frame,
+                        &snapshot,
+                        live.live(),
+                        live.footer(ascii),
+                        ascii,
+                        color,
+                        help,
+                    ),
+                    (None, Some(notice)) => render::draw_status(
+                        frame,
+                        &snapshot,
+                        render::Footer {
+                            status: Some(&notice.status),
+                            keys: Some(notice_keys(ascii)),
+                            failure: notice.failure,
+                        },
+                        ascii,
+                        color,
+                        help,
+                    ),
+                    (None, None) => render::draw(frame, &snapshot, ascii, color, help),
+                })
                 .map_err(|err| Error::failed(format!("cannot draw the terminal: {err}")))?;
             dirty = false;
         }
 
-        if !event::poll(Duration::from_millis(250))
+        let wait = if session.as_ref().is_some_and(FetchSession::running) {
+            Duration::from_millis(100)
+        } else {
+            Duration::from_millis(250)
+        };
+        if !event::poll(wait)
             .map_err(|err| Error::failed(format!("cannot read the terminal: {err}")))?
         {
             continue;
@@ -122,7 +166,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
             .map_err(|err| Error::failed(format!("cannot read the terminal: {err}")))?
         {
             Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Char('q') => break,
+                KeyCode::Char('q') => {
+                    // Detach, never kill: the drop below closes our end of the
+                    // stream, but the worker keeps the child alive.
+                    break;
+                }
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     return Err(Error::Interrupted);
                 }
@@ -144,13 +192,46 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     help = !help;
                     dirty = true;
                 }
-                KeyCode::Esc if help => {
-                    help = false;
+                KeyCode::Esc => {
+                    if help {
+                        help = false;
+                    } else if session.as_ref().is_some_and(FetchSession::running) {
+                        // Detach while the command runs. No result is claimed.
+                        break;
+                    } else if session.take().is_some() {
+                        snapshot = collect_snapshot(config, SystemTime::now())?;
+                    } else {
+                        notice = None;
+                    }
                     dirty = true;
                 }
                 KeyCode::Char('r') => {
-                    snapshot = collect_snapshot(config, SystemTime::now())?;
-                    dirty = true;
+                    if session.as_ref().is_some_and(FetchSession::running) {
+                        // The live poll owns the refresh while the fetch runs.
+                    } else {
+                        session = None;
+                        notice = None;
+                        snapshot = collect_snapshot(config, SystemTime::now())?;
+                        dirty = true;
+                    }
+                }
+                KeyCode::Char('F') => {
+                    if session.as_ref().is_some_and(FetchSession::running) {
+                        // One fetch at a time. No second child.
+                    } else {
+                        if session.is_some() || notice.is_some() {
+                            session = None;
+                            snapshot = collect_snapshot(config, SystemTime::now())?;
+                        }
+                        match start_fetch(config, &snapshot, SystemTime::now()) {
+                            Ok(started) => {
+                                session = Some(started);
+                                notice = None;
+                            }
+                            Err(error) => notice = Some(Notice::from_error(error)),
+                        }
+                        dirty = true;
+                    }
                 }
                 _ => {}
             },
@@ -160,9 +241,60 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
         }
     }
 
+    let detached = session.as_ref().is_some_and(FetchSession::running);
     drop(terminal);
     drop(guard);
+    if detached {
+        // The spec allows detaching but forbids claiming its result. The child
+        // may still be running; we never killed it.
+        eprintln!("aur-prefetch: fetch detached; pacman may still be running");
+    }
     Ok(())
+}
+
+/// A refused action or an observation error shown over the static tree. It has
+/// no live frontier because no command started.
+struct Notice {
+    status: String,
+    failure: bool,
+}
+
+impl Notice {
+    fn from_error(error: Error) -> Self {
+        let prefix = match &error {
+            Error::Blocked(_) => "fetch blocked",
+            Error::Failed(_) => "fetch failed",
+            Error::Interrupted => "fetch interrupted",
+        };
+        Self {
+            status: format!("{prefix}: {error}"),
+            failure: true,
+        }
+    }
+}
+
+fn notice_keys(ascii: bool) -> &'static str {
+    if ascii {
+        "F retry | r refresh | q quit | ? help"
+    } else {
+        "F retry · r refresh · q quit · ? help"
+    }
+}
+
+fn start_fetch(
+    config: &Config,
+    snapshot: &Snapshot,
+    now: SystemTime,
+) -> Result<FetchSession, Error> {
+    let Some(report) = snapshot.prefetch.data() else {
+        let message = snapshot
+            .prefetch
+            .error()
+            .unwrap_or("prefetch data is not available");
+        return Err(Error::failed(message.to_string()));
+    };
+    let tree = Tree::build(&report.packages).map_err(|error| Error::failed(error.to_string()))?;
+    FetchSession::start(config, SystemRunner, tree, now)
 }
 
 fn collect_snapshot(config: &Config, now: SystemTime) -> Result<Snapshot, Error> {

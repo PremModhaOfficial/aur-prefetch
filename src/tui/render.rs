@@ -59,6 +59,18 @@ fn bold() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
+/// The optional action line above the key hint.
+///
+/// The static frame passes [`Footer::default`], so its bytes never change.
+/// The live fetch passes a real status and the keys that are legal while the
+/// fetch runs or its result is on screen.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Footer<'a> {
+    pub status: Option<&'a str>,
+    pub keys: Option<&'a str>,
+    pub failure: bool,
+}
+
 pub fn render_frame(
     snapshot: &Snapshot,
     width: u16,
@@ -67,7 +79,16 @@ pub fn render_frame(
     color: bool,
     help: bool,
 ) -> String {
-    render_with(snapshot, None, width, height, ascii, color, help)
+    render_with(
+        snapshot,
+        None,
+        Footer::default(),
+        width,
+        height,
+        ascii,
+        color,
+        help,
+    )
 }
 
 /// Render a frame that reads the live frontier. The static frame is unchanged;
@@ -81,12 +102,62 @@ pub fn render_live_frame(
     color: bool,
     help: bool,
 ) -> String {
-    render_with(snapshot, Some(run), width, height, ascii, color, help)
+    render_with(
+        snapshot,
+        Some(run),
+        Footer::default(),
+        width,
+        height,
+        ascii,
+        color,
+        help,
+    )
 }
 
+/// Render one live frame with an action status line. Used by the fetch loop
+/// and by the live-fetch goldens.
+#[allow(clippy::too_many_arguments)] // the goldens read the flat frame inputs
+pub fn render_live_frame_status(
+    snapshot: &Snapshot,
+    run: &LiveRun,
+    footer: Footer<'_>,
+    width: u16,
+    height: u16,
+    ascii: bool,
+    color: bool,
+    help: bool,
+) -> String {
+    render_with(
+        snapshot,
+        Some(run),
+        footer,
+        width,
+        height,
+        ascii,
+        color,
+        help,
+    )
+}
+
+/// Render the static frame with a status line, for a refused action that has
+/// no live run to show.
+pub fn render_frame_status(
+    snapshot: &Snapshot,
+    footer: Footer<'_>,
+    width: u16,
+    height: u16,
+    ascii: bool,
+    color: bool,
+    help: bool,
+) -> String {
+    render_with(snapshot, None, footer, width, height, ascii, color, help)
+}
+
+#[allow(clippy::too_many_arguments)] // one call site per renderer entry point
 fn render_with(
     snapshot: &Snapshot,
     run: Option<&LiveRun>,
+    footer: Footer<'_>,
     width: u16,
     height: u16,
     ascii: bool,
@@ -100,7 +171,7 @@ fn render_with(
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test backend");
     terminal
-        .draw(|frame| draw_with(frame, snapshot, run, ascii, color, help))
+        .draw(|frame| draw_with(frame, snapshot, run, footer, ascii, color, help))
         .expect("draw frame");
 
     let buffer = terminal.backend().buffer();
@@ -118,7 +189,7 @@ fn render_with(
 }
 
 pub fn draw(frame: &mut Frame, snapshot: &Snapshot, ascii: bool, color: bool, help: bool) {
-    draw_with(frame, snapshot, None, ascii, color, help);
+    draw_with(frame, snapshot, None, Footer::default(), ascii, color, help);
 }
 
 pub fn draw_live(
@@ -129,13 +200,45 @@ pub fn draw_live(
     color: bool,
     help: bool,
 ) {
-    draw_with(frame, snapshot, Some(run), ascii, color, help);
+    draw_with(
+        frame,
+        snapshot,
+        Some(run),
+        Footer::default(),
+        ascii,
+        color,
+        help,
+    );
+}
+
+pub fn draw_live_status(
+    frame: &mut Frame,
+    snapshot: &Snapshot,
+    run: &LiveRun,
+    footer: Footer<'_>,
+    ascii: bool,
+    color: bool,
+    help: bool,
+) {
+    draw_with(frame, snapshot, Some(run), footer, ascii, color, help);
+}
+
+pub fn draw_status(
+    frame: &mut Frame,
+    snapshot: &Snapshot,
+    footer: Footer<'_>,
+    ascii: bool,
+    color: bool,
+    help: bool,
+) {
+    draw_with(frame, snapshot, None, footer, ascii, color, help);
 }
 
 fn draw_with(
     frame: &mut Frame,
     snapshot: &Snapshot,
     run: Option<&LiveRun>,
+    footer: Footer<'_>,
     ascii: bool,
     color: bool,
     help: bool,
@@ -195,16 +298,34 @@ fn draw_with(
     );
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
-    let footer = if ascii {
-        "q quit | ? help | r refresh"
-    } else {
-        "q quit · ? help · r refresh"
-    };
-    frame.render_widget(Paragraph::new(footer).style(dim(color)), chunks[2]);
+    frame.render_widget(
+        Paragraph::new(footer_lines(footer, chunks[2].width as usize, ascii, color)),
+        chunks[2],
+    );
 
     if help {
         draw_help(frame, area, ascii);
     }
+}
+
+fn footer_lines(footer: Footer<'_>, width: usize, ascii: bool, color: bool) -> Vec<Line<'static>> {
+    let default_keys = if ascii {
+        "q quit | ? help | r refresh"
+    } else {
+        "q quit · ? help · r refresh"
+    };
+    let keys = footer.keys.unwrap_or(default_keys);
+    let mut lines = Vec::new();
+    if let Some(status) = footer.status {
+        let style = if footer.failure {
+            accent_bold(color, FAILURE)
+        } else {
+            bold()
+        };
+        lines.push(Line::styled(cell_text(status, width, ascii), style));
+    }
+    lines.push(Line::styled(cell_text(keys, width, ascii), dim(color)));
+    lines
 }
 
 fn header_lines(
@@ -1309,6 +1430,7 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
     let text = vec![
         Line::from("q       quit"),
         Line::from("? / esc close help"),
+        Line::from("F       fetch downloads"),
         Line::from("r       refresh"),
         Line::from("ctrl-c  quit with 130"),
         Line::from("ctrl-z  suspend"),
@@ -1324,7 +1446,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::{Color, Modifier};
 
-    use super::{display_width, render_frame, render_live_frame};
+    use super::{Footer, display_width, render_frame, render_live_frame, render_live_frame_status};
     use crate::frontier::Observed;
     use crate::report::{
         ArtifactState, Cached, PackageView, PrefetchReport, Repo, Section, Snapshot, Update,
@@ -1679,6 +1801,35 @@ mod tests {
         run
     }
 
+    fn fetch_run() -> LiveRun {
+        let tree = tree_of(&progress_snapshot());
+        let mut run = LiveRun::plan_concurrent(&tree, live_at()).expect("plan seeds");
+        run.observe(
+            "linux",
+            Observed::Started,
+            live_at(),
+            Some(Activity::Download),
+            "partial linux-2.0.0-1-x86_64.pkg.tar.zst.part",
+        )
+        .expect("starts");
+        run.observe_progress(
+            "linux",
+            49_000_000,
+            59_800_000,
+            live_at() + Duration::from_secs(6),
+        )
+        .expect("progress records");
+        run
+    }
+
+    fn fetch_footer() -> Footer<'static> {
+        Footer {
+            status: Some("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
+            keys: Some("esc detach · ? help"),
+            failure: false,
+        }
+    }
+
     /// Exactly 200 packages: 195 independent roots plus a done/running chain
     /// and a failed/blocked chain. The window cannot show them all.
     fn window_snapshot() -> Snapshot {
@@ -1901,6 +2052,76 @@ mod tests {
         assert_eq!(
             compact,
             include_str!("../../tests/golden/tui-live-failure-80x24.txt")
+        );
+    }
+
+    #[test]
+    fn live_fetch_frame_is_stable_at_120x40() {
+        let snapshot = progress_snapshot();
+        let run = fetch_run();
+        let frame = render_live_frame_status(
+            &snapshot,
+            &run,
+            fetch_footer(),
+            120,
+            40,
+            false,
+            false,
+            false,
+        );
+        assert!(
+            frame.contains("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
+            "the real argv is on screen\n{frame}"
+        );
+        assert!(frame.contains("downloading"), "the row is live\n{frame}");
+        assert!(
+            frame.contains('%'),
+            "a known total draws a percentage\n{frame}"
+        );
+        assert!(
+            frame.contains("esc detach"),
+            "the live keys are explicit\n{frame}"
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-live-fetch-120x40.txt")
+        );
+    }
+
+    #[test]
+    fn live_fetch_frame_is_stable_at_80x24() {
+        let snapshot = progress_snapshot();
+        let run = fetch_run();
+        let frame =
+            render_live_frame_status(&snapshot, &run, fetch_footer(), 80, 24, false, false, false);
+        assert!(frame.contains("fetch: running"));
+        assert!(frame.contains('%'));
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-live-fetch-80x24.txt")
+        );
+    }
+
+    #[test]
+    fn a_refused_action_keeps_the_static_frame_and_names_the_reason() {
+        let frame = super::render_frame_status(
+            &prefetch_snapshot(),
+            Footer {
+                status: Some("fetch blocked: pacman is running"),
+                keys: Some("r refresh · q quit · ? help"),
+                failure: true,
+            },
+            120,
+            40,
+            false,
+            false,
+            false,
+        );
+        assert!(frame.contains("fetch blocked: pacman is running"));
+        assert!(frame.contains("r refresh"));
+        assert!(
+            frame.contains("simapp"),
+            "the static tree is still readable\n{frame}"
         );
     }
 
@@ -2740,5 +2961,36 @@ mod tests {
             render_live_frame(&window, &window_run, 80, 24, false, false, false),
         )
         .expect("write live window 80x24");
+
+        let fetch = progress_snapshot();
+        let fetch_run = fetch_run();
+        std::fs::write(
+            dir.join("tui-live-fetch-120x40.txt"),
+            render_live_frame_status(
+                &fetch,
+                &fetch_run,
+                fetch_footer(),
+                120,
+                40,
+                false,
+                false,
+                false,
+            ),
+        )
+        .expect("write live fetch 120x40");
+        std::fs::write(
+            dir.join("tui-live-fetch-80x24.txt"),
+            render_live_frame_status(
+                &fetch,
+                &fetch_run,
+                fetch_footer(),
+                80,
+                24,
+                false,
+                false,
+                false,
+            ),
+        )
+        .expect("write live fetch 80x24");
     }
 }

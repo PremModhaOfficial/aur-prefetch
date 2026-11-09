@@ -48,13 +48,21 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         )));
     }
 
-    let pending_count = plan.pending.len() as u64;
-    let mut state = plan.state;
-    state.last_fetch_unix = Some(now_unix()?);
-    state.last_fetch_pending = Some(pending_count);
-    state.save(&config.state_file)?;
+    record_success(config, &plan, SystemTime::now())?;
     println!("fetch: ok");
     Ok(())
+}
+
+/// Record a successful fetch.
+///
+/// The CLI and the TUI call this one function, so the state file has one
+/// writer and one format. `at` is the caller's observation time; the TUI
+/// passes the tick that folded the exit, never a second wall-clock read.
+pub fn record_success(config: &Config, plan: &FetchPlan, at: SystemTime) -> Result<(), Error> {
+    let mut state = plan.state.clone();
+    state.last_fetch_unix = Some(seconds_since_epoch(at)?);
+    state.last_fetch_pending = Some(plan.pending.len() as u64);
+    state.save(&config.state_file)
 }
 
 /// Read the gates and the pending set. This runs no transaction.
@@ -206,9 +214,8 @@ fn parse_pending(stdout: &str) -> (u64, Vec<String>) {
     (total, names)
 }
 
-fn now_unix() -> Result<u64, Error> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn seconds_since_epoch(at: SystemTime) -> Result<u64, Error> {
+    at.duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .map_err(|err| Error::failed(format!("system clock is before the epoch: {err}")))
 }

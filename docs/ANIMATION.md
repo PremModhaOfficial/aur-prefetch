@@ -3,8 +3,10 @@
 Status: design note. The pure frontier reducer is implemented in
 [`src/frontier.rs`](../src/frontier.rs) and the pure live view in
 [`src/tui/live.rs`](../src/tui/live.rs); the real cache observation source is
-[`src/fetch_source.rs`](../src/fetch_source.rs), but the TUI does not call it
-yet. It adds no command, no write path, and no network call. Read with
+[`src/fetch_source.rs`](../src/fetch_source.rs). T2e wires it into
+[`src/tui/fetch_session.rs`](../src/tui/fetch_session.rs): `F` runs the real
+`fetch` command on a worker and the UI polls the cache every 100 ms. The
+monitor itself adds no command, no write path, and no network call. Read with
 [`TUI.md`](TUI.md), [`PROGRESS.md`](PROGRESS.md) and [`NEXT.md`](NEXT.md), which
 wins on order.
 
@@ -287,6 +289,11 @@ flowchart LR
 ```
 
 ## 10. Fetch sequence
+
+Status: implemented in T2e. `F` uses `fetch::plan` and `fetch::command_argv`;
+the single `CommandRunner::run_streaming` seam runs the command on a worker.
+The UI tick calls `FetchMonitor::poll` and `finish`, and redraws only when a
+real observation, the exit, or a timer floor changes the frame.
 
 ```mermaid
 sequenceDiagram

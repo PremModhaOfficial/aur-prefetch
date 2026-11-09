@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Sim-only pacman XferCommand.
+#
+# The scenario needs a package transfer long enough for a 100 ms TUI poll to
+# see real `.part` growth. pacman passes the URL as %u and its own `.part`
+# output path as %o; this copies the local file in two chunks with a pause
+# between them. The database transfer stays fast.
+#
+# This is a transfer fixture, not a product mode: the real /usr/bin/pacman
+# still chooses the argv, creates the `.part` path, verifies the package, and
+# renames it to the final artifact. The bytes written are the real repo bytes.
+set -uo pipefail
+
+url=${1:?usage: sim-xfer URL OUTPUT}
+out=${2:?usage: sim-xfer URL OUTPUT}
+src=${url#file://}
+
+if [[ ! -f $src ]]; then
+    echo "sim-xfer: no such file: $src" >&2
+    exit 1
+fi
+
+if [[ $src != *.pkg.tar.* ]]; then
+    # Databases and signatures stay fast; only the package transfer is paced.
+    cp "$src" "$out"
+    exit 0
+fi
+
+delay=$(cat /etc/sim/xfer-delay 2>/dev/null || echo 2)
+size=$(stat -c %s "$src")
+half=$((size / 2))
+
+head -c "$half" "$src" >"$out"
+sleep "$delay"
+tail -c +"$((half + 1))" "$src" >>"$out"

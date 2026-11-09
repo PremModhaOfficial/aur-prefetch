@@ -320,14 +320,14 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 - [x] Live grammar and ANSI-16 palette: nom glyphs, activity kind, waiting
       counts, timers after 1s, grouped counters (`src/tui/live.rs`,
       `src/tui/render.rs`).
-- [ ] Live fetch: real state changes and counters; timers after 1s.
+- [x] Live fetch: real state changes and counters; timers after 1s.
 - [x] No duplicate nodes; one placement per package, no repeated subtree.
 - [ ] Failure freeze, repair card, downstream blocked.
 - [ ] Ledger fallback (`g`). No timeline in v1.
 
 Done when a prefetched fixture shows the correct tree, no state is invented,
-the ready frontier is correct for a diamond and two roots, and sim 33 proves
-the counts.
+the ready frontier is correct for a diamond and two roots, sim 33 proves the
+counts, and sim 34 proves the live fetch path.
 
 T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
@@ -379,8 +379,26 @@ result: a nonzero code fails running nodes with `exit N` and a stderr excerpt
 so the reducer freezes and blocks dependents; a zero code finishes only a
 running node with a final artifact and leaves the rest running. The monitor
 writes nothing, runs no command, and takes every timestamp from the caller.
-`Live fetch` stays unticked: T2e still has to run the fetch command, call
+`Live fetch` was still unticked at T2d: T2e had to run the fetch command, call
 `poll`, and redraw.
+
+T2e landed: `F` in the interactive tree runs `fetch` with the existing gates
+and the exact argv. `src/tui/fetch_session.rs` streams the command on a worker,
+polls `FetchMonitor` on the 100 ms tick, redraws only when the visible frame
+changes, and folds the real exit into `FetchMonitor::finish`; the one state
+write is `fetch::record_success`. `Esc`/`q` detach without killing the child
+and without claiming its result. The frontier has an explicit
+`ExecutionMode::Concurrent` for downloads: a pending node may start before its
+prerequisite finishes, while the edges still block dependents after a failure.
+A final artifact standing alone finishes a pending or ready node, so a tiny
+package that renames between polls is never left falsely ready. A nonzero exit
+with no running node is shown in the footer, not turned into a fake frozen
+node. `pacman -Si` fills a download size that `pacman -Qui` does not provide on
+pacman 7.1, so a known total can draw a real bar. Sim 34 drives the real TUI
+under a pty with a paced pacman `XferCommand` and proves the real `.part`
+bytes, the bar, the final artifact, the unchanged `/usr`, the one state write
+and the one allowed escalation. The repair card, the fetch log and the ledger
+are still T2f/T3.
 
 The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,
@@ -402,6 +420,9 @@ Done when `sim/scenarios/30-tui-readonly.sh`, `31-tui-fetch.sh`, and
 `32-tui-install.sh` pass. 30 launches, asserts no writes, quits. 31 presses
 `F`, waits for a live row, quits, asserts the cache grew and `/usr` did not. 32
 opens the install gate, cancels, and asserts nothing changed.
+
+T2e runs the fetch and streams its lines, but it does not draw the T3 gate
+checklist or a log panel. Those stay open, so T3 is not ticked.
 
 ### T4. Polish
 

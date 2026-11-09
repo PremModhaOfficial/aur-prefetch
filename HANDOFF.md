@@ -48,8 +48,22 @@ covers where things stand and the first move. Do not re-plan.
   against `TreeRow.size`; a vanishing `.part` plus a final artifact finishes a
   running node. `finish` fails running nodes on a nonzero exit with `exit N`
   and a stderr excerpt, or finishes only running nodes with an artifact on
-  zero. It writes nothing and runs no command. The repair card, the ledger, and
-  the TUI caller that runs the fetch and drives `poll` remain.
+  zero. It writes nothing and runs no command.
+- T2e is landed: `F` in the interactive tree runs the real `fetch` path.
+  `src/tui/fetch_session.rs` reuses `fetch::plan` and `fetch::command_argv`,
+  streams the command on a worker through the one `run_streaming` seam, polls
+  `FetchMonitor` on the 100 ms tick, redraws only when the frame key changes,
+  and folds the real exit. On success it calls `fetch::record_success`, the
+  same state writer as the CLI; on failure the footer carries `exit N` and the
+  stderr excerpt. `Esc`/`q` detach without killing the child and without
+  claiming its result. The frontier gained an explicit
+  `ExecutionMode::Concurrent`: downloads may start before a prerequisite
+  finishes, while the edges still block dependents after a failure. A final
+  artifact alone finishes a pending or ready node, so a tiny package that
+  renames between polls is never falsely ready. Sim 34 proves the real `.part`
+  bytes, the bar, the done row, the unchanged `/usr`, the one state write and
+  the one allowed escalation under a pty. The repair card, the fetch log and
+  the ledger remain.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -66,27 +80,25 @@ covers where things stand and the first move. Do not re-plan.
   playable comparison is [`prototype/nom-study.html`](prototype/nom-study.html);
   the still is [`prototype/shots/nom-study.png`](prototype/shots/nom-study.png).
   No TUI code changed in that pass.
-- The T1 read-only shell is implemented. The prefetch view is the T2a
-  bottom-up dependency tree; the T2b live grammar and palette read the pure
-  frontier, but the real fetch source is not wired. `prototype/` holds the
-  design sketches.
+- The T1 shell is implemented. The prefetch view is the T2a bottom-up
+  dependency tree; the T2b live grammar and palette read the pure frontier, and
+  T2e runs the real fetch and drives the real cache source. `prototype/` holds
+  the design sketches.
 - `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is in progress
-  with T2a and T2b landed.
+  with T2a, T2b, T2c, T2d and T2e landed. The repair card and the ledger remain.
 
 ## Do this first: T2
 
 1. Finish T2: T2a (the forest), T2b (the pure live view and palette), T2c's
-   progress bars and viewport, and T2d's real `FetchMonitor` are landed.
-   `FetchMonitor` already turns the real cache into `LiveRun` observations;
-   T2e has to run the fetch command, call `poll`, redraw, and add the repair
-   card and the ledger. Use `check::collect`, `progress::collect` and
-   `fetch::plan`; do not add a second update collector. The ready set is a set,
-   not a queue. The remaining order in `docs/NOM.md` is the live loop and the
-   final receipt.
+   progress bars and viewport, T2d's real `FetchMonitor`, and T2e's live fetch
+   loop are landed. The remaining T2 work is the repair card on failure and the
+   ledger fallback (`g`); T2f owns both. Use `check::collect`,
+   `progress::collect` and `fetch::plan`; do not add a second update collector.
+   The ready set is a set, not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;
-frontier wiring and live states are next.
+only the explicit `F` action writes, through `fetch`'s existing state file.
 
 ## Gates
 

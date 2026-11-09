@@ -42,6 +42,9 @@ Requires Docker or Podman. The container runs with `--network none`.
   the real tool; `pacdiff` never runs for real.
 - Pacman config fixtures for default, multiple, empty, and moved `CacheDir`
   under `/usr/local/lib/sim/fixtures`
+- A slow `XferCommand` fixture (`sim-xfer` plus `pacman-slow-xfer.conf`) that
+  writes a package `.part` in two chunks. Only scenario 34 installs it. pacman
+  still chooses the argv, verifies the package, and renames the final file
 - `/usr/local/bin/aur-prefetch`, built inside the image so the glibc matches
 
 The sim binary is built with the `sim-hooks` feature. It adds one env-gated
@@ -87,6 +90,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `30-doctor-missing-aurto.sh` | an `Include` line whose aurto file is missing makes `doctor` exit 1 |
 | `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and pty quit, Ctrl-C, forced panic, and Ctrl-Z all restore the terminal |
 | `33-tui-prefetch.sh` | the prefetch frame reads the real cache: missing, cached, stale, partial and built, with no writes |
+| `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows real `.part` bytes and a bar, finishes from the final artifact, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

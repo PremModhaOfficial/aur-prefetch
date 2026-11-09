@@ -1,8 +1,8 @@
 # PROGRESS.md — prefetch-aware dependency tree
 
 Status: **spec + implementation plan. The shared report layer, the T1 shell,
-the static bottom-up dependency forest (T2a) and the pure live grammar/palette
-(T2b) exist; the real fetch byte source does not.**
+the static bottom-up dependency forest (T2a), the pure live grammar/palette
+(T2b), and the real live fetch (T2e) exist.**
 Written 2026-11-08. Revised after review: the live tree is borrowed from
 `nix-output-monitor` (nom), not competed with.
 
@@ -550,7 +550,7 @@ default.
 
 Landed: `src/progress.rs` fills `report::PrefetchReport` from the `check`
 snapshot and a read-only cache/AUR scan. The T2a forest model reads
-`PackageView.depends`; the live frontier is not wired.
+`PackageView.depends`; T2e wires the live frontier to the real fetch session.
 
 ### P1. Tree at 80×24
 
@@ -583,19 +583,21 @@ Done when: `--render-once --at <t>` produces deterministic frames at 120×40 and
 
 ### P3. Live fetch tree
 
-- [ ] Streaming channel from `fetch` into the report.
+- [x] Streaming channel from `fetch` into the report.
 - [x] Pure ready/running/done frontier with diamond and two-root tests.
-- [ ] Wire the frontier to fetch observations; the ready set is a set, not a
+- [x] Wire the frontier to fetch observations; the ready set is a set, not a
       queue.
-- [ ] Node state changes and counters update in place; timers after 1s.
+- [x] Node state changes and counters update in place; timers after 1s.
 - [ ] Failure freeze + repair card; downstream blocked.
-- [ ] No state writes on view/pause.
-- [ ] No live animation of the attached install; the tree is plan and result.
+- [x] No state writes on view/pause.
+- [x] No live animation of the attached install; the tree is plan and result.
 
 T2b landed the pure path: `src/tui/live.rs` maps `GraphState` observations to
 rows with nom glyphs, activity kind, prerequisite waiting counts and timers, and
-`render.rs` goldens cover the diamond, two roots and the failure freeze. The
-streaming channel, the repair card and the live loop remain open.
+`render.rs` goldens cover the diamond, two roots and the failure freeze. T2e
+landed the streaming channel and the live loop: `F` runs the real fetch on a
+worker, polls the real cache and folds the real exit, with one state write.
+The repair card remains open.
 
 Done when: sim proves cached nodes never animate, live fetch nodes do, failure
 freezes instead of retrying, and the attached install still shows the raw

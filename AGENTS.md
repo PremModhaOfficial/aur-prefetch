@@ -16,8 +16,9 @@ the T1 read-only shell, the DAG execution model, and its pure frontier reducer
 are landed. T2's prefetch badges, real cache scan, pure bottom-up forest view
 (T2a), the pure live grammar/palette (T2b), and the synthetic byte bars and
 viewport (T2c) are landed. T2d's real cache observation source is landed in
-`src/fetch_source.rs`; the TUI caller (T2e), the repair card and the ledger are
-next.
+`src/fetch_source.rs`. T2e runs the real fetch from `F`: `src/tui/fetch_session.rs`
+streams the command on a worker, polls the real cache, and redraws on real
+changes; sim 34 proves it under a pty. The repair card and the ledger are next.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -91,6 +92,7 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 | `NEXT.md` | Working plan: decisions, phases, acceptance criteria |
 | `context.md` | Implementation notes and edge cases |
 | `src/main.rs` | CLI surface (subcommands) |
+| `src/tui/` | Terminal UI: shell, forest, live view, fetch session, renderer |
 | `ci.sh` | Local mirror of the GitHub checks |
 | `sim/` | Arch simulation harness (see `sim/README.md`) |
 | `.github/workflows/ci.yml` | Build, lint, test, audit |
@@ -106,17 +108,17 @@ All six subcommands are implemented and every one has sim coverage. `NEXT.md`
 is the authoritative order of work. The TUI is specified in `TUI.md` and
 `PROGRESS.md`; its execution model is `docs/ANIMATION.md`. Phase 7 T0 (the
 shared report layer), the T1 shell, and the model are landed. The shell is
-read-only; there is no dashboard. The pure reducer is in `src/frontier.rs`;
+read-only until `F`; there is no dashboard. The pure reducer is in `src/frontier.rs`;
 `src/tui/live.rs` is the pure adapter from the T2a forest and that reducer to
 nom rows. The prefetch view is the T2a bottom-up dependency forest: one row per
 package, one root per pending package with no pending dependent, display-only
 `?` leaves for dependencies outside the pending set, and the real
 cached/stale/partial/missing/built badges. The `install N packages` total is
 header context, not a tree row. T2b adds the live glyphs, waiting counts,
-timers, grouped summary and ANSI-16 palette on synthetic observations; the real
-fetch byte source is not wired. Sim 33 proves the badges and that the tree
-writes nothing.
+timers, grouped summary and ANSI-16 palette. T2e streams the real fetch command
+and polls the real cache for `.part` bytes. Sim 33 proves the badges; sim 34
+proves the live fetch, the real bytes and the one state write.
 
-Next action: finish T2. Wire the real fetch stream into `LiveRun`, then add the
+Next action: finish T2. The real fetch stream is wired into `LiveRun`; add the
 repair card and the ledger. The tree reads `check::collect`,
 `progress::collect` and `fetch::plan`; it does not collect its own facts.

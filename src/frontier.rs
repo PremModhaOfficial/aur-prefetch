@@ -83,6 +83,20 @@ impl NodeState {
     }
 }
 
+/// How a node may enter `Running`.
+///
+/// `Ordered` is the build/install rule: only a ready node starts, and a
+/// dependency must finish first. `Concurrent` is the download rule: pacman
+/// fetches independent packages in parallel, so a pending node may start
+/// before its prerequisites finish. The edges still decide readiness and still
+/// block dependents after a failure; they do not serialize downloads.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ExecutionMode {
+    #[default]
+    Ordered,
+    Concurrent,
+}
+
 /// What an adapter observed. `EdgeResolved` does not change a node by itself;
 /// it asks the reducer to re-evaluate readiness after provider metadata moved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +190,7 @@ pub struct GraphState {
     pub ready: BTreeSet<NodeId>,
     pub running: BTreeSet<NodeId>,
     pub done: BTreeSet<NodeId>,
+    pub mode: ExecutionMode,
     pub frozen: bool,
     pub last_seq: u64,
 }
@@ -185,6 +200,20 @@ impl GraphState {
     /// state. The adapter can then apply `NoWork` observations for cached
     /// artifacts and `Excluded` for held packages.
     pub fn seed<I, N>(nodes: I, edges: Vec<Edge>) -> Result<Self, FrontierError>
+    where
+        I: IntoIterator<Item = N>,
+        N: Into<NodeId>,
+    {
+        Self::seed_with_mode(nodes, edges, ExecutionMode::Ordered)
+    }
+
+    /// Seed with an explicit start rule. `Concurrent` is for downloads; the
+    /// build and install frontends keep the ordered default.
+    pub fn seed_with_mode<I, N>(
+        nodes: I,
+        edges: Vec<Edge>,
+        mode: ExecutionMode,
+    ) -> Result<Self, FrontierError>
     where
         I: IntoIterator<Item = N>,
         N: Into<NodeId>,
@@ -215,6 +244,7 @@ impl GraphState {
         let mut state = Self {
             nodes: map,
             edges,
+            mode,
             ..Self::default()
         };
         state.recompute(0, &mut Vec::new());
@@ -247,7 +277,9 @@ impl GraphState {
                 self.recompute(observation.seq, &mut transitions);
             }
             Observed::Started => {
-                if current == NodeState::Ready {
+                let may_start = current == NodeState::Ready
+                    || (current == NodeState::Pending && self.mode == ExecutionMode::Concurrent);
+                if may_start {
                     self.set_state(
                         &observation.node,
                         NodeState::Running,
@@ -499,7 +531,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Edge, EdgeKind, FrontierError, GraphState, NodeState, Observation, Observed, Trace,
+        Edge, EdgeKind, ExecutionMode, FrontierError, GraphState, NodeState, Observation, Observed,
+        Trace,
     };
 
     fn edge(dependency: &str, dependent: &str) -> Edge {
@@ -571,6 +604,70 @@ mod tests {
         assert_eq!(state.ready, BTreeSet::new());
         assert_eq!(state.running, BTreeSet::new());
         assert!(state.is_complete());
+    }
+
+    #[test]
+    fn concurrent_mode_starts_both_diamond_children_before_the_base_finishes() {
+        let mut state = GraphState::seed_with_mode(
+            ["base", "left", "right", "join"],
+            vec![
+                edge("base", "left"),
+                edge("base", "right"),
+                edge("left", "join"),
+                edge("right", "join"),
+            ],
+            ExecutionMode::Concurrent,
+        )
+        .expect("diamond seeds");
+
+        apply(&mut state, 1, "base", Observed::Started);
+        apply(&mut state, 2, "left", Observed::Started);
+        apply(&mut state, 3, "right", Observed::Started);
+        assert_eq!(state.running, set(&["base", "left", "right"]));
+        assert_eq!(state.nodes["join"], NodeState::Pending);
+
+        apply(&mut state, 4, "base", Observed::Finished);
+        assert_eq!(state.done, set(&["base"]));
+        assert_eq!(state.running, set(&["left", "right"]));
+        assert_eq!(state.nodes["join"], NodeState::Pending);
+
+        apply(&mut state, 5, "left", Observed::Finished);
+        assert_eq!(state.nodes["join"], NodeState::Pending);
+        apply(&mut state, 6, "right", Observed::Finished);
+        assert_eq!(state.nodes["join"], NodeState::Ready);
+    }
+
+    #[test]
+    fn concurrent_mode_still_blocks_a_dependent_of_a_failure() {
+        let mut state = GraphState::seed_with_mode(
+            ["base", "early", "late", "join"],
+            vec![
+                edge("base", "early"),
+                edge("base", "late"),
+                edge("early", "join"),
+                edge("late", "join"),
+            ],
+            ExecutionMode::Concurrent,
+        )
+        .expect("diamond seeds");
+
+        apply(&mut state, 1, "base", Observed::Started);
+        apply(&mut state, 2, "early", Observed::Started);
+        apply(&mut state, 3, "base", Observed::Failed);
+
+        assert!(state.frozen);
+        assert_eq!(state.nodes["base"], NodeState::Failed);
+        assert_eq!(
+            state.nodes["early"],
+            NodeState::Running,
+            "a download already in flight keeps its observed state"
+        );
+        assert_eq!(
+            state.nodes["late"],
+            NodeState::Blocked,
+            "a dependent that never started is blocked by the failure"
+        );
+        assert_eq!(state.nodes["join"], NodeState::Blocked);
     }
 
     #[test]

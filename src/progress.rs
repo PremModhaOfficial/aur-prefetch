@@ -143,7 +143,7 @@ fn collect_details(
         notes.push("package details unavailable (pacman path is not UTF-8)".to_string());
         return BTreeMap::new();
     };
-    match runner.run(pacman, &["-Qui"]) {
+    let mut details = match runner.run(pacman, &["-Qui"]) {
         Ok(output) if output.code == 0 => parse_qui(&output.stdout),
         Ok(output) => {
             notes.push(format!(
@@ -155,6 +155,46 @@ fn collect_details(
         Err(_) => {
             notes.push("package details unavailable (pacman not found)".to_string());
             BTreeMap::new()
+        }
+    };
+
+    // `pacman -Qui` is a local query: on pacman 7.1 it has no `Download Size`.
+    // Ask the sync database only for the entries that still lack one, in one
+    // batched read-only call. A failure leaves the size unknown: no bar is
+    // better than an invented total.
+    let missing: Vec<String> = details
+        .iter()
+        .filter(|(_, detail)| detail.download_bytes.is_none())
+        .map(|(name, _)| name.clone())
+        .collect();
+    if !missing.is_empty() {
+        let mut args = vec!["-Si"];
+        args.extend(missing.iter().map(String::as_str));
+        if let Ok(output) = runner.run(pacman, &args) {
+            merge_missing_sizes(&mut details, &output.stdout);
+        }
+    }
+    details
+}
+
+/// Merge the sync-database fields a local `-Qui` query cannot provide.
+///
+/// Only a missing download size, repo and dependency list are filled. The
+/// version stays the local one on purpose: it is the installed version, and
+/// the update list already carries the available one.
+fn merge_missing_sizes(details: &mut BTreeMap<String, Detail>, sync_stdout: &str) {
+    for (name, sync) in parse_qui(sync_stdout) {
+        let Some(detail) = details.get_mut(&name) else {
+            continue;
+        };
+        if detail.download_bytes.is_none() {
+            detail.download_bytes = sync.download_bytes;
+        }
+        if detail.repo == Repo::Unknown {
+            detail.repo = sync.repo;
+        }
+        if detail.depends.is_empty() {
+            detail.depends = sync.depends;
         }
     }
 }
@@ -483,8 +523,12 @@ fn host_from_server(server: &str) -> Option<String> {
 mod tests {
     use std::time::UNIX_EPOCH;
 
-    use super::{CacheEntry, ScanKind, entry_version, host_from_server, parse_qui, scan};
+    use super::{
+        CacheEntry, Detail, ScanKind, entry_version, host_from_server, merge_missing_sizes,
+        parse_qui, scan,
+    };
     use crate::report::{ArtifactState, Counts, Repo};
+    use std::collections::BTreeMap;
 
     #[test]
     fn qui_parses_repo_size_and_depends() {
@@ -510,6 +554,35 @@ Depends On      : None
         );
         assert_eq!(details["linux"].repo, Repo::Extra);
         assert!(details["linux"].depends.is_empty());
+    }
+
+    #[test]
+    fn sync_details_fill_only_a_missing_size_and_dependency_list() {
+        let mut details: BTreeMap<String, Detail> = parse_qui(
+            "\
+Name            : simapp
+Version         : 1.0.0-1
+",
+        );
+        merge_missing_sizes(
+            &mut details,
+            "\
+Repository      : sim
+Name            : simapp
+Version         : 2.0.0-1
+Depends On      : glibc  libfoo
+Download Size   : 827.00 B
+",
+        );
+
+        let detail = &details["simapp"];
+        assert_eq!(detail.download_bytes, Some(827));
+        assert_eq!(detail.repo, Repo::Other("sim".to_string()));
+        assert_eq!(detail.depends, ["glibc", "libfoo"]);
+        assert_eq!(
+            detail.version, "1.0.0-1",
+            "the installed version is not overwritten by the sync version"
+        );
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
 use crate::frontier::{
-    FrontierError, GraphState, NodeId, NodeState, Observation, Observed, Transition,
+    ExecutionMode, FrontierError, GraphState, NodeId, NodeState, Observation, Observed, Transition,
 };
 use crate::report::{ArtifactState, Repo};
 
@@ -199,13 +199,28 @@ impl LiveRun {
     /// as `NoWork` observations so dependents become ready without inventing a
     /// second readiness rule.
     pub fn plan(tree: &Tree, at: SystemTime) -> Result<Self, FrontierError> {
+        Self::plan_with_mode(tree, at, ExecutionMode::Ordered)
+    }
+
+    /// Seed the graph for parallel downloads. A pending node may start before
+    /// its prerequisites finish; the edges still block dependents after a
+    /// failure. This is the fetch frontend's plan.
+    pub fn plan_concurrent(tree: &Tree, at: SystemTime) -> Result<Self, FrontierError> {
+        Self::plan_with_mode(tree, at, ExecutionMode::Concurrent)
+    }
+
+    fn plan_with_mode(
+        tree: &Tree,
+        at: SystemTime,
+        mode: ExecutionMode,
+    ) -> Result<Self, FrontierError> {
         let nodes: Vec<&str> = tree
             .rows
             .iter()
             .filter(|row| row.kind == TreeRowKind::Package)
             .map(|row| row.name.as_str())
             .collect();
-        let graph = GraphState::seed(nodes, tree.edges.clone())?;
+        let graph = GraphState::seed_with_mode(nodes, tree.edges.clone(), mode)?;
         let mut run = Self {
             graph,
             started: BTreeMap::new(),
@@ -234,6 +249,17 @@ impl LiveRun {
             run.observe(&name, Observed::NoWork, at, None, evidence)?;
         }
         Ok(run)
+    }
+
+    /// Advance the view clock for a poll that observed no new fact.
+    ///
+    /// This can reveal an elapsed label that crossed its one-second floor. It
+    /// never moves a glyph, row, bar or counter: those read only observed
+    /// transitions. A frozen run stops its clock.
+    pub fn advance(&mut self, at: SystemTime) {
+        if !self.graph.frozen {
+            self.clock = self.clock.max(at);
+        }
     }
 
     /// Fold one observation. The sequence number is owned here so callers
@@ -930,6 +956,67 @@ mod tests {
             .expect("ignored observations still reduce");
         assert!(transitions.is_empty());
         assert_eq!(run.clock(), frozen_at, "a frozen run stops moving");
+    }
+
+    #[test]
+    fn a_tick_advances_elapsed_without_moving_a_glyph_or_bar() {
+        let tree = mixed_diamond();
+        let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
+        run.observe(
+            "base",
+            Observed::Started,
+            at(),
+            Some(Activity::Download),
+            "started",
+        )
+        .expect("starts");
+        let before = LiveView::build(&tree, &run);
+
+        run.advance(at() + Duration::from_secs(2));
+        let after = LiveView::build(&tree, &run);
+
+        assert_eq!(before.summary.builds, after.summary.builds);
+        assert_eq!(before.summary.downloads, after.summary.downloads);
+        assert_eq!(before.rows.len(), after.rows.len());
+        assert_eq!(
+            row_for(&after, &tree, "base").state,
+            LiveState::Running,
+            "a tick never changes state"
+        );
+        assert_eq!(row_for(&after, &tree, "base").progress, None);
+        assert_eq!(
+            row_for(&after, &tree, "base").timer(false).as_deref(),
+            Some("⏱ 2s"),
+            "only the elapsed label moved"
+        );
+    }
+
+    #[test]
+    fn concurrent_plan_starts_a_download_before_its_prerequisite_finishes() {
+        let tree = mixed_diamond();
+        let mut run = LiveRun::plan_concurrent(&tree, at()).expect("plan seeds");
+        run.observe("base", Observed::Started, at(), None, "base")
+            .expect("starts");
+        run.observe(
+            "left",
+            Observed::Started,
+            at(),
+            Some(Activity::Download),
+            "left",
+        )
+        .expect("a pending download may start");
+        run.observe(
+            "right",
+            Observed::Started,
+            at(),
+            Some(Activity::Download),
+            "right",
+        )
+        .expect("a pending download may start");
+
+        assert_eq!(run.state("left"), Some(NodeState::Running));
+        assert_eq!(run.state("right"), Some(NodeState::Running));
+        assert_eq!(run.state("join"), Some(NodeState::Pending));
     }
 
     #[test]
