@@ -32,6 +32,9 @@ use crate::tui::tree::{RowId, Tree};
 /// The captured log keeps the newest lines only. A child that floods output
 /// cannot grow the session without bound.
 const LOG_LINES: usize = 400;
+/// The worker may run ahead of the 10 Hz tick; this cap means a flooding child
+/// drops lines instead of growing the session's memory.
+const LOG_CHANNEL: usize = 4096;
 const LOG_LINE_CHARS: usize = 512;
 
 /// One worker message. Lines feed the log; the exit is folded.
@@ -137,13 +140,15 @@ impl FetchSession {
             Err(error) => return Err(StartFailure { error, gates }),
         };
 
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(LOG_CHANNEL + 1);
         let stream_argv = argv.clone();
         thread::spawn(move || {
             let args: Vec<&str> = stream_argv.iter().map(String::as_str).collect();
             let line_sender = sender.clone();
             let output = runner.run_streaming(args[0], &args[1..], &mut |line| {
-                let _ = line_sender.send(FetchEvent::Line(line));
+                // Never block the child on a full log; a dropped line is better
+                // than a stalled download or unbounded memory.
+                let _ = line_sender.try_send(FetchEvent::Line(line));
             });
             let output = match output {
                 Ok(output) => output,
@@ -153,7 +158,9 @@ impl FetchSession {
                     stderr: error.to_string(),
                 },
             };
-            let _ = sender.send(FetchEvent::Exit(output));
+            // `LOG_CHANNEL + 1` leaves one slot that lines can never take, so
+            // the exit always lands even when the log queue is full.
+            let _ = sender.try_send(FetchEvent::Exit(output));
         });
 
         let status = format!("fetch: running {}", argv.join(" "));

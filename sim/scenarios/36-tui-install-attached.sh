@@ -39,6 +39,12 @@ assert_contains "$clean" "enter install" "the attested gate arms the install"
 assert_contains "$clean" "install: running yay -Syuu" "the CLI path ran attached"
 assert_contains "$clean" "install: done" "the CLI reported completion"
 
+# The install restores the terminal instead of stopping the process, so yay's
+# own pacman output is visible rather than hidden inside the alternate screen.
+# A SIGTSTP stop cannot be observed here: under `script` the process group is
+# orphaned and the signal is discarded, which is why this asserts the output.
+assert_contains "$clean" "upgrading simapp" "the attached command's output is visible"
+
 # 1b. The post-install receipt owns the screen and reports the exit, kernel,
 #     pacnew state and reboot advice; it is read-only.
 assert_contains "$clean" "Post-install" "the receipt is shown"

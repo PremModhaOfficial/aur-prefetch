@@ -247,7 +247,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 // The attached command owns the terminal. The
                                 // same guard path as Ctrl-Z restores it after.
                                 drop(terminal);
-                                guard.suspend(&SystemRunner)?;
+                                // Restore the terminal without stopping the
+                                // process: yay needs the plain terminal, and a
+                                // SIGTSTP would leave the install waiting for
+                                // `fg`.
+                                guard.restore();
                                 let outcome = install::run_with_status(
                                     config,
                                     &SystemRunner,
@@ -265,6 +269,9 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                         &error.to_string(),
                                     ),
                                 };
+                                guard = guard::Guard::enter().map_err(|err| {
+                                    Error::failed(format!("cannot restore the terminal: {err}"))
+                                })?;
                                 terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
                                     .map_err(|err| {
                                         Error::failed(format!("cannot restart the terminal: {err}"))
