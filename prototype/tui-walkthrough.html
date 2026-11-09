@@ -309,12 +309,12 @@
 │ ▾ install 3 packages                                             ghost · press i │
 │   ├── bash 5.2.037-2                    <span class="ok">✓</span> cached 4m ago            1.2 MiB       │
 │   ├── linux 6.11.6.arch1-1              <span class="ok">✓</span> cached 4m ago            142 MiB       │
-│   └── yay-bin 12.4.1-1                  <span class="dim">○</span> missing · build pending                │
+│   └── yay-bin 12.4.1-1                  <span class="warn">⏸</span> build-pending · no built artifact      │
 │       ├── go 1.23.4                     <span class="ok">✓</span> installed                              │
 │       └── git 2.47.1                    <span class="ok">✓</span> installed                              │
 │                                                                                  │
 │ ▾ builds                                          0 running · 1 planned          │
-│   └── yay-bin 12.4.1-1                  <span class="warn">⏸</span> planned           waiting for download │
+│   └── ↑ yay-bin 12.4.1-1                see above           waiting for download │
 │                                                                                  │
 │ Builds   <span class="acc">⏵</span> 0   <span class="ok">✔</span> 0   <span class="warn">⏸</span> 1   <span class="bad">⚠</span> 0     Downloads  ↓ 0   ✔ 2   ⏸ 1                    │
 │ Host     mirror.example.org · aurto local                                        │
@@ -364,8 +364,8 @@
         </div>
       </div>
 
-      <div class="counts" aria-label="Example counts line"><b>ready 3</b> = 2 cached + 1 built · <b>stale 1</b> · <b>missing 1</b> · <b>build-pending 1</b>
-partial 0 · failed 0 · unknown 1 · held 0</div>
+      <div class="counts" aria-label="Example counts line"><b>ready 2</b> = 2 cached + 0 built · <b>stale 0</b> · <b>missing 0</b> · <b>build-pending 1</b>
+partial 0 · failed 0 · unknown 0 · held 0</div>
 
       <p class="note" style="margin-top:16px"><b>Borrowed, not beaten:</b> the dependency tree (a graph drawn as a tree), phase glyphs, counters and <code>Σ</code> are <a href="https://github.com/maralorn/nix-output-monitor">nom's</a>. The design does not try to out-do its live build. The difference is the prefetch state on the same tree, and the honest ghost install.</p>
 
@@ -581,12 +581,12 @@ partial 0 · failed 0 · unknown 1 · held 0</div>
 │ ▾ install 3 packages                                             ghost · press i │
 │   ├── bash 5.2.037-2                    <span class="ok">✓</span> cached 4m ago            1.2 MiB       │
 │   ├── linux 6.11.6.arch1-1              <span class="ok">✓</span> cached 4m ago            142 MiB       │
-│   └── yay-bin 12.4.1-1                  <span class="dim">○</span> missing · build pending                │
+│   └── yay-bin 12.4.1-1                  <span class="warn">⏸</span> build-pending · no built artifact      │
 │       ├── go 1.23.4                     <span class="ok">✓</span> installed                              │
 │       └── git 2.47.1                    <span class="ok">✓</span> installed                              │
 │                                                                                  │
 │ ▾ builds                                          0 running · 1 planned          │
-│   └── yay-bin 12.4.1-1                  <span class="warn">⏸</span> planned           waiting for download │
+│   └── ↑ yay-bin 12.4.1-1                see above           waiting for download │
 │                                                                                  │
 │ Builds   <span class="acc">⏵</span> 0   <span class="ok">✔</span> 0   <span class="warn">⏸</span> 1   <span class="bad">⚠</span> 0     Downloads  ↓ 0   ✔ 2   ⏸ 1                    │
 │ Host     mirror.example.org · aurto local                                        │
