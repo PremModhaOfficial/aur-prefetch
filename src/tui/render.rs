@@ -428,10 +428,12 @@ fn install_gate_lines(
         ));
     }
     lines.push(Line::from(""));
-    let keys = if attested {
-        format!("esc cancel {separator} ? help")
-    } else {
+    let keys = if !attested {
         format!("space attest {separator} esc cancel")
+    } else if preflight.blocked() {
+        format!("a gate blocks install {separator} esc cancel")
+    } else {
+        format!("enter install {separator} esc cancel")
     };
     lines.push(Line::styled(cell_text(&keys, width, ascii), dim(color)));
     lines
@@ -2334,6 +2336,7 @@ mod tests {
             official: 1,
             aur: 0,
             news_since: "2026-11-01T00:00:00+0000".to_string(),
+            euid: Some(1000),
         }
     }
 
@@ -3122,6 +3125,24 @@ mod tests {
         assert!(frame.contains("attested for this session"), "{frame}");
         assert!(!frame.contains("press space"), "{frame}");
         assert!(!frame.contains("space attest"), "{frame}");
+        assert!(
+            frame.contains("enter install"),
+            "the action is armed\n{frame}"
+        );
+        assert!(!frame.contains("a gate blocks install"), "{frame}");
+    }
+
+    #[test]
+    fn a_blocked_gate_never_arms_the_install() {
+        let mut preflight = install_preflight();
+        preflight.gates.push(Gate::fail(
+            "trust",
+            "trusted-users is empty; aurto would trust no one; fix the file first",
+        ));
+        let frame = render_install_gate(&preflight, true, 120, 40, false, false);
+
+        assert!(frame.contains("a gate blocks install"), "{frame}");
+        assert!(!frame.contains("enter install"), "{frame}");
     }
 
     #[test]

@@ -1,8 +1,8 @@
 # TUI.md — terminal UI spec
 
 Status: **spec. T0 report layer, the T1 read-only shell, T2a–T2f, T3's fetch
-checklist/log and its read-only install gate are implemented; the attached
-install and later screens are not.** Written 2026-11-08.
+checklist/log, its install gate and the attached install are implemented; the
+post-install receipt and later screens are not.** Written 2026-11-08.
 
 Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
 explorations plus Atlas, the hillclimbed target, and a reviewed cross-tool
@@ -502,9 +502,11 @@ list.
 
 The one screen allowed to leave the TUI.
 
-Status: T3b implements this overlay read-only — the checks, the exact command
-and the session-local news attestation. The `enter` action belongs to the
-attached-install slice and is not advertised until it exists.
+Status: T3b/T3c implement this screen. `enter` is armed only after the news
+attestation and only when no gate failed; it suspends the TUI, runs the exact
+`yay -Syuu` attached with the CLI's options, restores the terminal and
+re-collects. The post-install receipt is not implemented yet; the result is a
+single honest line.
 
 ```
 ┌ Install ─────────────────────────────────────────────────────────────────── 3 packages ┐
@@ -1214,22 +1216,27 @@ CLI's helpers and shows only checks that ran: root, lock, the official/AUR
 counts, the trust allowlist or its missing/empty reason, and the news URL with
 the last-install age. The exact `yay -Syuu` command is displayed; `space`
 records a session-only attestation and writes nothing. Sim 32 proves the gate
-cancels with no change and no `yay -Syuu`. The `enter` action is the next
-slice; the overlay does not offer it yet.
+cancels with no change and no `yay -Syuu`.
+
+T3c landed: after attestation and with no failed gate, `enter` is armed. Enter
+suspends the TUI, runs `install::run_with` with the CLI's exact `Options`,
+restores the terminal, re-collects and shows the result. The attached command
+is never shown as a fake live tree. Sim 36 proves the upgrade, the scoped
+escalation, the state write and the terminal restore. The post-install receipt
+remains.
 
 ### T3. Actions
 
 - [x] Fetch tree with the gate checklist and streamed lines.
 - [x] Install gate overlay, news attestation, exact argv.
-- [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
+- [x] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
 - [ ] Post-install receipt.
-- [ ] Suspend/restore verified in a pty.
+- [x] Suspend/restore verified in a pty.
 - [ ] No clean action in v1; `aur-prefetch clean` stays CLI.
 
-Done when: `sim/scenarios/30-tui-readonly.sh`, `31-tui-fetch.sh`, and
-`32-tui-install.sh` pass. 30 launches, asserts no writes, quits. 31 presses
-`F`, waits for a live row, quits, asserts the cache grew and `/usr` did not. 32
-opens the install gate, cancels, and asserts nothing changed.
+Done when: sim 31 (pty restore), 32 (the gate opens and cancels unchanged), 34
+(the live fetch) and 36 (the attached install upgrades and restores the
+terminal) pass.
 
 ### T4. Polish
 

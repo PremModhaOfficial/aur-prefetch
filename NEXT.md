@@ -423,15 +423,14 @@ not implementation.
 
 - [x] Fetch tree with the gate checklist and streamed lines.
 - [x] Install gate overlay, news attestation, exact argv.
-- [ ] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
+- [x] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
 - [ ] Post-install receipt.
-- [ ] Suspend/restore verified in a pty.
+- [x] Suspend/restore verified in a pty.
 - [ ] No clean action in v1; `aur-prefetch clean` stays CLI.
 
-Done when `sim/scenarios/30-tui-readonly.sh`, `31-tui-fetch.sh`, and
-`32-tui-install.sh` pass. 30 launches, asserts no writes, quits. 31 presses
-`F`, waits for a live row, quits, asserts the cache grew and `/usr` did not. 32
-opens the install gate, cancels, and asserts nothing changed.
+Done when sim 31 (the pty shell restores the terminal), 32 (the gate opens and
+cancels with no change), 34 (the live fetch), and 36 (the attached install
+upgrades and restores the terminal) pass.
 
 T3a landed: the fetch action shows the PRE-FLIGHT checklist from
 `fetch::plan_observed`, so the gates run once and the TUI renders the exact
@@ -452,8 +451,18 @@ reason, and the news URL with the last-install age. The exact `yay -Syuu`
 command is shown; `space` records a session-only news attestation and no state
 is written. Sim 32 opens the gate, attests, cancels, and proves `/usr`, the
 package DB, the cache, the state file and the sudo log are untouched and `yay
--Syuu` never ran. The `enter` action is the attached-install slice, so the
-overlay does not advertise it yet.
+-Syuu` never ran.
+
+T3c landed: once the news is attested and no gate fails, the overlay arms
+`enter`. Enter suspends the TUI through the existing guard, runs
+`install::run_with` with the CLI's `Options` (`yes: true`, `force: false`,
+`stdin_is_tty: true`, the preflight's effective uid), then restores the
+terminal, re-collects and shows an honest result line. The tree is a plan
+before and a result after; the attached command is never faked as live. Sim 36
+runs the TUI as the sim `installer`, attests, enters, proves the upgrade
+installed, the exact scoped escalation ran, no AUR build happened, the state
+file recorded the install, and the terminal was restored. The post-install
+receipt remains the last T3 item.
 
 ### T4. Polish
 

@@ -61,8 +61,10 @@ hint and the blocked count. `g` toggles a flat ledger of the same rows. The
 running screen shows the gates that actually ran, and `l` opens the captured
 log of pacman's own lines. `i` opens a read-only install gate with the same
 checks the CLI runs, the exact `yay -Syuu` command, and a session-only news
-attestation; the attached install is not wired yet. The fetch's only write is
-its existing state file after a successful exit.
+attestation. Once attested and unblocked, `enter` suspends the TUI and runs
+`yay -Syuu` attached with the CLI's options; the terminal is restored and the
+tree re-collected afterwards. The fetch's only write is its existing state file
+after a successful exit.
 
 ### `check`
 

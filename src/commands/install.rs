@@ -30,6 +30,9 @@ pub struct Preflight {
     pub official: usize,
     pub aur: usize,
     pub news_since: String,
+    /// The effective uid when `id -u` answered. The action passes it back into
+    /// [`Options`] so the CLI gates are not re-derived.
+    pub euid: Option<u32>,
 }
 
 impl Preflight {
@@ -45,14 +48,23 @@ impl Preflight {
 pub fn preflight(config: &Config, runner: &dyn CommandRunner) -> Preflight {
     let mut gates = Vec::new();
 
-    match effective_uid(runner) {
-        Ok(0) => gates.push(Gate::fail(
-            "root",
-            "install must run as the user, not root: yay and PKGBUILDs must never run as root",
-        )),
-        Ok(_) => gates.push(Gate::pass("root", "running as the user, not root")),
-        Err(error) => gates.push(Gate::fail("root", error.to_string())),
-    }
+    let euid = match effective_uid(runner) {
+        Ok(0) => {
+            gates.push(Gate::fail(
+                "root",
+                "install must run as the user, not root: yay and PKGBUILDs must never run as root",
+            ));
+            Some(0)
+        }
+        Ok(uid) => {
+            gates.push(Gate::pass("root", "running as the user, not root"));
+            Some(uid)
+        }
+        Err(error) => {
+            gates.push(Gate::fail("root", error.to_string()));
+            None
+        }
+    };
 
     match check_lock(config, runner) {
         Ok(()) => gates.push(Gate::pass("lock", "no lock file, no pacman process")),
@@ -110,6 +122,7 @@ pub fn preflight(config: &Config, runner: &dyn CommandRunner) -> Preflight {
         official: official.len(),
         aur: aur.len(),
         news_since,
+        euid,
     }
 }
 

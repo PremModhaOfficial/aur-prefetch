@@ -83,8 +83,13 @@ covers where things stand and the first move. Do not re-plan.
   missing/empty reason, and the news URL with the last-install age. The exact
   `yay -Syuu` command is shown; `space` records a session-only attestation and
   writes nothing. Sim 32 proves the gate cancels with no change and no
-  `yay -Syuu`. The `enter` action (attached install) and the post-install
-  block remain.
+  `yay -Syuu`.
+- T3c is landed: once attested and unblocked, `enter` suspends the TUI, runs
+  `install::run_with` with the CLI's exact `Options` (yes, no force, tty, the
+  preflight euid), restores the terminal, re-collects and shows an honest
+  result line. The attached command is never faked as live. Sim 36 runs as the
+  sim `installer` and proves the upgrade, the scoped escalation, the state
+  write and the terminal restore. The post-install receipt remains.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -113,13 +118,12 @@ covers where things stand and the first move. Do not re-plan.
 1. T2 is closed and T3a/T3b are landed: the forest, the pure live view and
    palette, the bars and viewport, the real `FetchMonitor`, the live fetch loop,
    the repair card, the ledger, the PRE-FLIGHT checklist, the `l` log and the
-   read-only install gate are done. The next TUI work is the attached install:
-   enable `enter` only after attestation, call `install::run_with` with the same
-   `Options` the CLI uses (`yes: true`, `force: false`, `stdin_is_tty: true`,
-   real euid), suspend/restore the terminal, re-collect, then add the
-   post-install block. Use `check::collect`, `progress::collect` and
-   `fetch::plan`; do not add a second update collector. The ready set is a set,
-   not a queue.
+   read-only install gate and the attached install are done. The next TUI work
+   is the post-install receipt: build it from `PostInstall` on success and
+   failure, cover success, failure, disk-full, pacdiff, kernel and reboot,
+   and keep the tree as a plan before and a result after. Use
+   `check::collect`, `progress::collect` and `fetch::plan`; do not add a second
+   update collector. The ready set is a set, not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;

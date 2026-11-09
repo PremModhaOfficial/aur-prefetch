@@ -149,7 +149,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             &snapshot,
                             render::Footer {
                                 status: Some(&notice.status),
-                                keys: Some(notice_keys(ascii)),
+                                keys: Some(notice.keys(ascii)),
                                 failure: notice.failure,
                                 repair: None,
                             },
@@ -212,12 +212,48 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
             .map_err(|err| Error::failed(format!("cannot read the terminal: {err}")))?
         {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-                // The install gate is modal: only attest, cancel and quit are
-                // live while it is open, and it never runs yay by itself.
+                // The install gate is modal: only attest, the armed install,
+                // cancel and quit are live while it is open.
                 if install_gate.is_some() {
                     match key.code {
                         KeyCode::Esc => install_gate = None,
                         KeyCode::Char(' ') => news_attested = true,
+                        KeyCode::Enter => {
+                            let armed = news_attested
+                                && install_gate.as_ref().is_some_and(|open| {
+                                    !open.preflight.blocked() && open.preflight.euid.is_some()
+                                });
+                            if armed {
+                                let open = install_gate.take().expect("checked above");
+                                let euid = open.preflight.euid.expect("checked above");
+                                // The attached command owns the terminal. The
+                                // same guard path as Ctrl-Z restores it after.
+                                drop(terminal);
+                                guard.suspend().map_err(|err| {
+                                    Error::failed(format!("cannot suspend: {err}"))
+                                })?;
+                                let result = install::run_with(
+                                    config,
+                                    &SystemRunner,
+                                    install::Options {
+                                        yes: true,
+                                        force: false,
+                                        stdin_is_tty: true,
+                                        euid,
+                                    },
+                                );
+                                terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
+                                    .map_err(|err| {
+                                        Error::failed(format!("cannot restart the terminal: {err}"))
+                                    })?;
+                                terminal.clear().map_err(|err| {
+                                    Error::failed(format!("cannot clear the terminal: {err}"))
+                                })?;
+                                snapshot = collect_snapshot(config, SystemTime::now())?;
+                                notice = Some(Notice::install(result));
+                                news_attested = false;
+                            }
+                        }
                         KeyCode::Char('q') => break,
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Err(Error::Interrupted);
@@ -350,9 +386,34 @@ struct Notice {
     /// The gates that ran before the refusal. Empty when the action failed
     /// before any gate, so the checklist never invents a row.
     gates: Vec<Gate>,
+    kind: NoticeKind,
+}
+
+/// Which action produced the notice. The footer offers only that action.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NoticeKind {
+    Fetch,
+    Install,
 }
 
 impl Notice {
+    fn install(result: Result<(), Error>) -> Self {
+        match result {
+            Ok(()) => Self {
+                status: "install: yay -Syuu exited 0".to_string(),
+                failure: false,
+                gates: Vec::new(),
+                kind: NoticeKind::Install,
+            },
+            Err(error) => Self {
+                status: format!("install failed: {error}"),
+                failure: true,
+                gates: Vec::new(),
+                kind: NoticeKind::Install,
+            },
+        }
+    }
+
     fn from_failure(failure: StartFailure) -> Self {
         let prefix = match &failure.error {
             Error::Blocked(_) => "fetch blocked",
@@ -363,15 +424,31 @@ impl Notice {
             status: format!("{prefix}: {}", failure.error),
             failure: true,
             gates: failure.gates,
+            kind: NoticeKind::Fetch,
+        }
+    }
+
+    fn keys(&self, ascii: bool) -> &'static str {
+        match self.kind {
+            NoticeKind::Fetch => fetch_notice_keys(ascii),
+            NoticeKind::Install => install_notice_keys(ascii),
         }
     }
 }
 
-fn notice_keys(ascii: bool) -> &'static str {
+fn fetch_notice_keys(ascii: bool) -> &'static str {
     if ascii {
         "F retry | g ledger | r refresh | q quit | ? help"
     } else {
         "F retry · g ledger · r refresh · q quit · ? help"
+    }
+}
+
+fn install_notice_keys(ascii: bool) -> &'static str {
+    if ascii {
+        "i install gate | r refresh | q quit | ? help"
+    } else {
+        "i install gate · r refresh · q quit · ? help"
     }
 }
 
