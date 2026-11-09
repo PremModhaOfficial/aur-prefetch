@@ -311,8 +311,8 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 
 ### T2. The tree
 
-- [ ] Prefetch badges: cached, built, stale, partial, missing, unknown.
-- [ ] Ghost install branch, counters, `Σ`, host.
+- [x] Prefetch badges: cached, built, stale, partial, missing, unknown.
+- [x] Ghost install branch, counters, `Σ`, host.
 - [x] Pure ready/running/done reducer with diamond and two-root tests
       (`src/frontier.rs`).
 - [ ] Wire the tree to reducer observations; parallel roots are sets, not a
@@ -325,6 +325,10 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 Done when a prefetched fixture shows the correct tree, no state is invented,
 the ready frontier is correct for a diamond and two roots, and sim 33 proves
 the counts.
+
+T2 slice landed: `progress::collect` scans the real cache and fills
+`PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
+writes. The tree is still a flat install list.
 
 ### T3. Actions
 

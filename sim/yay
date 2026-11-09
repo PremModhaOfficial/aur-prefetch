@@ -21,7 +21,10 @@ fi
 
 case "${1:-}" in
     -Qua)
-        # No AUR updates in the simulation by default.
+        # No AUR updates by default; a scenario may set /etc/sim/yay-qua.out.
+        if [[ -f /etc/sim/yay-qua.out ]]; then
+            cat /etc/sim/yay-qua.out
+        fi
         exit 0
         ;;
     -Syu | -Syuu | -Syyu | -Syyuu)

@@ -79,13 +79,14 @@ pub struct Update {
     pub raw: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Repo {
     Core,
     Extra,
     Multilib,
     Aur,
     Local,
+    #[default]
     Unknown,
     Other(String),
 }
@@ -95,6 +96,124 @@ pub enum Cached {
     Yes,
     No,
     Unknown,
+}
+
+/// What the cache/build scan proves about one package's artifact.
+///
+/// `Cached` and `Built` are ready. `Stale` and `Partial` are not. `Unknown`
+/// is a value, not a missing zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactState {
+    Cached,
+    Built,
+    Stale,
+    Partial,
+    Missing,
+    BuildPending,
+    Failed,
+    Unknown,
+}
+
+impl ArtifactState {
+    /// Primary-glyph precedence. Lower sorts first; failure is never hidden.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Failed => 0,
+            Self::Partial => 1,
+            Self::Stale => 2,
+            Self::Built => 3,
+            Self::Cached => 4,
+            Self::BuildPending => 5,
+            Self::Missing => 6,
+            Self::Unknown => 7,
+        }
+    }
+}
+
+/// One package in the prefetch tree, before tree placement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageView {
+    pub name: String,
+    pub repo: Repo,
+    pub installed: String,
+    pub available: String,
+    pub download_bytes: Option<u64>,
+    pub artifact: ArtifactState,
+    pub artifact_at: Option<SystemTime>,
+    /// A short, already-human reason. The renderer does not invent one.
+    pub detail: Option<String>,
+    pub depends: Vec<String>,
+}
+
+/// Counts derived from the packages, never typed independently.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub cached: usize,
+    pub built: usize,
+    pub stale: usize,
+    pub partial: usize,
+    pub missing: usize,
+    pub build_pending: usize,
+    pub failed: usize,
+    pub unknown: usize,
+    /// `None` until IgnorePkg/IgnoreGroup is parsed; never a guessed zero.
+    pub held: Option<usize>,
+}
+
+impl Counts {
+    pub fn from_packages(packages: &[PackageView]) -> Self {
+        let mut counts = Self::default();
+        for package in packages {
+            match package.artifact {
+                ArtifactState::Cached => counts.cached += 1,
+                ArtifactState::Built => counts.built += 1,
+                ArtifactState::Stale => counts.stale += 1,
+                ArtifactState::Partial => counts.partial += 1,
+                ArtifactState::Missing => counts.missing += 1,
+                ArtifactState::BuildPending => counts.build_pending += 1,
+                ArtifactState::Failed => counts.failed += 1,
+                ArtifactState::Unknown => counts.unknown += 1,
+            }
+        }
+        counts
+    }
+
+    pub fn ready(&self) -> usize {
+        self.cached.saturating_add(self.built)
+    }
+
+    pub fn total(&self) -> usize {
+        self.cached
+            .saturating_add(self.built)
+            .saturating_add(self.stale)
+            .saturating_add(self.partial)
+            .saturating_add(self.missing)
+            .saturating_add(self.build_pending)
+            .saturating_add(self.failed)
+            .saturating_add(self.unknown)
+    }
+}
+
+/// What the prefetch view needs, all from read-only collection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrefetchReport {
+    pub packages: Vec<PackageView>,
+    pub counts: Counts,
+    pub host: Option<String>,
+    /// Collection gaps that the view must show, not hide.
+    pub notes: Vec<String>,
+}
+
+impl PrefetchReport {
+    pub fn new(packages: Vec<PackageView>, host: Option<String>, notes: Vec<String>) -> Self {
+        let counts = Counts::from_packages(&packages);
+        Self {
+            packages,
+            counts,
+            host,
+            notes,
+        }
+    }
 }
 
 /// One filesystem with a space and inode measurement.
@@ -253,6 +372,7 @@ pub struct Snapshot {
     pub news: Section<NewsState>,
     pub journal: Section<JournalTail>,
     pub post_install: Section<PostInstall>,
+    pub prefetch: Section<PrefetchReport>,
     pub drift: Drift,
     pub actionable: u32,
     /// A command-level failure that stopped collection. The text renderer

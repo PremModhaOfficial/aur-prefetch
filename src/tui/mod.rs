@@ -22,6 +22,7 @@ use signal_hook::flag;
 use crate::commands::check;
 use crate::config::Config;
 use crate::error::Error;
+use crate::progress;
 use crate::report::Snapshot;
 use crate::runner::SystemRunner;
 
@@ -33,7 +34,7 @@ pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
         // A pipe diagnostic must work without a tty. Fall back to the compact
         // supported size when the terminal cannot report one.
         let (width, height) = terminal::size().unwrap_or((80, 24));
-        let snapshot = check::collect(&config, &SystemRunner, SystemTime::now())?;
+        let snapshot = collect_snapshot(&config, SystemTime::now())?;
         print!(
             "{}",
             render::render_frame(&snapshot, width, height, ascii, color, false)
@@ -81,7 +82,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
 
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
         .map_err(|err| Error::failed(format!("cannot start the terminal: {err}")))?;
-    let mut snapshot = check::collect(config, &SystemRunner, SystemTime::now())?;
+    let mut snapshot = collect_snapshot(config, SystemTime::now())?;
     let mut help = false;
     let mut dirty = true;
 
@@ -140,7 +141,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     dirty = true;
                 }
                 KeyCode::Char('r') => {
-                    snapshot = check::collect(config, &SystemRunner, SystemTime::now())?;
+                    snapshot = collect_snapshot(config, SystemTime::now())?;
                     dirty = true;
                 }
                 _ => {}
@@ -154,6 +155,12 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     drop(terminal);
     drop(guard);
     Ok(())
+}
+
+fn collect_snapshot(config: &Config, now: SystemTime) -> Result<Snapshot, Error> {
+    let mut snapshot = check::collect(config, &SystemRunner, now)?;
+    snapshot.prefetch = progress::collect(config, &SystemRunner, &snapshot, now);
+    Ok(snapshot)
 }
 
 fn verdict(snapshot: &Snapshot) -> Result<(), Error> {

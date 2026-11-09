@@ -5,6 +5,7 @@ pub mod commands;
 pub mod config;
 pub mod error;
 pub mod frontier;
+pub mod progress;
 pub mod report;
 pub mod runner;
 pub mod state;

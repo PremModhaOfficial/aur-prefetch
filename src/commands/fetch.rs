@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::runner::{CommandOutput, CommandRunner, SystemRunner};
 use crate::state::State;
-use crate::util::{human_bytes, path_str, resolve_cache_dir};
+use crate::util::{human_bytes, parse_size, path_str, resolve_cache_dir};
 
 const SNAPSHOT_FLOOR_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 
@@ -204,20 +204,6 @@ fn parse_pending(stdout: &str) -> (u64, Vec<String>) {
     }
 
     (total, names)
-}
-
-fn parse_size(value: &str) -> Option<u64> {
-    let mut parts = value.split_whitespace();
-    let number: f64 = parts.next()?.parse().ok()?;
-    let factor = match parts.next()? {
-        "B" => 1.0,
-        "KiB" => 1024.0,
-        "MiB" => 1024.0 * 1024.0,
-        "GiB" => 1024.0 * 1024.0 * 1024.0,
-        "TiB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
-        _ => return None,
-    };
-    Some((number * factor) as u64)
 }
 
 fn now_unix() -> Result<u64, Error> {

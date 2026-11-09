@@ -1,9 +1,9 @@
 # PROGRESS.md — prefetch-aware dependency tree
 
-Status: **spec + implementation plan. The shared report layer and a read-only
-T1 shell exist; the prefetch tree below does not.** Written 2026-11-08. Revised
-after review: the live tree is borrowed from `nix-output-monitor` (nom), not
-competed with.
+Status: **spec + implementation plan. The shared report layer, the T1 shell and
+a flat prefetch view exist; the dependency tree and live frontier do not.**
+Written 2026-11-08. Revised after review: the live tree is borrowed from
+`nix-output-monitor` (nom), not competed with.
 
 Read with [`TUI.md`](TUI.md) (the shell, gates and keys),
 [`docs/ANIMATION.md`](docs/ANIMATION.md) (the execution frontier: states,
@@ -518,37 +518,48 @@ The CLI text stays byte-identical; the TUI is a second renderer.
 
 ### P0. Report layer
 
-- [ ] Parse `pacman -Qui` into `PackageView` (repo, versions, size, deps).
-- [ ] CacheDir scan: cached/stale/partial/missing, mtime, `.sig` presence.
+- [x] Parse `pacman -Qui` into `PackageView` (repo, versions, size, deps).
+- [x] CacheDir scan: cached/stale/partial/missing, mtime.
+- [ ] `.sig` presence in the inspector.
 - [ ] Aurto: `pacman -Sl`/`-Si`; `.SRCINFO`; `.PKGINFO` for built packages.
 - [ ] `EdgeView` with source/version/state; no network.
-- [ ] `ProgressReport`, `Counts`, `Section<ProgressReport>`.
+- [x] `PrefetchReport`, `Counts`, `Section<PrefetchReport>`.
 - [ ] `TreeRow` construction from packages and edges; pure and unit-tested.
-- [ ] Add system cache paths to `Config`.
-- [ ] Fixtures: `-Qui` with repo/deps/size; cache filenames; `.SRCINFO`;
-      aurto `-Si`; pacman.log.
+- [x] Add system cache paths to `Config`.
+- [x] Fixtures: `-Qui` parser and cache filename tests; sim 33 uses real cache
+      files.
+- [ ] Fixtures: `.SRCINFO`, aurto `-Si`, pacman.log.
 
 Done when: unit tests cover every dimension and precedence, the tree never
 duplicates a node, the CLI output is unchanged, and no new command runs by
 default.
 
+Landed: `src/progress.rs` fills `report::PrefetchReport` from the `check`
+snapshot and a read-only cache/AUR scan. The tree is flat; dependency edges are
+not wired.
+
 ### P1. Tree at 80×24
 
-- [ ] State glyph + name-version + state + time; compact columns.
-- [ ] Prefetch badges, ghost install branch, counters line.
+- [x] State glyph + name-version + state + time; compact columns.
+- [x] Prefetch badges, ghost install branch, counters line.
 - [ ] No duplicate nodes; `↑ see above` for repeats.
 - [ ] Ledger fallback via `g`.
-- [ ] Golden frames at 80×24 and 120×40.
+- [x] Golden frames at 80×24 and 120×40.
 
 Done when: a prefetched fixture with cached/stale/missing/built/build-pending
 packages renders the correct tree and never invents a state.
 
+The current frame is a flat install list, one row per pending package. It
+does not yet draw dependency edges.
+
 ### P2. Full tree at 120×40
 
-- [ ] Phase, bytes, reason, host, and `Σ` columns.
+- [x] Bytes, reason, host, and `Σ`.
+- [ ] Build/download phase column.
 - [ ] Most-relevant-third selection; expand/collapse; failure always visible.
-- [ ] Unicode tree glyphs, ASCII fallback.
-- [ ] Fixed-time golden frames at 0s, mid-run, and failure.
+- [x] Unicode tree glyphs, ASCII fallback.
+- [x] Fixed-time prefetch goldens at 80×24 and 120×40.
+- [ ] Mid-run and failure goldens.
 
 Done when: `--render-once --at <t>` produces deterministic frames at 120×40 and
 80×24; ASCII has no non-ASCII bytes.
@@ -556,8 +567,9 @@ Done when: `--render-once --at <t>` produces deterministic frames at 120×40 and
 ### P3. Live fetch tree
 
 - [ ] Streaming channel from `fetch` into the report.
-- [ ] Ready/running/done frontier from `docs/ANIMATION.md`; the ready set is a
-      set, not a queue.
+- [x] Pure ready/running/done frontier with diamond and two-root tests.
+- [ ] Wire the frontier to fetch observations; the ready set is a set, not a
+      queue.
 - [ ] Node state changes and counters update in place; timers after 1s.
 - [ ] Failure freeze + repair card; downstream blocked.
 - [ ] No state writes on view/pause.
@@ -595,7 +607,7 @@ default. AUR RPC (C) waits for a TUI.md amendment.
 | unit | `-Qui` parser, cache matcher, `.SRCINFO`/`.PKGINFO`, edge states, frontier reducer (diamond, two roots), tree construction, count precedence |
 | render | goldens at 80×24, 120×40, ASCII; fixed `--at` times |
 | cli | `--render-once` deterministic; offline default |
-| sim | 33 prefetched-ahead tree; 34 live fetch tree; 35 failure freeze |
+| sim | 33 prefetch badges from the real cache; 34 live fetch tree; 35 failure freeze |
 
 What the tests must prove:
 

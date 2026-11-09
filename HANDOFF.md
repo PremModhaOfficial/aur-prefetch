@@ -25,21 +25,26 @@ covers where things stand and the first move. Do not re-plan.
 - The pure reducer is landed in `src/frontier.rs`: readiness, blocking,
   skipped-satisfied, freeze, replay, and a bounded trace. Diamond and two-root
   unit tests pass. The tree is not wired to it yet.
-- The T1 read-only shell is implemented. The prefetch/install progress tree is
-  still **specified, not implemented**: `TUI.md` (shell, keys, actions) and
-  `PROGRESS.md` (progress screen). `prototype/` holds the design sketches.
+- T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
+  the real download cache, fills `report::PrefetchReport`, and the TUI draws
+  cached/stale/partial/missing/build-pending/built badges, counts, host and
+  `Σ`. Sim 33 proves cached, stale, partial, missing and built, and no writes.
+  The tree is still a flat install list.
+- The T1 read-only shell is implemented. The prefetch view is a flat install
+  list; the dependency tree and live frontier are still **specified, not
+  implemented**. `prototype/` holds the design sketches.
 - `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is next.
 
 ## Do this first: T2
 
-1. Start T2: prefetch badges, the ghost install branch, live fetch, no
-   duplicate nodes, and the failure freeze. Use `check::collect` and
-   `fetch::plan`; do not add a second collector. Wire the pure reducer in
-   `src/frontier.rs` to the tree; the ready set is a set, not a queue.
+1. Finish T2: build dependency edges and the no-duplicate tree, wire the pure
+   reducer in `src/frontier.rs`, then add live fetch, the failure freeze and
+   the ledger. Use `check::collect`, `progress::collect` and `fetch::plan`; do
+   not add a second update collector. The ready set is a set, not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
-collectors; that is how the two paths drift. T1's frame is deliberately static;
-T2 adds the prefetch state.
+collectors; that is how the two paths drift. The flat prefetch frame is
+read-only; tree edges and the frontier are next.
 
 ## Gates
 

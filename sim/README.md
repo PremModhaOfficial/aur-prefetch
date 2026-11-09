@@ -86,6 +86,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `29-init-visudo-root.sh` | root `visudo -cf` accepts the user-owned temp rule that `init` validates through sudo |
 | `30-doctor-missing-aurto.sh` | an `Include` line whose aurto file is missing makes `doctor` exit 1 |
 | `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and pty quit, Ctrl-C, forced panic, and Ctrl-Z all restore the terminal |
+| `33-tui-prefetch.sh` | the prefetch frame reads the real cache: missing, cached, stale, partial and built, with no writes |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

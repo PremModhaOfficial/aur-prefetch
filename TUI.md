@@ -243,6 +243,7 @@ pub struct Snapshot {
     pub news: Section<NewsState>,
     pub journal: Section<JournalTail>,
     pub post_install: Section<PostInstall>,
+    pub prefetch: Section<PrefetchReport>,
     pub drift: Drift,
 }
 
@@ -286,6 +287,10 @@ pub struct Check { pub id: &'static str, pub label: String, pub verdict: Verdict
                    pub detail: String, pub fix: Option<String> }
 pub enum Verdict { Ok, Warn, Blocked, Error, Skipped }
 ```
+
+`prefetch` is filled by `progress::collect` from `pacman -Qui` and a read-only
+download-cache scan; it is `NotCollected` on the CLI text path. The tree reads
+it instead of collecting its own facts.
 
 The execution model is in [`docs/ANIMATION.md`](docs/ANIMATION.md): a node moves
 pending -> ready -> running -> done, with parallel ready fronts and joins.
@@ -1139,8 +1144,8 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 
 ### T2. The tree
 
-- [ ] Prefetch badges: cached, built, stale, partial, missing, unknown.
-- [ ] Ghost install branch, counters, `Σ`, host.
+- [x] Prefetch badges: cached, built, stale, partial, missing, unknown.
+- [x] Ghost install branch, counters, `Σ`, host.
 - [x] Pure ready/running/done reducer with diamond and two-root tests
       (`src/frontier.rs`).
 - [ ] Wire the tree to reducer observations; the ready set is a set, not a
@@ -1152,6 +1157,10 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 
 Done when: a prefetched fixture shows the correct tree, no state is invented,
 and sim 33 proves the counts.
+
+T2 slice landed: `progress::collect` scans the real cache and fills
+`PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
+writes. The tree is still a flat install list.
 
 ### T3. Actions
 

@@ -41,12 +41,14 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 
 ### `tui`
 
-The tree is a renderer over the same snapshot as `check`. Starting it and
-quitting writes no state or cache. `--render-once` prints one frame to stdout so
-a script or a pipe can read it; the exit code is `1` when the snapshot is
-actionable and `2` when collection failed. Without a terminal, the interactive
-form exits `2` and points at `--render-once`. `--ascii` replaces every glyph
-with ASCII, and `NO_COLOR` removes color.
+The tree is a renderer over the same snapshot as `check`, plus a read-only
+download-cache scan. It labels each pending package cached, stale, partial,
+missing, build-pending, built or unknown, and prints the counts, mirror host and
+`Σ` line. Starting it and quitting writes no state or cache. `--render-once`
+prints one frame to stdout so a script or a pipe can read it; the exit code is
+`1` when the snapshot is actionable and `2` when collection failed. Without a
+terminal, the interactive form exits `2` and points at `--render-once`.
+`--ascii` replaces every glyph with ASCII, and `NO_COLOR` removes color.
 
 ### `check`
 

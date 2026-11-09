@@ -4,7 +4,7 @@
 //! sequences can move the cursor or write the clipboard; bidi controls can
 //! reorder a path. A cell gets only clean, width-measured text.
 
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Remove escape sequences, control characters and bidi controls.
 pub fn sanitize_cell(input: &str) -> String {
@@ -52,6 +52,11 @@ pub fn to_ascii(input: &str) -> String {
         .chars()
         .map(|ch| if ch.is_ascii() { ch } else { '?' })
         .collect()
+}
+
+/// Display width in terminal cells, used to align columns.
+pub fn display_width(input: &str) -> usize {
+    UnicodeWidthStr::width(input)
 }
 
 /// Truncate to a display width, appending a marker only when it fits.
@@ -108,7 +113,7 @@ fn is_bidi(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{cell_text, sanitize_cell, to_ascii, truncate_width};
+    use super::{cell_text, display_width, sanitize_cell, to_ascii, truncate_width};
 
     #[test]
     fn strips_csi_sequences() {
@@ -127,6 +132,8 @@ mod tests {
 
     #[test]
     fn truncation_counts_cells_not_chars() {
+        assert_eq!(display_width("界"), 2);
+        assert_eq!(display_width("abc"), 3);
         assert_eq!(truncate_width("界界", 3, true), "界…");
         assert_eq!(truncate_width("abcde", 4, true), "abc…");
         assert_eq!(truncate_width("abcde", 4, false), "a...");

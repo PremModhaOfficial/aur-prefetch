@@ -21,6 +21,21 @@ pub fn human_bytes(bytes: u64) -> String {
     }
 }
 
+/// Parse pacman's human size strings, for example `1.52 MiB`.
+pub fn parse_size(value: &str) -> Option<u64> {
+    let mut parts = value.split_whitespace();
+    let number: f64 = parts.next()?.parse().ok()?;
+    let factor = match parts.next()? {
+        "B" => 1.0,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        "TiB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        _ => return None,
+    };
+    Some((number * factor) as u64)
+}
+
 pub fn path_str(path: &Path) -> Result<&str, Error> {
     path.to_str()
         .ok_or_else(|| Error::failed(format!("path is not valid UTF-8: {}", path.display())))
