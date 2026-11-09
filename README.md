@@ -37,6 +37,16 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
 - `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
 - `aur-prefetch doctor` — verify timers, limits, repo, journald
+- `aur-prefetch tui [--render-once] [--ascii]` - read-only dependency tree. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
+
+### `tui`
+
+The tree is a renderer over the same snapshot as `check`. Starting it and
+quitting writes no state or cache. `--render-once` prints one frame to stdout so
+a script or a pipe can read it; the exit code is `1` when the snapshot is
+actionable and `2` when collection failed. Without a terminal, the interactive
+form exits `2` and points at `--render-once`. `--ascii` replaces every glyph
+with ASCII, and `NO_COLOR` removes color.
 
 ### `check`
 

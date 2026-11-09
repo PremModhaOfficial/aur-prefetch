@@ -7,4 +7,5 @@ pub mod error;
 pub mod report;
 pub mod runner;
 pub mod state;
+pub mod tui;
 pub mod util;

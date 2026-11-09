@@ -3,6 +3,7 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 
 use aur_prefetch::commands;
+use aur_prefetch::error::Error;
 
 #[derive(Parser)]
 #[command(
@@ -44,6 +45,15 @@ enum Commands {
     },
     /// Verify timers, limits, repo, journald
     Doctor,
+    /// Interactive dependency tree
+    Tui {
+        /// Render one frame to stdout and exit. Works without a tty.
+        #[arg(long)]
+        render_once: bool,
+        /// Use ASCII glyphs only
+        #[arg(long)]
+        ascii: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -55,10 +65,12 @@ fn main() -> ExitCode {
         Commands::Install { yes, force } => commands::install::run(yes, force),
         Commands::Clean { apply } => commands::clean::run(apply),
         Commands::Doctor => commands::doctor::run(),
+        Commands::Tui { render_once, ascii } => aur_prefetch::tui::run(render_once, ascii),
     };
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
+        Err(Error::Interrupted) => ExitCode::from(130),
         Err(error) => {
             eprintln!("aur-prefetch: {error}");
             ExitCode::from(error.exit_code())

@@ -14,25 +14,29 @@ covers where things stand and the first move. Do not re-plan.
 - Phase 7 T0 (the shared report layer) is landed: `src/report.rs`, collect and
   render splits for `check`/`fetch`/`clean`, the system cache paths in
   `Config`, and frozen `check` text. The full CI and all 30 sim scenarios pass.
+- Phase 7 T1's shell is landed: `aur-prefetch tui`, `--render-once`, `--ascii`,
+  `NO_COLOR`, the Drop guard, the panic hook, the static tree frame, the
+  sanitizer, and sim `31-tui-readonly.sh`. The pty check proves a normal quit
+  restores the terminal and Ctrl-C exits 130.
 - The TUI is **specified, not implemented**: `TUI.md` (shell, keys, actions)
   and `PROGRESS.md` (prefetch/install progress screen). `prototype/` holds the
   design sketches those documents reference.
-- `NEXT.md` Phase 7 is the TUI order of work. It starts at T1.
+- `NEXT.md` Phase 7 is the TUI order of work. T1 is open only for the forced
+  panic and Ctrl-Z pty checks; T2 is next.
 
-## Do this first: T1 tree shell
+## Do this first: close T1, then T2
 
-Read `NEXT.md` Phase 7 T1 and `TUI.md` T1. Then:
-
-1. Add `ratatui` and `crossterm`, `src/tui/`, and a terminal guard with `Drop`
-   restore plus a panic hook.
-2. Build the event loop: input, resize, and a tick only while a captured task
-   runs. Add `--render-once`, `--ascii` and `NO_COLOR` before the first frame.
-3. Render the tree at 80x24 and 120x40 from `check::collect` and `fetch::plan`.
-   No dashboard and no panel shell.
-4. Add golden frames and terminal-restore tests. `--render-once` writes nothing.
+1. Add a forced-panic path for the test binary and a pty check that `stty -a`
+   still has `icanon` after the panic.
+2. Add a Ctrl-Z pty check: send SIGTSTP, resume with SIGCONT, and assert the
+   next frame draws and raw mode is back.
+3. Then start T2: prefetch badges, the ghost install branch, live fetch, no
+   duplicate nodes, and the failure freeze. Use `check::collect` and
+   `fetch::plan`; do not add a second collector.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
-collectors; that is how the two paths drift.
+collectors; that is how the two paths drift. T1's frame is deliberately static;
+T2 adds the prefetch state.
 
 ## Gates
 

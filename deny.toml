@@ -24,7 +24,21 @@ feature-depth = 1
 yanked = "deny"
 unsound = "all"
 unmaintained = "all"
-ignore = []
+ignore = [
+    # RUSTSEC-2024-0436: `paste` is unmaintained. It is a build-time proc
+    # macro used by ratatui 0.29. There is no safe upgrade at the MSRV 1.85
+    # floor, and the advisory is not a vulnerability. Revisit with ratatui
+    # 0.30 when the MSRV moves to 1.88.
+    "RUSTSEC-2024-0436",
+    # RUSTSEC-2026-0253: lru 0.12.5's bug needs LruCache::pop() with a key
+    # whose Drop panics. ratatui 0.29 uses the cache with (Rect, Layout) keys
+    # and never calls pop(); the only pop() in the crate is Vec::pop. No 0.12
+    # patch exists, and ratatui 0.30 needs Rust 1.88. Revisit with the MSRV.
+    "RUSTSEC-2026-0253",
+    # RUSTSEC-2026-0002: lru 0.12.5's IterMut soundness bug. ratatui never
+    # calls LruCache::iter_mut; its cache is used through get/put only.
+    "RUSTSEC-2026-0002",
+]
 
 [licenses]
 confidence-threshold = 0.8
@@ -34,6 +48,8 @@ allow = [
     # unicode-ident 1.0.27 (via proc-macro2/syn -> clap_derive) is
     # "(MIT OR Apache-2.0) AND Unicode-3.0"; the AND requires allowing it.
     "Unicode-3.0",
+    # foldhash 0.1.5 (via lru -> ratatui 0.29) is Zlib, a permissive license.
+    "Zlib",
 ]
 exceptions = []
 

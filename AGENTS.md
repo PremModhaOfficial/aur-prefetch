@@ -98,8 +98,9 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 
 All six subcommands are implemented and every one has sim coverage. `NEXT.md`
 is the authoritative order of work. The TUI is specified in `TUI.md` and
-`PROGRESS.md`. Phase 7 T0 (the shared report layer) is landed; no TUI code
-exists yet.
+`PROGRESS.md`. Phase 7 T0 (the shared report layer) and the T1 shell are
+landed. The shell is read-only; there is no dashboard.
 
-Next action: Phase 7 T1 in `NEXT.md`, the tree shell. It reads `check::collect`
-and `fetch::plan`; it does not collect its own facts.
+Next action: close T1's forced-panic and Ctrl-Z pty checks, then start T2, the
+tree. The tree reads `check::collect` and `fetch::plan`; it does not collect its
+own facts.

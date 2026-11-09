@@ -8,6 +8,7 @@ use std::fmt;
 pub enum Error {
     Blocked(String),
     Failed(String),
+    Interrupted,
 }
 
 impl Error {
@@ -24,6 +25,7 @@ impl Error {
         match self {
             Self::Blocked(_) => 1,
             Self::Failed(_) => 2,
+            Self::Interrupted => 130,
         }
     }
 }
@@ -32,6 +34,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Blocked(message) | Self::Failed(message) => f.write_str(message),
+            Self::Interrupted => f.write_str("interrupted"),
         }
     }
 }
@@ -50,6 +53,11 @@ mod tests {
     #[test]
     fn failed_exits_2() {
         assert_eq!(Error::failed("pacman exited 1").exit_code(), 2);
+    }
+
+    #[test]
+    fn interrupted_exits_130() {
+        assert_eq!(Error::Interrupted.exit_code(), 130);
     }
 
     #[test]

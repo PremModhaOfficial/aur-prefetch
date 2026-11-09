@@ -81,6 +81,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `28-doctor-symlinked-cache.sh` | a symlinked `CacheDir` is resolved before checking `alpm` traversal |
 | `29-init-visudo-root.sh` | root `visudo -cf` accepts the user-owned temp rule that `init` validates through sudo |
 | `30-doctor-missing-aurto.sh` | an `Include` line whose aurto file is missing makes `doctor` exit 1 |
+| `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and a pty quit restores the terminal |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
