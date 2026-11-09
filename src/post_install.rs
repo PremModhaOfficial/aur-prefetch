@@ -21,6 +21,11 @@ pub struct Receipt {
     pub failed: bool,
     /// The failure named a full disk; the repair advice says so.
     pub disk_full: bool,
+    /// True when `yay` actually ran, even if it exited nonzero. False when a
+    /// gate or spawn failure stopped the install before the command.
+    pub ran: bool,
+    /// Why the install did not start, when it did not run.
+    pub reason: Option<String>,
 }
 
 /// Collect the receipt for a finished install.
@@ -63,7 +68,18 @@ fn collect_paths(
         failed: exit_code != 0,
         disk_full: stderr.to_ascii_lowercase().contains("no space left")
             || stderr.to_ascii_lowercase().contains("disk full"),
+        ran: true,
+        reason: None,
     }
+}
+
+/// A receipt for an install that never started. It never claims a command ran.
+pub fn collect_not_run(runner: &dyn CommandRunner, reason: &str) -> Receipt {
+    let mut receipt = collect(runner, 0, "");
+    receipt.ran = false;
+    receipt.failed = true;
+    receipt.reason = Some(reason.to_string());
+    receipt
 }
 
 fn disk_kernels(modules: &Path) -> Vec<String> {
@@ -114,6 +130,9 @@ fn count_pacnew(dir: &Path, depth: usize) -> u32 {
 pub fn repair_advice(receipt: &Receipt) -> Option<&'static str> {
     if !receipt.failed {
         return None;
+    }
+    if !receipt.ran {
+        return Some("the install did not run; fix the gate and attest again");
     }
     if receipt.disk_full {
         Some(
@@ -218,5 +237,21 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).expect("clean temp root");
+    }
+
+    #[test]
+    fn a_not_run_receipt_never_claims_a_command_exit() {
+        let runner = FakeRunner::new();
+        uname(&runner, "6.1");
+        let receipt = super::collect_not_run(&runner, "stale lock db.lck");
+
+        assert!(!receipt.ran);
+        assert!(receipt.failed);
+        assert_eq!(receipt.reason.as_deref(), Some("stale lock db.lck"));
+        assert!(
+            repair_advice(&receipt)
+                .expect("advice")
+                .contains("did not run")
+        );
     }
 }

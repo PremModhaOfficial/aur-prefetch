@@ -30,11 +30,12 @@ script -qec "stty rows 40 cols 120; aur-prefetch tui" /dev/null
 EOF
 chmod 755 "$driver"
 
-# One second for the static frame, F, four seconds for the paced transfer and
-# the result frame, l to open the captured log, one second to prove a real
-# line, esc to close the log (not detach), then q. pacman's stdout is
+# One second for the static frame, F, one second of the running fetch, i (which
+# must be refused while the fetch owns the lock), three seconds for the paced
+# transfer and the result frame, l for the captured log, one second to prove a
+# real line, esc to close the log (not detach), then q. pacman's stdout is
 # block-buffered when piped, so its lines are complete only after it exits.
-( sleep 1; printf 'F'; sleep 4; printf 'l'; sleep 1; printf '\033'; sleep 1; printf 'q' ) \
+( sleep 1; printf 'F'; sleep 1; printf 'i'; sleep 3; printf 'l'; sleep 1; printf '\033'; sleep 1; printf 'q' ) \
     | timeout 30 runuser -l builder -c "$driver" >"$screen" 2>&1
 status=$?
 assert_eq "$status" "0" "the TUI exited 0 after the fetch result"
@@ -71,6 +72,11 @@ assert_contains "$clean" "lock" "the lock gate ran"
 assert_contains "$clean" "1 pending" "the lists gate carries the real count"
 assert_contains "$clean" "fetch log" "l opens the captured log"
 assert_contains "$clean" "Synchronizing" "the log shows a real pacman line"
+
+# The install gate must stay shut while the fetch is in flight: one mutation at
+# a time, and the lock may not exist for the first moments.
+assert_false "the install gate is refused during a fetch" \
+    bash -c 'printf "%s" "$1" | grep -q "space attest"' _ "$clean"
 
 # 2. The row becomes done from the final artifact.
 assert_contains "$clean" "✔ simapp" "the final artifact finishes the row"

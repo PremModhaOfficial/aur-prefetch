@@ -13,6 +13,9 @@ use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 
+use crate::error::Error;
+use crate::runner::CommandRunner;
+
 pub struct Guard {
     active: bool,
 }
@@ -40,18 +43,22 @@ impl Guard {
     ///
     /// `kill -TSTP` is used instead of a libc call so the crate keeps its
     /// no-unsafe rule. The child exits before the parent stops.
-    pub fn suspend(&mut self) -> io::Result<()> {
+    pub fn suspend(&mut self, runner: &dyn CommandRunner) -> Result<(), Error> {
         self.restore();
 
         let pid = std::process::id().to_string();
-        let status = std::process::Command::new("kill")
-            .args(["-TSTP", &pid])
-            .status()?;
-        if !status.success() {
-            return Err(io::Error::other("kill -TSTP failed"));
+        let output = runner
+            .run("kill", &["-TSTP", &pid])
+            .map_err(|err| Error::failed(format!("cannot suspend: {err}")))?;
+        if output.code != 0 {
+            return Err(Error::failed(format!(
+                "kill -TSTP exited {}: {}",
+                output.code,
+                output.stderr.trim()
+            )));
         }
 
-        *self = Self::enter()?;
+        *self = Self::enter().map_err(|err| Error::failed(format!("cannot resume: {err}")))?;
         Ok(())
     }
 }

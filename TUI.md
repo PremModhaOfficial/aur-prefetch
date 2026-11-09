@@ -505,7 +505,9 @@ The one screen allowed to leave the TUI.
 Status: T3b/T3c implement this screen. `enter` is armed only after the news
 attestation and only when no gate failed; it suspends the TUI, runs the exact
 `yay -Syuu` attached with the CLI's options, restores the terminal and opens
-the post-install receipt. The receipt is read-only: its attached `p` (sudo
+the post-install receipt. While a fetch is running, `i` is ignored: one
+mutation at a time. A gate refusal before `yay` starts produces a "not run"
+receipt, never a fabricated command exit. The receipt is read-only: its attached `p` (sudo
 pacdiff), copy and install-log keys are not wired yet, and it says to run
 `sudo pacdiff` after closing.
 

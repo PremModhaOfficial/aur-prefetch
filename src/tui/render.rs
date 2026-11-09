@@ -508,14 +508,18 @@ fn post_install_lines(
     } else {
         (ok, accent_bold(color, DONE))
     };
+    let exit_text = if receipt.ran {
+        format!("yay -Syuu exited {}", receipt.data.exit_code)
+    } else {
+        match &receipt.reason {
+            Some(reason) => format!("yay -Syuu not run: {reason}"),
+            None => "yay -Syuu not run".to_string(),
+        }
+    };
     let mut lines = vec![
         Line::styled(cell_text("POST-INSTALL", width, ascii), bold()),
         Line::styled(
-            cell_text(
-                &format!("{exit_glyph}  yay -Syuu exited {}", receipt.data.exit_code),
-                width,
-                ascii,
-            ),
+            cell_text(&format!("{exit_glyph}  {exit_text}"), width, ascii),
             exit_style,
         ),
     ];
@@ -2389,6 +2393,8 @@ mod tests {
             },
             failed: false,
             disk_full: false,
+            ran: true,
+            reason: None,
         }
     }
 
@@ -2404,6 +2410,8 @@ mod tests {
             },
             failed: true,
             disk_full: true,
+            ran: true,
+            reason: None,
         }
     }
 
@@ -3257,6 +3265,22 @@ mod tests {
             "the kernel on disk differs\n{frame}"
         );
         assert!(!frame.contains("run sudo pacdiff"), "{frame}");
+    }
+
+    #[test]
+    fn a_not_run_receipt_never_claims_an_exit() {
+        let mut receipt = success_receipt();
+        receipt.ran = false;
+        receipt.failed = true;
+        receipt.reason = Some("stale lock db.lck".to_string());
+        let frame = render_post_install(&receipt, 120, 40, false, false);
+
+        assert!(
+            frame.contains("yay -Syuu not run: stale lock db.lck"),
+            "{frame}"
+        );
+        assert!(!frame.contains("exited"), "no invented exit\n{frame}");
+        assert!(frame.contains("the install did not run"), "{frame}");
     }
 
     #[test]

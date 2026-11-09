@@ -247,10 +247,8 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 // The attached command owns the terminal. The
                                 // same guard path as Ctrl-Z restores it after.
                                 drop(terminal);
-                                guard.suspend().map_err(|err| {
-                                    Error::failed(format!("cannot suspend: {err}"))
-                                })?;
-                                let result = install::run_with(
+                                guard.suspend(&SystemRunner)?;
+                                let outcome = install::run_with_status(
                                     config,
                                     &SystemRunner,
                                     install::Options {
@@ -260,11 +258,13 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                         euid,
                                     },
                                 );
-                                let receipt = post_install::collect(
-                                    &SystemRunner,
-                                    install_exit_code(&result),
-                                    "",
-                                );
+                                let receipt = match &outcome {
+                                    Ok(code) => post_install::collect(&SystemRunner, *code, ""),
+                                    Err(error) => post_install::collect_not_run(
+                                        &SystemRunner,
+                                        &error.to_string(),
+                                    ),
+                                };
                                 terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
                                     .map_err(|err| {
                                         Error::failed(format!("cannot restart the terminal: {err}"))
@@ -274,7 +274,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 })?;
                                 snapshot = collect_snapshot(config, SystemTime::now())?;
                                 post_install = Some(receipt);
-                                notice = Some(Notice::install(result));
+                                notice = Some(Notice::install(outcome));
                                 news_attested = false;
                             }
                         }
@@ -298,9 +298,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     }
                     KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         drop(terminal);
-                        guard
-                            .suspend()
-                            .map_err(|err| Error::failed(format!("cannot suspend: {err}")))?;
+                        guard.suspend(&SystemRunner)?;
                         terminal =
                             Terminal::new(CrosstermBackend::new(io::stdout())).map_err(|err| {
                                 Error::failed(format!("cannot restart the terminal: {err}"))
@@ -342,10 +340,14 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                         }
                     }
                     KeyCode::Char('i') => {
-                        install_gate = Some(InstallGate {
-                            preflight: install::preflight(config, &SystemRunner),
-                        });
-                        dirty = true;
+                        if session.as_ref().is_some_and(FetchSession::running) {
+                            // One mutation at a time: the fetch owns pacman's lock.
+                        } else {
+                            install_gate = Some(InstallGate {
+                                preflight: install::preflight(config, &SystemRunner),
+                            });
+                            dirty = true;
+                        }
                     }
                     KeyCode::Char('r') => {
                         if session.as_ref().is_some_and(FetchSession::running) {
@@ -421,11 +423,17 @@ enum NoticeKind {
 }
 
 impl Notice {
-    fn install(result: Result<(), Error>) -> Self {
+    fn install(result: Result<i32, Error>) -> Self {
         match result {
-            Ok(()) => Self {
+            Ok(0) => Self {
                 status: "install: yay -Syuu exited 0".to_string(),
                 failure: false,
+                gates: Vec::new(),
+                kind: NoticeKind::Install,
+            },
+            Ok(code) => Self {
+                status: format!("install failed: yay -Syuu exited {code}"),
+                failure: true,
                 gates: Vec::new(),
                 kind: NoticeKind::Install,
             },
@@ -484,20 +492,6 @@ fn static_keys(ascii: bool, ledger: bool) -> &'static str {
         (false, true) => "q quit · g tree · ? help · r refresh",
         (true, false) => "q quit | g ledger | ? help | r refresh",
         (true, true) => "q quit | g tree | ? help | r refresh",
-    }
-}
-
-/// The real exit code behind an install result. The attached command's code is
-/// in the error text; a gate refusal falls back to its own exit code.
-fn install_exit_code(result: &Result<(), Error>) -> i32 {
-    match result {
-        Ok(()) => 0,
-        Err(error) => error
-            .to_string()
-            .rsplit_once("exited ")
-            .and_then(|(_, tail)| tail.split_whitespace().next())
-            .and_then(|code| code.parse().ok())
-            .unwrap_or_else(|| i32::from(error.exit_code())),
     }
 }
 

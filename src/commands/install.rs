@@ -147,6 +147,23 @@ pub fn run_with(
     runner: &dyn CommandRunner,
     options: Options,
 ) -> Result<(), Error> {
+    let code = run_with_status(config, runner, options)?;
+    if code != 0 {
+        return Err(Error::failed(format!("yay -Syuu exited {code}")));
+    }
+    Ok(())
+}
+
+/// Run the install and return the command's real exit code.
+///
+/// `Ok(code)` means `yay` actually ran, even when `code` is nonzero; `Err`
+/// means the install never started (a gate or a spawn failure). The TUI's
+/// receipt uses this distinction instead of parsing an error string.
+pub fn run_with_status(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    options: Options,
+) -> Result<i32, Error> {
     if options.euid == 0 {
         return Err(Error::blocked(
             "install must run as the user, not root: yay and PKGBUILDs must never run as root",
@@ -182,7 +199,7 @@ pub fn run_with(
     println!("install: running yay -Syuu");
     let code = runner.run_interactive("yay", &["-Syuu"])?;
     if code != 0 {
-        return Err(Error::failed(format!("yay -Syuu exited {code}")));
+        return Ok(code);
     }
 
     if let Some(warning) = record_install(&mut state, config, now_unix()) {
@@ -193,7 +210,7 @@ pub fn run_with(
     println!("install: next: sudo pacdiff");
     println!("install: next: uname -r && ls /usr/lib/modules/ && pacman -Q linux");
     println!("install: reboot if the kernel or libraries changed, or if news says so");
-    Ok(())
+    Ok(0)
 }
 
 /// The two update queries the install gate needs. One implementation for the
@@ -443,7 +460,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        Options, effective_uid, format_unix_utc, install_since, preflight, record_install, run_with,
+        Options, effective_uid, format_unix_utc, install_since, preflight, record_install,
+        run_with, run_with_status,
     };
     use crate::config::Config;
     use crate::error::Error;
@@ -605,6 +623,36 @@ mod tests {
         assert!(!ran_yay(&runner));
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn run_with_status_returns_the_real_yay_code_or_an_error_when_it_never_ran() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.trusted_users, "alice\n").expect("trust");
+        let runner = FakeRunner::new();
+        queue_lists(&runner, "simapp 1.0.0-1 -> 2.0.0-1\n");
+        runner.push_interactive(7);
+
+        let code = run_with_status(&config, &runner, options(true, false, true))
+            .expect("yay ran and returned its code");
+        assert_eq!(code, 7, "the real nonzero code is not converted to 2");
+        assert!(
+            !config.state_file.exists(),
+            "a failed install records nothing"
+        );
+
+        let refused_dir = temp_dir();
+        let refused = test_config(&refused_dir);
+        fs::write(&refused.pacman_lock, "").expect("lock");
+        let blocked = FakeRunner::new();
+        blocked.push_output(ok("1234\n"));
+        let error = run_with_status(&refused, &blocked, options(true, false, true))
+            .expect_err("the lock gate refuses");
+        assert!(matches!(error, Error::Blocked(_)));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+        fs::remove_dir_all(&refused_dir).expect("clean temp dir");
     }
 
     #[test]
