@@ -3,8 +3,8 @@
 Status: **spec + implementation plan. The shared report layer, the T1 shell,
 the static bottom-up dependency forest (T2a), the pure live grammar/palette
 (T2b), the real live fetch (T2e), the repair card and the ledger (T2f), the
-fetch checklist and log (T3a), the read-only install gate (T3b), and the
-attached install (T3c) exist.**
+fetch checklist and log (T3a), the read-only install gate (T3b), the attached
+install (T3c), and the post-install receipt (T3d) exist.**
 Written 2026-11-08. Revised after review: the live tree is borrowed from
 `nix-output-monitor` (nom), not competed with.
 
@@ -608,7 +608,8 @@ proves both. T3b renders the install gate from `install::preflight` with the
 same checks the CLI runs, a session-only news attestation and the exact command;
 sim 32 proves it cancels without installing. T3c arms `enter` after attestation
 and runs the same CLI path attached; sim 36 proves the upgrade and the terminal
-restore.
+restore. T3d collects the real exit, kernel, `.pacnew` count and reboot advice
+into the read-only post-install receipt.
 
 Done when: sim proves cached nodes never animate, live fetch nodes do, failure
 freezes instead of retrying, and the attached install still shows the raw

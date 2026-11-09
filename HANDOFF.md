@@ -89,7 +89,14 @@ covers where things stand and the first move. Do not re-plan.
   preflight euid), restores the terminal, re-collects and shows an honest
   result line. The attached command is never faked as live. Sim 36 runs as the
   sim `installer` and proves the upgrade, the scoped escalation, the state
-  write and the terminal restore. The post-install receipt remains.
+  write and the terminal restore.
+- T3d is landed: a finished install opens the read-only post-install receipt
+  built from `post_install::collect`: the real exit, the running kernel against
+  `/usr/lib/modules`, the `.pacnew` count, kernel-based reboot advice and a
+  repair line on failure. It closes with enter or esc. Sim 36 proves the
+  success receipt. The attached `p` (sudo pacdiff), copy and install-log keys
+  are not wired; the receipt says to run `sudo pacdiff` after closing. T3 is
+  closed; T4 polish is next.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -110,20 +117,20 @@ covers where things stand and the first move. Do not re-plan.
   dependency tree; the T2b live grammar and palette read the pure frontier, and
   T2e runs the real fetch and drives the real cache source. `prototype/` holds
   the design sketches.
-- `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is closed with
-  T2a–T2f landed. T3 actions are next.
+- `NEXT.md` Phase 7 is the TUI order of work. T1, T2 and T3 are closed. T4
+  polish is next.
 
-## Do this first: T3
+## Do this first: T4
 
-1. T2 is closed and T3a/T3b are landed: the forest, the pure live view and
-   palette, the bars and viewport, the real `FetchMonitor`, the live fetch loop,
-   the repair card, the ledger, the PRE-FLIGHT checklist, the `l` log and the
-   read-only install gate and the attached install are done. The next TUI work
-   is the post-install receipt: build it from `PostInstall` on success and
-   failure, cover success, failure, disk-full, pacdiff, kernel and reboot,
-   and keep the tree as a plan before and a result after. Use
-   `check::collect`, `progress::collect` and `fetch::plan`; do not add a second
-   update collector. The ready set is a set, not a queue.
+1. T2 and T3 are closed: the forest, the pure live view and palette, the bars
+   and viewport, the real `FetchMonitor`, the live fetch loop, the repair card,
+   the ledger, the fetch checklist/log, the install gate, the attached install
+   and the post-install receipt are done. The next TUI work is T4 polish:
+   `--no-motion`, the ASCII pass, the 2,000-package performance pass and keymap
+   overrides. Optionally wire the receipt's attached `p` (sudo pacdiff), copy
+   and install-log keys. Use `check::collect`, `progress::collect` and
+   `fetch::plan`; do not add a second update collector. The ready set is a set,
+   not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;

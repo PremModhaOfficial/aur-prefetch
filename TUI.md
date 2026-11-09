@@ -1,8 +1,8 @@
 # TUI.md — terminal UI spec
 
-Status: **spec. T0 report layer, the T1 read-only shell, T2a–T2f, T3's fetch
-checklist/log, its install gate and the attached install are implemented; the
-post-install receipt and later screens are not.** Written 2026-11-08.
+Status: **spec. T0 report layer, the T1 shell, T2a–T2f and T3's fetch
+checklist/log, install gate, attached install and post-install receipt are
+implemented; T4 polish and later screens are not.** Written 2026-11-08.
 
 Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
 explorations plus Atlas, the hillclimbed target, and a reviewed cross-tool
@@ -504,9 +504,10 @@ The one screen allowed to leave the TUI.
 
 Status: T3b/T3c implement this screen. `enter` is armed only after the news
 attestation and only when no gate failed; it suspends the TUI, runs the exact
-`yay -Syuu` attached with the CLI's options, restores the terminal and
-re-collects. The post-install receipt is not implemented yet; the result is a
-single honest line.
+`yay -Syuu` attached with the CLI's options, restores the terminal and opens
+the post-install receipt. The receipt is read-only: its attached `p` (sudo
+pacdiff), copy and install-log keys are not wired yet, and it says to run
+`sudo pacdiff` after closing.
 
 ```
 ┌ Install ─────────────────────────────────────────────────────────────────── 3 packages ┐
@@ -1222,17 +1223,22 @@ T3c landed: after attestation and with no failed gate, `enter` is armed. Enter
 suspends the TUI, runs `install::run_with` with the CLI's exact `Options`,
 restores the terminal, re-collects and shows the result. The attached command
 is never shown as a fake live tree. Sim 36 proves the upgrade, the scoped
-escalation, the state write and the terminal restore. The post-install receipt
-remains.
+escalation, the state write and the terminal restore.
+
+T3d landed: the receipt is built from `post_install::collect` and shows the
+real exit, the running kernel against `/usr/lib/modules`, the `.pacnew` count,
+kernel-based reboot advice, and a repair line on failure. It is read-only and
+closes with enter or esc; sim 36 proves the success receipt. The attached `p`
+(sudo pacdiff), copy and install-log keys remain unwired.
 
 ### T3. Actions
 
 - [x] Fetch tree with the gate checklist and streamed lines.
 - [x] Install gate overlay, news attestation, exact argv.
 - [x] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
-- [ ] Post-install receipt.
+- [x] Post-install receipt.
 - [x] Suspend/restore verified in a pty.
-- [ ] No clean action in v1; `aur-prefetch clean` stays CLI.
+- [x] No clean action in v1; `aur-prefetch clean` stays CLI.
 
 Done when: sim 31 (pty restore), 32 (the gate opens and cancels unchanged), 34
 (the live fetch) and 36 (the attached install upgrades and restores the

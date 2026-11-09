@@ -409,8 +409,7 @@ the ledger, a flat list of the same rows with no branch connectors, statically
 and during a fetch. The static `--render-once` frame, its goldens and the CLI
 text are unchanged. Sim 35 corrupts the repo artifact behind the paced
 transfer and proves the running row, the real failure, the frozen frontier, the
-card, no install, no state write and the one allowed escalation. T2 is closed;
-T3 actions are next.
+card, no install, no state write and the one allowed escalation. T2 is closed.
 
 The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,
@@ -424,9 +423,9 @@ not implementation.
 - [x] Fetch tree with the gate checklist and streamed lines.
 - [x] Install gate overlay, news attestation, exact argv.
 - [x] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
-- [ ] Post-install receipt.
+- [x] Post-install receipt.
 - [x] Suspend/restore verified in a pty.
-- [ ] No clean action in v1; `aur-prefetch clean` stays CLI.
+- [x] No clean action in v1; `aur-prefetch clean` stays CLI.
 
 Done when sim 31 (the pty shell restores the terminal), 32 (the gate opens and
 cancels with no change), 34 (the live fetch), and 36 (the attached install
@@ -461,8 +460,16 @@ terminal, re-collects and shows an honest result line. The tree is a plan
 before and a result after; the attached command is never faked as live. Sim 36
 runs the TUI as the sim `installer`, attests, enters, proves the upgrade
 installed, the exact scoped escalation ran, no AUR build happened, the state
-file recorded the install, and the terminal was restored. The post-install
-receipt remains the last T3 item.
+file recorded the install, and the terminal was restored.
+
+T3d landed: a finished install opens the post-install receipt built from
+`post_install::collect`: the real exit, the running kernel against
+`/usr/lib/modules`, the `.pacnew` count, and kernel-based reboot advice. A
+failure also carries a repair line; disk-full is named when the evidence says
+so. It is read-only and closes with enter or esc. Sim 36 proves the success
+receipt alongside the upgrade. The receipt's attached `p` (sudo pacdiff), copy
+and install-log keys from `TUI.md` are not wired; the receipt says to run
+`sudo pacdiff` after closing. T3's checklist is closed; T4 polish is next.
 
 ### T4. Polish
 

@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::commands::install::{INSTALL_COMMAND, Preflight};
 use crate::gate::{Gate, GateState};
+use crate::post_install::Receipt;
 use crate::report::{ArtifactState, PrefetchReport, Snapshot, Update};
 use crate::runner::{StreamKind, StreamLine};
 use crate::util::human_bytes;
@@ -456,6 +457,145 @@ pub fn render_install_gate(
     terminal
         .draw(|frame| draw_install_gate(frame, preflight, attested, ascii, color))
         .expect("draw install gate");
+    buffer_text(terminal.backend().buffer(), width)
+}
+
+/// Draw the post-install receipt. Read-only: it reports the real exit, the
+/// kernel on disk, the `.pacnew` count and the reboot advice, and never edits
+/// `/etc`.
+pub fn draw_post_install(frame: &mut Frame, receipt: &Receipt, ascii: bool, color: bool) {
+    let area = frame.area();
+    if area.width < 40 || area.height < 12 {
+        return;
+    }
+    frame.render_widget(Clear, area);
+    let separator = if ascii { "|" } else { "·" };
+    let mode = if receipt.failed { "failure" } else { "success" };
+    let title = format!(" Post-install {separator} {mode} ");
+    let block = if ascii {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_set(border::PLAIN)
+            .title(title)
+    } else {
+        Block::default().borders(Borders::ALL).title(title)
+    };
+    frame.render_widget(block, area);
+    let inner = Rect::new(
+        area.x.saturating_add(2),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(4),
+        area.height.saturating_sub(2),
+    );
+    let text = post_install_lines(receipt, inner.width as usize, ascii, color);
+    frame.render_widget(Paragraph::new(text), inner);
+}
+
+fn post_install_lines(
+    receipt: &Receipt,
+    width: usize,
+    ascii: bool,
+    color: bool,
+) -> Vec<Line<'static>> {
+    let separator = if ascii { "|" } else { "·" };
+    let ok = if ascii { "+" } else { "✓" };
+    let fail = if ascii { "x" } else { "✖" };
+    let warn = if ascii { "!" } else { "▲" };
+    let none = if ascii { "-" } else { "–" };
+
+    let (exit_glyph, exit_style) = if receipt.failed {
+        (fail, accent_bold(color, FAILURE))
+    } else {
+        (ok, accent_bold(color, DONE))
+    };
+    let mut lines = vec![
+        Line::styled(cell_text("POST-INSTALL", width, ascii), bold()),
+        Line::styled(
+            cell_text(
+                &format!("{exit_glyph}  yay -Syuu exited {}", receipt.data.exit_code),
+                width,
+                ascii,
+            ),
+            exit_style,
+        ),
+    ];
+
+    let running = if receipt.data.kernel_running.is_empty() {
+        "unknown".to_string()
+    } else {
+        receipt.data.kernel_running.clone()
+    };
+    let disk = if receipt.data.kernel_disk.is_empty() {
+        "unknown".to_string()
+    } else {
+        receipt.data.kernel_disk.join(", ")
+    };
+    let kernel = format!("{none}  kernel    running {running} {separator} on disk {disk}");
+    lines.push(Line::styled(cell_text(&kernel, width, ascii), dim(color)));
+
+    let pacdiff = if receipt.failed {
+        format!("{none}  pacdiff   not checked because the upgrade failed")
+    } else if receipt.data.pacdiff_count == 0 {
+        format!("{none}  pacdiff   no .pacnew files")
+    } else {
+        format!(
+            "{warn}  pacdiff   {} .pacnew file(s); run sudo pacdiff after closing",
+            receipt.data.pacdiff_count
+        )
+    };
+    let pacdiff_style = if !receipt.failed && receipt.data.pacdiff_count > 0 {
+        accent_bold(color, PLANNED)
+    } else {
+        dim(color)
+    };
+    lines.push(Line::styled(
+        cell_text(&pacdiff, width, ascii),
+        pacdiff_style,
+    ));
+
+    let reboot = if receipt.data.reboot_required {
+        format!("{warn}  reboot    recommended: the running kernel is not on disk")
+    } else {
+        format!("{none}  reboot    not required")
+    };
+    let reboot_style = if receipt.data.reboot_required {
+        accent_bold(color, PLANNED)
+    } else {
+        dim(color)
+    };
+    lines.push(Line::styled(cell_text(&reboot, width, ascii), reboot_style));
+
+    if let Some(advice) = crate::post_install::repair_advice(receipt) {
+        lines.push(Line::styled(
+            cell_text(&format!("repair: {advice}"), width, ascii),
+            accent_bold(color, FAILURE),
+        ));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::styled(
+        cell_text("enter / esc close", width, ascii),
+        dim(color),
+    ));
+    lines
+}
+
+/// The receipt in a test backend, for goldens.
+pub fn render_post_install(
+    receipt: &Receipt,
+    width: u16,
+    height: u16,
+    ascii: bool,
+    color: bool,
+) -> String {
+    if width == 0 || height == 0 {
+        return String::new();
+    }
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).expect("test backend");
+    terminal
+        .draw(|frame| draw_post_install(frame, receipt, ascii, color))
+        .expect("draw post-install");
     buffer_text(terminal.backend().buffer(), width)
 }
 
@@ -1871,11 +2011,13 @@ mod tests {
 
     use super::{
         Footer, RepairCard, display_width, render_frame, render_install_gate, render_live_frame,
-        render_live_frame_status, render_log_frame, repair_hint,
+        render_live_frame_status, render_log_frame, render_post_install, repair_hint,
     };
     use crate::commands::install::Preflight;
     use crate::frontier::Observed;
     use crate::gate::Gate;
+    use crate::post_install::Receipt;
+    use crate::report::PostInstall;
     use crate::report::{
         ArtifactState, Cached, PackageView, PrefetchReport, Repo, Section, Snapshot, Update,
     };
@@ -2319,6 +2461,36 @@ mod tests {
             });
         }
         lines
+    }
+
+    fn success_receipt() -> Receipt {
+        Receipt {
+            data: PostInstall {
+                exit_code: 0,
+                kernel_running: "6.2".to_string(),
+                kernel_disk: vec!["6.1".to_string(), "6.2".to_string()],
+                pacdiff_count: 2,
+                reboot_required: false,
+                news_url: "https://archlinux.org/news/".to_string(),
+            },
+            failed: false,
+            disk_full: false,
+        }
+    }
+
+    fn failure_receipt() -> Receipt {
+        Receipt {
+            data: PostInstall {
+                exit_code: 1,
+                kernel_running: "6.1".to_string(),
+                kernel_disk: vec!["6.2".to_string()],
+                pacdiff_count: 0,
+                reboot_required: true,
+                news_url: "https://archlinux.org/news/".to_string(),
+            },
+            failed: true,
+            disk_full: true,
+        }
     }
 
     fn install_preflight() -> Preflight {
@@ -3130,6 +3302,56 @@ mod tests {
             "the action is armed\n{frame}"
         );
         assert!(!frame.contains("a gate blocks install"), "{frame}");
+    }
+
+    #[test]
+    fn the_success_receipt_reports_the_exit_kernel_pacnew_and_reboot() {
+        let frame = render_post_install(&success_receipt(), 120, 40, false, false);
+
+        for needle in [
+            "Post-install · success",
+            "✓  yay -Syuu exited 0",
+            "running 6.2",
+            "on disk 6.1, 6.2",
+            "2 .pacnew file(s)",
+            "run sudo pacdiff after closing",
+            "reboot    not required",
+            "enter / esc close",
+        ] {
+            assert!(frame.contains(needle), "missing {needle:?}\n{frame}");
+        }
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-post-install-120x40.txt")
+        );
+    }
+
+    #[test]
+    fn the_failure_receipt_names_the_exit_and_the_repair() {
+        let frame = render_post_install(&failure_receipt(), 120, 40, false, false);
+
+        assert!(frame.contains("Post-install · failure"), "{frame}");
+        assert!(frame.contains("✖  yay -Syuu exited 1"), "{frame}");
+        assert!(
+            frame.contains("not checked because the upgrade failed"),
+            "{frame}"
+        );
+        assert!(frame.contains("repair: disk full"), "{frame}");
+        assert!(
+            frame.contains("reboot    recommended"),
+            "the kernel on disk differs\n{frame}"
+        );
+        assert!(!frame.contains("run sudo pacdiff"), "{frame}");
+    }
+
+    #[test]
+    fn the_receipt_is_ascii_safe() {
+        let frame = render_post_install(&success_receipt(), 120, 40, true, false);
+
+        assert!(frame.contains("Post-install | success"), "{frame}");
+        assert!(frame.contains("+  yay -Syuu exited 0"), "{frame}");
+        assert!(frame.contains("-  reboot"), "{frame}");
+        assert!(!frame.contains('·'), "{frame}");
     }
 
     #[test]
@@ -4083,5 +4305,11 @@ mod tests {
             render_install_gate(&install_preflight(), false, 120, 40, false, false),
         )
         .expect("write install gate 120x40");
+
+        std::fs::write(
+            dir.join("tui-post-install-120x40.txt"),
+            render_post_install(&success_receipt(), 120, 40, false, false),
+        )
+        .expect("write post-install 120x40");
     }
 }

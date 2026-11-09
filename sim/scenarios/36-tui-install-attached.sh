@@ -38,7 +38,14 @@ clean=$(sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b[()][A-Za-z0-9]//g' "$scr
 assert_contains "$clean" "enter install" "the attested gate arms the install"
 assert_contains "$clean" "install: running yay -Syuu" "the CLI path ran attached"
 assert_contains "$clean" "install: done" "the CLI reported completion"
-assert_contains "$clean" "install: yay -Syuu exited 0" "the TUI result is on screen"
+
+# 1b. The post-install receipt owns the screen and reports the exit, kernel,
+#     pacnew state and reboot advice; it is read-only.
+assert_contains "$clean" "Post-install" "the receipt is shown"
+assert_contains "$clean" "exited 0" "the receipt carries the real exit"
+assert_contains "$clean" "kernel" "the receipt names the kernel"
+assert_contains "$clean" "pacdiff" "the receipt names pacdiff"
+assert_contains "$clean" ".pacnew" "the receipt reports the pacnew state"
 
 # 2. The upgrade really happened in this container.
 assert_eq "$(installed_version)" "2.0.0-1" "the pending package was installed"

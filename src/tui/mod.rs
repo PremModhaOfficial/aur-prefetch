@@ -28,6 +28,7 @@ use crate::commands::install;
 use crate::config::Config;
 use crate::error::Error;
 use crate::gate::Gate;
+use crate::post_install;
 use crate::progress;
 use crate::report::Snapshot;
 use crate::runner::SystemRunner;
@@ -103,6 +104,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     let mut ledger = false;
     let mut log_open = false;
     let mut install_gate: Option<InstallGate> = None;
+    let mut post_install: Option<post_install::Receipt> = None;
     // The news attestation lasts for this TUI session, not just one opening
     // of the gate, and is never written to disk.
     let mut news_attested = false;
@@ -192,6 +194,9 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             color,
                         );
                     }
+                    if let Some(receipt) = post_install.as_ref() {
+                        render::draw_post_install(frame, receipt, ascii, color);
+                    }
                 })
                 .map_err(|err| Error::failed(format!("cannot draw the terminal: {err}")))?;
             dirty = false;
@@ -212,6 +217,19 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
             .map_err(|err| Error::failed(format!("cannot read the terminal: {err}")))?
         {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
+                // The post-install receipt is read-only and modal.
+                if post_install.is_some() {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Enter => post_install = None,
+                        KeyCode::Char('q') => break,
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Err(Error::Interrupted);
+                        }
+                        _ => {}
+                    }
+                    dirty = true;
+                    continue;
+                }
                 // The install gate is modal: only attest, the armed install,
                 // cancel and quit are live while it is open.
                 if install_gate.is_some() {
@@ -242,6 +260,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                         euid,
                                     },
                                 );
+                                let receipt = post_install::collect(
+                                    &SystemRunner,
+                                    install_exit_code(&result),
+                                    "",
+                                );
                                 terminal = Terminal::new(CrosstermBackend::new(io::stdout()))
                                     .map_err(|err| {
                                         Error::failed(format!("cannot restart the terminal: {err}"))
@@ -250,6 +273,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                     Error::failed(format!("cannot clear the terminal: {err}"))
                                 })?;
                                 snapshot = collect_snapshot(config, SystemTime::now())?;
+                                post_install = Some(receipt);
                                 notice = Some(Notice::install(result));
                                 news_attested = false;
                             }
@@ -460,6 +484,20 @@ fn static_keys(ascii: bool, ledger: bool) -> &'static str {
         (false, true) => "q quit · g tree · ? help · r refresh",
         (true, false) => "q quit | g ledger | ? help | r refresh",
         (true, true) => "q quit | g tree | ? help | r refresh",
+    }
+}
+
+/// The real exit code behind an install result. The attached command's code is
+/// in the error text; a gate refusal falls back to its own exit code.
+fn install_exit_code(result: &Result<(), Error>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => error
+            .to_string()
+            .rsplit_once("exited ")
+            .and_then(|(_, tail)| tail.split_whitespace().next())
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| i32::from(error.exit_code())),
     }
 }
 
