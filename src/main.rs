@@ -9,7 +9,8 @@ use aur_prefetch::error::Error;
 #[command(
     name = "aur-prefetch",
     version,
-    about = "Split Arch updates: background fetch/build, foreground install"
+    about = "Split Arch updates: background fetch/build, foreground install",
+    after_help = "Exit codes: 0 healthy or done, 1 action needed or gated, 2 execution error, 130 Ctrl-C in the interactive TUI."
 )]
 struct Cli {
     #[command(subcommand)]

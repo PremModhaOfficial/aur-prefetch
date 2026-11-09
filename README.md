@@ -50,6 +50,9 @@ prints one frame to stdout so a script or a pipe can read it; the exit code is
 terminal, the interactive form exits `2` and points at `--render-once`.
 `--ascii` replaces every glyph with ASCII, and `NO_COLOR` removes color.
 
+Exit codes follow `check`: `0` healthy or done, `1` actionable, `2` a terminal
+or collection error, and `130` when Ctrl-C ends the interactive tree.
+
 In the interactive tree, `F` runs `fetch` with its existing lock and free-space
 gates and its exact `sudo -n pacman -Syuw --noconfirm` argv. While it runs, the
 tree shows each download from the real `.part` length against the real
@@ -93,6 +96,9 @@ An empty value falls back to the default.
 | `AUR_PREFETCH_PACMAN_LOG` | `/var/log/pacman.log` |
 | `AUR_PREFETCH_YAY_CACHE_DIR` | `$XDG_CACHE_HOME/yay` or `~/.cache/yay` |
 | `AUR_PREFETCH_TRUSTED_USERS` | `/etc/aurto/trusted-users` |
+| `AUR_PREFETCH_AURTO_REPO` | `/var/cache/pacman/aurto` |
+| `AUR_PREFETCH_AURBUILD_DIR` | `/var/lib/aurbuild` |
+| `AUR_PREFETCH_ARCHBUILD_DIR` | `/var/lib/archbuild` |
 | `AUR_PREFETCH_SNAPPER_CONFIG_DIR` | `/etc/snapper/configs` |
 | `AUR_PREFETCH_SUDOERS` | `/etc/sudoers.d/aur-prefetch` |
 | `AUR_PREFETCH_USER_UNIT_DIR` | `$XDG_CONFIG_HOME/systemd/user` or `~/.config/systemd/user` |

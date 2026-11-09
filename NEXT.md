@@ -64,6 +64,10 @@ are filled in. Change them here first, then implement.
 - `0` healthy, nothing to do, or action completed.
 - `1` action needed or blocked by a gate (updates pending, disk low, lock held).
 - `2` execution error (pacman, yay, config parse, permission).
+- `130` the interactive TUI was interrupted by Ctrl-C. Raw mode means Ctrl-C is
+  a key event, not a signal, and the conventional shell status for an interrupt
+  is the one exception to the three-code contract. A non-interactive command
+  never returns 130.
 - Same contract for every command. Document it in `--help`.
 
 ### D7. TUI defaults
