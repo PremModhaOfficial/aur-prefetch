@@ -368,6 +368,20 @@ known and unknown bytes at 120x40 and 80x24, ASCII bars, NO_COLOR, a 40-column
 row and a 200-package forest. `render_live_frame` is still not reachable from
 the real fetch source; the fetch adapter, repair card and ledger remain.
 
+T2d landed: `src/fetch_source.rs` is the real, pure fetch observation source.
+`FetchMonitor::new` seeds `LiveRun::plan`; `poll` reads only `plan.cache_dir`
+and turns a `.part` file into `Started` plus real byte progress against
+`TreeRow.size`, and a vanished `.part` plus a final artifact into `Finished`.
+Cache filenames are matched with `progress::entry_version` against the known
+package names, longest name first, so hyphens and prefix collisions do not
+misplace a file, and unmatched files are ignored. `finish` folds the command
+result: a nonzero code fails running nodes with `exit N` and a stderr excerpt
+so the reducer freezes and blocks dependents; a zero code finishes only a
+running node with a final artifact and leaves the rest running. The monitor
+writes nothing, runs no command, and takes every timestamp from the caller.
+`Live fetch` stays unticked: T2e still has to run the fetch command, call
+`poll`, and redraw.
+
 The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,
 frontier wiring, real progress bars, layout and viewport, ANSI-16 palette,

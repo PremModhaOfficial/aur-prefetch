@@ -394,7 +394,7 @@ fn scan(
 /// Cache filenames are `<name>-<version>-<arch>.pkg.tar.<ext>[.part]`. The
 /// name comes from the pending set, so `foo` cannot mistake `foo-bar` for its
 /// own artifact when the remaining version does not start like a version.
-fn entry_version(file_name: &str, prefix: &str) -> Option<(String, bool)> {
+pub(crate) fn entry_version(file_name: &str, prefix: &str) -> Option<(String, bool)> {
     if file_name.ends_with(".sig") {
         return None;
     }

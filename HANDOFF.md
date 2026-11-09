@@ -42,6 +42,14 @@ covers where things stand and the first move. Do not re-plan.
   running/failed/blocked rows, and reports the shown root count. Goldens cover
   known and unknown bytes, ASCII, a 40-column row and a 200-package forest. The
   real fetch byte source, the repair card and the ledger remain.
+- T2d is landed: `src/fetch_source.rs` is the real fetch observation source.
+  `FetchMonitor::new` seeds `LiveRun::plan` and `poll` reads only
+  `plan.cache_dir`. A `.part` file starts a node and reports its real length
+  against `TreeRow.size`; a vanishing `.part` plus a final artifact finishes a
+  running node. `finish` fails running nodes on a nonzero exit with `exit N`
+  and a stderr excerpt, or finishes only running nodes with an artifact on
+  zero. It writes nothing and runs no command. The repair card, the ledger, and
+  the TUI caller that runs the fetch and drives `poll` remain.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -67,13 +75,14 @@ covers where things stand and the first move. Do not re-plan.
 
 ## Do this first: T2
 
-1. Finish T2: T2a (the forest) and T2b (the pure live view and palette) are
-   landed, and T2c's progress bars and viewport are landed on synthetic
-   observations. Wire the real fetch byte source into `LiveRun` through
-   `observe_progress`, then add the repair card and the ledger. Use
-   `check::collect`, `progress::collect` and `fetch::plan`; do not add a second
-   update collector. The ready set is a set, not a queue. The remaining order
-   in `docs/NOM.md` is the live loop and the final receipt.
+1. Finish T2: T2a (the forest), T2b (the pure live view and palette), T2c's
+   progress bars and viewport, and T2d's real `FetchMonitor` are landed.
+   `FetchMonitor` already turns the real cache into `LiveRun` observations;
+   T2e has to run the fetch command, call `poll`, redraw, and add the repair
+   card and the ledger. Use `check::collect`, `progress::collect` and
+   `fetch::plan`; do not add a second update collector. The ready set is a set,
+   not a queue. The remaining order in `docs/NOM.md` is the live loop and the
+   final receipt.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;
