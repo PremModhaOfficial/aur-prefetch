@@ -354,6 +354,13 @@ in ASCII. Source the bytes from the fetch stream or a cache `.part` file.
 Acceptance: a fixture with known bytes produces an exact bar and percent; an
 unknown total produces no bar and no invented percentage.
 
+T2c landed the rendering side: `LiveRow.progress` carries observed
+`done`/`total`, `Progress::new` clamps and refuses a zero total, and the
+renderer uses the measured geometry plus `■/◧/□` (or `#/-/ `) with the percent
+at the fixed right edge. Goldens cover known and unknown bytes at 120x40 and
+80x24. The byte source is still open: this slice feeds synthetic observations
+through `LiveRun::observe_progress`, not the fetch stream or a `.part` file.
+
 ### 4. Layout and viewport
 
 Adopt the bottom-up tree, the `┏━`/`┃`/`┣━━━`/`┗━ ∑` frame, the grouped
@@ -362,6 +369,11 @@ hide a running or failed node. Print one node once, at its lowest dependency.
 
 Acceptance: golden frames at 120x40 and 80x24. A 200-package fixture keeps
 every running and failed node visible and still fits the terminal.
+
+T2c landed: `LiveView::window` keeps running, failed and blocked rows, fills
+the rest of the `height / 3` budget from the root end, and marks each hidden
+run with `⋮`. The header counts shown roots. The live goldens include a
+200-package forest at both sizes; the static prefetch frame is unchanged.
 
 ### 5. ANSI-16 palette
 

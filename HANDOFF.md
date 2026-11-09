@@ -34,6 +34,14 @@ covers where things stand and the first move. Do not re-plan.
   roots, the failure freeze, sub-second and above-one-second timers, ASCII and
   NO_COLOR. This slice uses synthetic observations; the real fetch byte source
   is not wired.
+- T2c is landed for bars and the viewport, still on synthetic observations.
+  `LiveRow.progress` carries observed `done`/`total` bytes, clamped by
+  `Progress::new`; a zero or unknown total clears it. `render.rs` draws nom's
+  bar geometry and the `■/◧/□` (or `#/-/ `) fill, and the live viewport keeps
+  roughly `height / 3` tree rows, marks clipped runs with `⋮`, never hides
+  running/failed/blocked rows, and reports the shown root count. Goldens cover
+  known and unknown bytes, ASCII, a 40-column row and a 200-package forest. The
+  real fetch byte source, the repair card and the ledger remain.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -60,12 +68,12 @@ covers where things stand and the first move. Do not re-plan.
 ## Do this first: T2
 
 1. Finish T2: T2a (the forest) and T2b (the pure live view and palette) are
-   landed. T2c wires the real fetch byte source into `LiveRun` and adds the
-   repair card and the ledger. Use `check::collect`, `progress::collect` and
-   `fetch::plan`; do not add a second update collector. The ready set is a set,
-   not a queue. The remaining order in `docs/NOM.md` is real progress bars
-   (only with an observed byte source), layout and viewport, the live loop and
-   the final receipt.
+   landed, and T2c's progress bars and viewport are landed on synthetic
+   observations. Wire the real fetch byte source into `LiveRun` through
+   `observe_progress`, then add the repair card and the ledger. Use
+   `check::collect`, `progress::collect` and `fetch::plan`; do not add a second
+   update collector. The ready set is a set, not a queue. The remaining order
+   in `docs/NOM.md` is the live loop and the final receipt.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;

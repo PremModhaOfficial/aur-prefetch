@@ -350,9 +350,23 @@ waiting counts, and timers above 1 s. `render.rs` maps that to nom's glyphs and
 the ANSI-16 palette, and adds the grouped `Builds`/`Downloads` summary plus the
 host and `Σ`. The live frame is tested at 120x40 and 80x24 for the diamond, two
 roots, the failure freeze, sub-second and above-one-second timers, ASCII and
-NO_COLOR. This slice consumes synthetic observations only; T2c still wires the
-real fetch byte source. The failure freeze and downstream blocking are landed in
+NO_COLOR. This slice consumes synthetic observations only; the real fetch byte
+source is still open. The failure freeze and downstream blocking are landed in
 the view; the repair card is not.
+
+T2c landed the bars and the viewport, still on synthetic observations.
+`LiveRow.progress` carries observed `done`/`total` bytes, clamped by
+`Progress::new`; a zero or unknown total clears the reading, so there is no bar
+and no percent without both sizes. `render.rs` draws nom's geometry:
+`left_width = max(60, 1 + widest progress row)`, bar cells
+`width - 2 - left_width - 6`, `%5.1f%%` at a fixed right edge, and `■/◧/□`
+or `#/-/ ` in ASCII. A terminal narrower than one bar cell falls back to the
+normal row. The live viewport keeps roughly `height / 3` tree rows plus the
+summary, marks each clipped run with `⋮`, never hides running, failed or
+blocked rows, and reports the shown root count in the header. Goldens cover
+known and unknown bytes at 120x40 and 80x24, ASCII bars, NO_COLOR, a 40-column
+row and a 200-package forest. `render_live_frame` is still not reachable from
+the real fetch source; the fetch adapter, repair card and ledger remain.
 
 The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,

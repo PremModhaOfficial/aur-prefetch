@@ -9,14 +9,18 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::{Frame, Terminal};
 
+use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::report::{ArtifactState, PrefetchReport, Snapshot, Update};
 use crate::util::human_bytes;
 
-use super::live::{Activity, GroupCounts, LiveRun, LiveState, LiveView};
+use super::live::{
+    Activity, GroupCounts, LiveRun, LiveState, LiveView, Progress, Window, WindowSlot,
+    tree_row_budget,
+};
 use super::sanitize::{cell_text, display_width};
-use super::tree::{Tree, TreeError, TreeRow, TreeRowKind};
+use super::tree::{RowId, Tree, TreeError, TreeRow, TreeRowKind};
 
 /// The ANSI-16 semantic palette. Color is an accent on top of a glyph and a
 /// word; it is never the only signal.
@@ -164,11 +168,16 @@ fn draw_with(
         (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
         _ => None,
     };
+    let window = match (live.as_ref(), tree.as_ref()) {
+        (Some(live), Some(Ok(tree))) => Some(live.window(tree, tree_row_budget(area.height))),
+        _ => None,
+    };
 
     let header = header_lines(
         snapshot,
         tree.as_ref(),
         live.as_ref(),
+        window.as_ref(),
         chunks[0].width as usize,
         ascii,
         color,
@@ -179,6 +188,7 @@ fn draw_with(
         snapshot,
         tree.as_ref(),
         live.as_ref(),
+        window.as_ref(),
         ascii,
         chunks[1].width as usize,
         color,
@@ -201,6 +211,7 @@ fn header_lines(
     snapshot: &Snapshot,
     tree: Option<&Result<Tree, TreeError>>,
     live: Option<&LiveView>,
+    window: Option<&Window>,
     width: usize,
     ascii: bool,
     color: bool,
@@ -216,10 +227,6 @@ fn header_lines(
     };
 
     let counts = &report.counts;
-    let roots = match tree {
-        Some(Ok(tree)) => tree.roots.len(),
-        _ => 0,
-    };
     let packages = match tree {
         Some(Ok(tree)) => tree.pending_count(),
         _ => counts.total(),
@@ -238,9 +245,17 @@ fn header_lines(
         ),
     };
 
-    // T2a has no viewport, so every root fits. The clipped form is kept for
-    // the viewport slice and tested directly.
-    let left = graph_title(roots, roots);
+    let (shown_roots, total_roots) = match window {
+        Some(window) => (window.shown_roots, window.total_roots),
+        None => {
+            let roots = match tree {
+                Some(Ok(tree)) => tree.roots.len(),
+                _ => 0,
+            };
+            (roots, roots)
+        }
+    };
+    let left = graph_title(shown_roots, total_roots);
     let right = match live {
         Some(_) => format!("install {} {separator} live", package_count(packages)),
         None => format!(
@@ -257,8 +272,8 @@ fn header_lines(
     ]
 }
 
-/// Nom's graph header. T2a shows every root; the clipped form is ready for the
-/// viewport slice.
+/// Nom's graph header. The live viewport reports how many roots it kept; the
+/// static frame always shows every root.
 fn graph_title(shown: usize, total: usize) -> String {
     if shown >= total {
         "Dependency Graph:".to_string()
@@ -286,10 +301,18 @@ fn updates(snapshot: &Snapshot) -> Vec<&Update> {
     all
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FrameStyle {
+    ascii: bool,
+    width: usize,
+    color: bool,
+}
+
 fn body_lines(
     snapshot: &Snapshot,
     tree: Option<&Result<Tree, TreeError>>,
     live: Option<&LiveView>,
+    window: Option<&Window>,
     ascii: bool,
     width: usize,
     color: bool,
@@ -319,10 +342,13 @@ fn body_lines(
             report,
             tree,
             live,
+            window,
             snapshot.prefetch.at(),
-            ascii,
-            width,
-            color,
+            FrameStyle {
+                ascii,
+                width,
+                color,
+            },
         ));
         return lines;
     }
@@ -359,11 +385,15 @@ fn prefetch_lines(
     report: &PrefetchReport,
     tree: &Result<Tree, TreeError>,
     live: Option<&LiveView>,
+    window: Option<&Window>,
     at: Option<SystemTime>,
-    ascii: bool,
-    width: usize,
-    color: bool,
+    style: FrameStyle,
 ) -> Vec<Line<'static>> {
+    let FrameStyle {
+        ascii,
+        width,
+        color,
+    } = style;
     let mut lines = Vec::new();
     let now = at.unwrap_or(UNIX_EPOCH);
     let separator = if ascii { "|" } else { "·" };
@@ -373,19 +403,44 @@ fn prefetch_lines(
     } else {
         match tree {
             Ok(tree) => {
-                for row in tree.display_rows() {
-                    let prefix = branch_prefix(tree, row, ascii);
-                    if row.kind == TreeRowKind::Package {
-                        if let Some(live) = live {
-                            if let Some(live_row) = live.row(row.id) {
-                                lines.push(live_row_line(
-                                    row, live_row, &prefix, ascii, width, color,
-                                ));
-                                continue;
+                let display = tree.display_rows();
+                let slots: Vec<WindowSlot> = match window {
+                    Some(window) => window.slots.clone(),
+                    None => display.iter().map(|row| WindowSlot::Row(row.id)).collect(),
+                };
+                let geometry = progress_geometry(tree, live, &slots, ascii, width);
+
+                for slot in slots {
+                    match slot {
+                        WindowSlot::Clipped => {
+                            lines.push(clipped_line(width, ascii, color));
+                        }
+                        WindowSlot::Row(id) => {
+                            let row = &tree.rows[id];
+                            let prefix = branch_prefix(tree, row, ascii);
+                            if row.kind == TreeRowKind::Package {
+                                if let Some(live) = live {
+                                    if let Some(live_row) = live.row(id) {
+                                        match &geometry {
+                                            Some(geometry) if geometry.rows.contains(&id) => {
+                                                lines.push(progress_row_line(
+                                                    row, live_row, &prefix, ascii, width, color,
+                                                    geometry,
+                                                ));
+                                            }
+                                            _ => {
+                                                lines.push(live_row_line(
+                                                    row, live_row, &prefix, ascii, width, color,
+                                                ));
+                                            }
+                                        }
+                                        continue;
+                                    }
+                                }
                             }
+                            lines.push(static_row_line(row, &prefix, now, ascii, width, color));
                         }
                     }
-                    lines.push(static_row_line(row, &prefix, now, ascii, width, color));
                 }
             }
             Err(error) => lines.push(Line::from(cell_text(
@@ -906,6 +961,257 @@ fn live_color(state: LiveState) -> Color {
     }
 }
 
+/// The shared bar column for the visible transfer rows.
+struct ProgressGeometry {
+    left_width: usize,
+    bar_width: usize,
+    rows: BTreeSet<RowId>,
+}
+
+/// Nom's bar geometry across the rows actually on screen:
+/// `left_width = max(60, 1 + widest row with progress)` and
+/// `bar_width = width - 2 - left_width - 6`. A terminal too narrow for one bar
+/// cell draws no bar at all instead of a partial or invented one.
+fn progress_geometry(
+    tree: &Tree,
+    live: Option<&LiveView>,
+    slots: &[WindowSlot],
+    ascii: bool,
+    width: usize,
+) -> Option<ProgressGeometry> {
+    let live = live?;
+    let mut rows = BTreeSet::new();
+    let mut widest = 0usize;
+
+    for slot in slots {
+        let WindowSlot::Row(id) = *slot else {
+            continue;
+        };
+        let row = &tree.rows[id];
+        if row.kind != TreeRowKind::Package {
+            continue;
+        }
+        let Some(live_row) = live.row(id) else {
+            continue;
+        };
+        if !has_visible_bar(live_row) {
+            continue;
+        }
+        let prefix = branch_prefix(tree, row, ascii);
+        let text = progress_left_text(row, live_row, &prefix, ascii);
+        widest = widest.max(display_width(&text));
+        rows.insert(id);
+    }
+
+    if rows.is_empty() {
+        return None;
+    }
+    let left_width = 60.max(widest.saturating_add(1));
+    let bar_width = width.saturating_sub(2 + left_width + 6);
+    if bar_width == 0 {
+        return None;
+    }
+    Some(ProgressGeometry {
+        left_width,
+        bar_width,
+        rows,
+    })
+}
+
+/// A bar exists only for an observed running download. A build has no byte
+/// stream, and a planned or finished node has nothing to animate.
+fn has_visible_bar(live: &super::live::LiveRow) -> bool {
+    live.state == LiveState::Running
+        && live.activity == Some(Activity::Download)
+        && live.progress.is_some()
+}
+
+fn progress_bytes(progress: Progress) -> String {
+    format!(
+        "{}/{}",
+        human_bytes(progress.done()),
+        human_bytes(progress.total())
+    )
+}
+
+/// The left column of a progress row. This is the same text the styled row
+/// draws, used once to measure the shared bar column.
+fn progress_left_text(
+    row: &TreeRow,
+    live: &super::live::LiveRow,
+    prefix: &str,
+    ascii: bool,
+) -> String {
+    let separator = if ascii { " | " } else { " · " };
+    let progress = live.progress.expect("progress rows have bytes");
+    let mut text = format!("  {prefix}{} {}", live_glyph(live, ascii), row.label);
+    text.push(' ');
+    text.push_str(live_state_label(live));
+    if let Some(timer) = live.timer(ascii) {
+        text.push_str(separator);
+        text.push_str(&timer);
+    }
+    text.push(' ');
+    text.push_str(&progress_bytes(progress));
+    text
+}
+
+/// Nom's transfer row: the readable tree row and bytes on the left, then a
+/// fixed right edge with the bar and `%5.1f%%`. The percent is bold; color mode
+/// adds the accent. The text is identical with `NO_COLOR`.
+fn progress_row_line(
+    row: &TreeRow,
+    live: &super::live::LiveRow,
+    prefix: &str,
+    ascii: bool,
+    width: usize,
+    color: bool,
+    geometry: &ProgressGeometry,
+) -> Line<'static> {
+    let separator = if ascii { " | " } else { " · " };
+    let glyph = live_glyph(live, ascii);
+    let hue = live_color(live.state);
+    let name_style = accent_bold(color, hue);
+    let progress = live.progress.expect("progress rows have bytes");
+    let bytes = progress_bytes(progress);
+
+    let mut spans = Vec::new();
+    let mut left_remaining = geometry.left_width;
+    push_span(
+        &mut spans,
+        "  ",
+        Style::default(),
+        &mut left_remaining,
+        ascii,
+    );
+    push_span(
+        &mut spans,
+        prefix,
+        accent(color, PLANNED),
+        &mut left_remaining,
+        ascii,
+    );
+    push_span(
+        &mut spans,
+        glyph,
+        accent_bold(color, hue),
+        &mut left_remaining,
+        ascii,
+    );
+    push_span(
+        &mut spans,
+        " ",
+        Style::default(),
+        &mut left_remaining,
+        ascii,
+    );
+    push_span(
+        &mut spans,
+        &row.label,
+        name_style,
+        &mut left_remaining,
+        ascii,
+    );
+    push_span(
+        &mut spans,
+        " ",
+        Style::default(),
+        &mut left_remaining,
+        ascii,
+    );
+    push_span(
+        &mut spans,
+        live_state_label(live),
+        accent(color, hue),
+        &mut left_remaining,
+        ascii,
+    );
+    if let Some(timer) = live.timer(ascii) {
+        push_span(
+            &mut spans,
+            separator,
+            dim(color),
+            &mut left_remaining,
+            ascii,
+        );
+        push_span(&mut spans, &timer, dim(color), &mut left_remaining, ascii);
+    }
+    push_span(
+        &mut spans,
+        " ",
+        Style::default(),
+        &mut left_remaining,
+        ascii,
+    );
+    push_span(
+        &mut spans,
+        &bytes,
+        Style::default(),
+        &mut left_remaining,
+        ascii,
+    );
+    if left_remaining > 0 {
+        spans.push(Span::raw(" ".repeat(left_remaining)));
+    }
+
+    let mut remaining = width.saturating_sub(geometry.left_width);
+    push_span(&mut spans, " ", Style::default(), &mut remaining, ascii);
+
+    let (full_glyph, half_glyph, empty_glyph) = if ascii {
+        ("#", "-", " ")
+    } else {
+        ("■", "◧", "□")
+    };
+    let (full, half, empty) = progress_fill(progress, geometry.bar_width);
+    if full > 0 {
+        push_span(
+            &mut spans,
+            &full_glyph.repeat(full),
+            accent(color, ACTIVE),
+            &mut remaining,
+            ascii,
+        );
+    }
+    if half > 0 {
+        push_span(
+            &mut spans,
+            &half_glyph.repeat(half),
+            accent(color, ACTIVE),
+            &mut remaining,
+            ascii,
+        );
+    }
+    if empty > 0 {
+        push_span(
+            &mut spans,
+            &empty_glyph.repeat(empty),
+            dim(color),
+            &mut remaining,
+            ascii,
+        );
+    }
+    push_span(&mut spans, " ", Style::default(), &mut remaining, ascii);
+    let percent = format!("{:5.1}%", progress.percent());
+    let percent_style = accent_bold(color, ACTIVE);
+    push_span(&mut spans, &percent, percent_style, &mut remaining, ascii);
+
+    Line::from(spans)
+}
+
+/// Half-cell precision, floored: `done == total` is all full, `done == 0` is
+/// all empty, and `done` was already clamped by [`Progress::new`].
+fn progress_fill(progress: Progress, bar_width: usize) -> (usize, usize, usize) {
+    let units = (2 * bar_width as u128 * progress.done() as u128) / progress.total() as u128;
+    let full = (units / 2) as usize;
+    let half = (units % 2) as usize;
+    (full, half, bar_width.saturating_sub(full + half))
+}
+
+fn clipped_line(width: usize, ascii: bool, color: bool) -> Line<'static> {
+    let marker = if ascii { "  :" } else { "  ⋮" };
+    Line::styled(cell_text(marker, width, ascii), dim(color))
+}
+
 fn artifact_color(state: ArtifactState) -> Color {
     match state {
         ArtifactState::Cached | ArtifactState::Built => DONE,
@@ -1018,7 +1324,7 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::{Color, Modifier};
 
-    use super::{render_frame, render_live_frame};
+    use super::{display_width, render_frame, render_live_frame};
     use crate::frontier::Observed;
     use crate::report::{
         ArtifactState, Cached, PackageView, PrefetchReport, Repo, Section, Snapshot, Update,
@@ -1330,6 +1636,133 @@ mod tests {
         LiveRun::plan(&tree, live_at()).expect("plan seeds")
     }
 
+    fn progress_snapshot() -> Snapshot {
+        let mut package = live_package("linux", Repo::Extra, ArtifactState::Missing, &[]);
+        package.download_bytes = Some(59_800_000);
+        prefetch_snapshot_with(vec![package])
+    }
+
+    fn progress_run() -> LiveRun {
+        let tree = tree_of(&progress_snapshot());
+        let mut run = LiveRun::plan(&tree, live_at()).expect("plan seeds");
+        run.observe(
+            "linux",
+            Observed::Started,
+            live_at(),
+            Some(Activity::Download),
+            "started",
+        )
+        .expect("starts");
+        run.observe_progress(
+            "linux",
+            49_000_000,
+            59_800_000,
+            live_at() + Duration::from_secs(6),
+        )
+        .expect("progress records");
+        run
+    }
+
+    fn unknown_progress_run() -> LiveRun {
+        let tree = tree_of(&progress_snapshot());
+        let mut run = LiveRun::plan(&tree, live_at()).expect("plan seeds");
+        run.observe(
+            "linux",
+            Observed::Started,
+            live_at(),
+            Some(Activity::Download),
+            "started",
+        )
+        .expect("starts");
+        run.observe_progress("linux", 49_000_000, 0, live_at() + Duration::from_secs(6))
+            .expect("an unknown total is still an observation");
+        run
+    }
+
+    /// Exactly 200 packages: 195 independent roots plus a done/running chain
+    /// and a failed/blocked chain. The window cannot show them all.
+    fn window_snapshot() -> Snapshot {
+        let mut packages = Vec::new();
+        for index in 0..195 {
+            packages.push(live_package(
+                &format!("pkg-{index:03}"),
+                Repo::Extra,
+                ArtifactState::Missing,
+                &[],
+            ));
+        }
+        packages.push(live_package(
+            "a-base",
+            Repo::Extra,
+            ArtifactState::Missing,
+            &[],
+        ));
+        packages.push(live_package(
+            "a-top",
+            Repo::Extra,
+            ArtifactState::Missing,
+            &["a-base"],
+        ));
+        packages.push(live_package(
+            "z-base",
+            Repo::Extra,
+            ArtifactState::Missing,
+            &[],
+        ));
+        packages.push(live_package(
+            "z-mid",
+            Repo::Extra,
+            ArtifactState::Missing,
+            &["z-base"],
+        ));
+        packages.push(live_package(
+            "z-top",
+            Repo::Extra,
+            ArtifactState::Missing,
+            &["z-mid"],
+        ));
+        assert_eq!(packages.len(), 200);
+        prefetch_snapshot_with(packages)
+    }
+
+    fn window_run() -> LiveRun {
+        let tree = tree_of(&window_snapshot());
+        let mut run = LiveRun::plan(&tree, live_at()).expect("plan seeds");
+        for (node, kind, activity, evidence) in [
+            (
+                "z-base",
+                Observed::Started,
+                Some(Activity::Download),
+                "started",
+            ),
+            ("z-base", Observed::Finished, None, "exit 0"),
+            (
+                "z-mid",
+                Observed::Started,
+                Some(Activity::Download),
+                "started",
+            ),
+            (
+                "a-base",
+                Observed::Started,
+                Some(Activity::Download),
+                "started",
+            ),
+        ] {
+            run.observe(node, kind, live_at(), activity, evidence)
+                .expect("observation applies");
+        }
+        run.observe(
+            "a-base",
+            Observed::Failed,
+            live_at() + Duration::from_secs(2),
+            None,
+            "exit 2",
+        )
+        .expect("the failure freezes the run");
+        run
+    }
+
     fn buffer_of(
         snapshot: &Snapshot,
         run: Option<&LiveRun>,
@@ -1545,6 +1978,244 @@ mod tests {
         assert!(
             !row.contains("✔"),
             "a skip is not a completed build\n{frame}"
+        );
+    }
+
+    #[test]
+    fn a_known_transfer_draws_noms_bar_geometry() {
+        let snapshot = progress_snapshot();
+        let run = progress_run();
+
+        let wide = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
+        let row = wide
+            .lines()
+            .find(|line| line.contains("downloading"))
+            .expect("the transfer row is on screen");
+        assert_eq!(row.chars().count(), 120, "the row fills the frame");
+        assert!(row.contains("46.7 MiB/57.0 MiB"), "bytes before the bar");
+        assert!(row.ends_with(" 81.9%"), "the percent is the right edge");
+        assert_eq!(
+            row.chars().position(|ch| ch == '■'),
+            Some(61),
+            "left_width 60 plus one separator"
+        );
+        assert_eq!(row.matches('■').count(), 42, "full cells");
+        assert_eq!(row.matches('◧').count(), 1, "one half cell");
+        assert_eq!(row.matches('□').count(), 9, "empty cells");
+        assert_eq!(
+            row.matches('■').count() + row.matches('◧').count() + row.matches('□').count(),
+            52
+        );
+        assert_eq!(
+            wide,
+            include_str!("../../tests/golden/tui-live-progress-120x40.txt")
+        );
+
+        let compact = render_live_frame(&snapshot, &run, 80, 24, false, false, false);
+        let row = compact
+            .lines()
+            .find(|line| line.contains("downloading"))
+            .expect("the compact transfer row is on screen");
+        assert_eq!(row.chars().count(), 80);
+        assert!(row.ends_with(" 81.9%"));
+        assert_eq!(row.matches('■').count(), 9);
+        assert_eq!(row.matches('◧').count(), 1);
+        assert_eq!(row.matches('□').count(), 2);
+        assert_eq!(
+            compact,
+            include_str!("../../tests/golden/tui-live-progress-80x24.txt")
+        );
+    }
+
+    #[test]
+    fn an_unknown_total_draws_no_bar_and_no_percent() {
+        let snapshot = progress_snapshot();
+        let run = unknown_progress_run();
+
+        for (width, height) in [(120, 40), (80, 24)] {
+            let frame = render_live_frame(&snapshot, &run, width, height, false, false, false);
+            let row = frame
+                .lines()
+                .find(|line| line.contains("downloading"))
+                .expect("the running row is still on screen");
+            assert!(row.contains("downloading"));
+            assert!(!row.contains('%'), "no percent without a total\n{frame}");
+            for glyph in ['■', '◧', '□'] {
+                assert!(
+                    !row.contains(glyph),
+                    "no bar cell {glyph} without a total\n{frame}"
+                );
+            }
+        }
+
+        assert_eq!(
+            render_live_frame(&snapshot, &run, 120, 40, false, false, false),
+            include_str!("../../tests/golden/tui-live-progress-unknown-120x40.txt")
+        );
+        assert_eq!(
+            render_live_frame(&snapshot, &run, 80, 24, false, false, false),
+            include_str!("../../tests/golden/tui-live-progress-unknown-80x24.txt")
+        );
+    }
+
+    #[test]
+    fn ascii_bars_keep_the_geometry_without_unicode() {
+        let snapshot = progress_snapshot();
+        let run = progress_run();
+
+        let wide = render_live_frame(&snapshot, &run, 120, 40, true, false, false);
+        assert!(wide.is_ascii(), "ascii frame had non-ASCII bytes\n{wide}");
+        let wide_row = wide
+            .lines()
+            .find(|line| line.contains("downloading"))
+            .expect("the wide ascii transfer row is on screen");
+        assert_eq!(wide_row.chars().count(), 120);
+        assert_eq!(wide_row.matches('#').count(), 42, "full cells");
+        assert!(
+            wide_row.contains(&format!("{}-", "#".repeat(42))),
+            "42 full cells then the half cell"
+        );
+        assert_eq!(
+            wide,
+            include_str!("../../tests/golden/tui-live-progress-ascii-120x40.txt")
+        );
+
+        let frame = render_live_frame(&snapshot, &run, 80, 24, true, false, false);
+        assert!(frame.is_ascii(), "ascii frame had non-ASCII bytes\n{frame}");
+
+        let row = frame
+            .lines()
+            .find(|line| line.contains("downloading"))
+            .expect("the ascii transfer row is on screen");
+        assert!(row.contains("v > linux"), "the download glyph is ASCII");
+        assert_eq!(row.chars().count(), 80);
+        assert!(row.ends_with(" 81.9%"));
+        assert_eq!(row.matches('#').count(), 9, "full cells");
+        assert!(
+            row.contains("#########-"),
+            "nine full cells then one half cell"
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-live-progress-ascii-80x24.txt")
+        );
+    }
+
+    #[test]
+    fn a_progress_row_at_40_columns_does_not_overflow() {
+        let snapshot = progress_snapshot();
+        let run = progress_run();
+        let frame = render_live_frame(&snapshot, &run, 40, 24, false, false, false);
+
+        for line in frame.lines() {
+            assert!(
+                display_width(line) <= 40,
+                "row wider than 40 cells: {line:?}"
+            );
+        }
+        let row = frame
+            .lines()
+            .find(|line| line.contains("downloading"))
+            .expect("the running row is still readable");
+        assert!(
+            !row.contains('%'),
+            "no percent when the bar cannot fit\n{frame}"
+        );
+        for glyph in ['■', '◧', '□'] {
+            assert!(!row.contains(glyph), "no bar at 40 columns\n{frame}");
+        }
+    }
+
+    #[test]
+    fn progress_no_color_keeps_the_text_and_drops_the_palette() {
+        let snapshot = progress_snapshot();
+        let run = progress_run();
+        let colored = render_live_frame(&snapshot, &run, 120, 40, false, true, false);
+        let plain = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
+        assert_eq!(colored, plain, "color never changes the text");
+
+        let buffer = buffer_of(&snapshot, Some(&run), 120, 40, false, true);
+        let row = find_row(&buffer, 120, "81.9%");
+        let percent = text_column(&buffer, 120, row, "81.9%").expect("percent");
+        assert_eq!(cell_at(&buffer, 120, row, percent).fg, Color::Yellow);
+        assert!(
+            cell_at(&buffer, 120, row, percent)
+                .modifier
+                .contains(Modifier::BOLD),
+            "the percent is bold in color mode"
+        );
+        let full = text_column(&buffer, 120, row, "■").expect("full cell");
+        assert_eq!(cell_at(&buffer, 120, row, full).fg, Color::Yellow);
+        let empty = text_column(&buffer, 120, row, "□").expect("empty cell");
+        assert_eq!(cell_at(&buffer, 120, row, empty).fg, Color::DarkGray);
+
+        let plain_buffer = buffer_of(&snapshot, Some(&run), 120, 40, false, false);
+        assert!(
+            plain_buffer
+                .content()
+                .iter()
+                .all(|cell| cell.fg == Color::Reset),
+            "NO_COLOR leaves no foreground color"
+        );
+        let plain_row = find_row(&plain_buffer, 120, "81.9%");
+        let plain_percent = text_column(&plain_buffer, 120, plain_row, "81.9%").expect("percent");
+        assert!(
+            cell_at(&plain_buffer, 120, plain_row, plain_percent)
+                .modifier
+                .contains(Modifier::BOLD),
+            "bold survives NO_COLOR; only the color is dropped"
+        );
+    }
+
+    #[test]
+    fn a_200_package_window_clips_but_never_hides_live_rows() {
+        let snapshot = window_snapshot();
+        let run = window_run();
+
+        let wide = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
+        assert!(
+            wide.contains("Dependency Graph showing 11 of 197 roots:"),
+            "the header names the clipped root count\n{wide}"
+        );
+        assert!(wide.contains("⋮"), "the clipped marker is shown\n{wide}");
+        for name in ["z-mid", "a-base", "a-top"] {
+            assert!(wide.contains(name), "{name} is never hidden\n{wide}");
+        }
+        assert!(
+            !wide.contains("pkg-100"),
+            "a settled row outside the window is clipped\n{wide}"
+        );
+        for name in ["z-mid", "a-base", "a-top", "pkg-009"] {
+            assert_eq!(
+                wide.matches(name).count(),
+                1,
+                "{name} appears exactly once\n{wide}"
+            );
+        }
+        assert_eq!(
+            wide,
+            include_str!("../../tests/golden/tui-live-window-120x40.txt")
+        );
+
+        let compact = render_live_frame(&snapshot, &run, 80, 24, false, false, false);
+        assert!(
+            compact.contains("Dependency Graph showing 6 of 197 roots:"),
+            "the compact header names the clipped root count\n{compact}"
+        );
+        assert!(
+            compact.contains("⋮"),
+            "the compact window is marked\n{compact}"
+        );
+        for name in ["z-mid", "a-base", "a-top"] {
+            assert!(compact.contains(name), "{name} is never hidden\n{compact}");
+        }
+        assert!(
+            !compact.contains("pkg-100"),
+            "a settled row outside the compact window is clipped\n{compact}"
+        );
+        assert_eq!(
+            compact,
+            include_str!("../../tests/golden/tui-live-window-80x24.txt")
         );
     }
 
@@ -2021,5 +2692,53 @@ mod tests {
             ),
         )
         .expect("write live failure 80x24");
+
+        let progress = progress_snapshot();
+        let progress_run = progress_run();
+        std::fs::write(
+            dir.join("tui-live-progress-120x40.txt"),
+            render_live_frame(&progress, &progress_run, 120, 40, false, false, false),
+        )
+        .expect("write live progress 120x40");
+        std::fs::write(
+            dir.join("tui-live-progress-80x24.txt"),
+            render_live_frame(&progress, &progress_run, 80, 24, false, false, false),
+        )
+        .expect("write live progress 80x24");
+        std::fs::write(
+            dir.join("tui-live-progress-ascii-80x24.txt"),
+            render_live_frame(&progress, &progress_run, 80, 24, true, false, false),
+        )
+        .expect("write live progress ascii 80x24");
+        std::fs::write(
+            dir.join("tui-live-progress-ascii-120x40.txt"),
+            render_live_frame(&progress, &progress_run, 120, 40, true, false, false),
+        )
+        .expect("write live progress ascii 120x40");
+
+        let unknown = unknown_progress_run();
+        std::fs::write(
+            dir.join("tui-live-progress-unknown-120x40.txt"),
+            render_live_frame(&progress, &unknown, 120, 40, false, false, false),
+        )
+        .expect("write live unknown progress 120x40");
+        std::fs::write(
+            dir.join("tui-live-progress-unknown-80x24.txt"),
+            render_live_frame(&progress, &unknown, 80, 24, false, false, false),
+        )
+        .expect("write live unknown progress 80x24");
+
+        let window = window_snapshot();
+        let window_run = window_run();
+        std::fs::write(
+            dir.join("tui-live-window-120x40.txt"),
+            render_live_frame(&window, &window_run, 120, 40, false, false, false),
+        )
+        .expect("write live window 120x40");
+        std::fs::write(
+            dir.join("tui-live-window-80x24.txt"),
+            render_live_frame(&window, &window_run, 80, 24, false, false, false),
+        )
+        .expect("write live window 80x24");
     }
 }

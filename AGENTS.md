@@ -14,8 +14,9 @@ Current position: all six commands are implemented and sim-covered. Phases 4-6
 (chaos, VM, packaging) remain release hardening. Phase 7 T0 (the report layer),
 the T1 read-only shell, the DAG execution model, and its pure frontier reducer
 are landed. T2's prefetch badges, real cache scan, pure bottom-up forest view
-(T2a), and the pure live grammar/palette (T2b) are landed; the real fetch byte
-source, the repair card and the ledger are next.
+(T2a), the pure live grammar/palette (T2b), and the synthetic byte bars and
+viewport (T2c) are landed; the real fetch byte source, the repair card and the
+ledger are next.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.

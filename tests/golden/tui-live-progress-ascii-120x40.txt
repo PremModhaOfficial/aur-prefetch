@@ -1,0 +1,40 @@
+aur-prefetch | Fetch | 1 package | live
+Dependency Graph:                                                                               install 1 package | live
+  v > linux 2.0.0-1 downloading | t 6s 46.7 MiB/57.0 MiB     ##########################################-           81.9%
+Builds    > 0   + 0   = 0
+Downloads v 1   + 0   = 0
+Host      mirror.example.org
+S         1 package | t 6s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+q quit | ? help | r refresh
+
