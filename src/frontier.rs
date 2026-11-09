@@ -343,24 +343,43 @@ impl GraphState {
         self.nodes.values().all(|state| state.is_terminal())
     }
 
+    /// Settle every pending node after a change.
+    ///
+    /// Only a node whose prerequisite state changed can move, so the walk
+    /// starts from the pending nodes that gained a blocking or satisfied
+    /// dependency and follows dependents. The graph is acyclic, so this is
+    /// linear in the changed subgraph, not a full quadratic rescan per pass.
     fn recompute(&mut self, seq: u64, transitions: &mut Vec<Transition>) {
-        let ids: Vec<NodeId> = self.nodes.keys().cloned().collect();
-        let passes = ids.len().saturating_add(1);
-        for _ in 0..passes {
-            let mut changed = false;
-            for id in &ids {
-                if self.nodes.get(id) != Some(&NodeState::Pending) {
-                    continue;
-                }
-                let next = self.next_state(id);
-                if next == NodeState::Pending {
-                    continue;
-                }
-                self.set_state(id, next, seq, transitions);
-                changed = true;
+        let mut queue: VecDeque<NodeId> = self
+            .nodes
+            .iter()
+            .filter(|(_, state)| **state == NodeState::Pending)
+            .map(|(node, _)| node.clone())
+            .collect();
+        let mut queued: BTreeSet<NodeId> = queue.iter().cloned().collect();
+
+        while let Some(id) = queue.pop_front() {
+            queued.remove(&id);
+            if self.nodes.get(&id) != Some(&NodeState::Pending) {
+                continue;
             }
-            if !changed {
-                break;
+            let next = self.next_state(&id);
+            if next == NodeState::Pending {
+                continue;
+            }
+            self.set_state(&id, next, seq, transitions);
+
+            // A node leaving Pending can unblock its dependents.
+            for edge in &self.edges {
+                if edge.dependent == id {
+                    continue;
+                }
+                if edge.dependency == id
+                    && self.nodes.get(&edge.dependent) == Some(&NodeState::Pending)
+                    && queued.insert(edge.dependent.clone())
+                {
+                    queue.push_back(edge.dependent.clone());
+                }
             }
         }
     }
@@ -604,6 +623,28 @@ mod tests {
         assert_eq!(state.ready, BTreeSet::new());
         assert_eq!(state.running, BTreeSet::new());
         assert!(state.is_complete());
+    }
+
+    #[test]
+    fn a_long_chain_settles_without_a_quadratic_scan() {
+        let count = 2_000;
+        let names: Vec<String> = (0..count).map(|index| format!("pkg-{index:04}")).collect();
+        let mut edges = Vec::new();
+        for index in 0..count - 1 {
+            edges.push(edge(&names[index], &names[index + 1]));
+        }
+        let start = std::time::Instant::now();
+        let state = GraphState::seed(names.clone(), edges).expect("seed");
+        assert_eq!(
+            state.nodes.get(&names[0]),
+            Some(&NodeState::Ready),
+            "the chain root is ready"
+        );
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "seeding 2,000 nodes took {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

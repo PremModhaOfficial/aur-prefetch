@@ -75,6 +75,9 @@ struct KnownPackage {
     name: String,
     prefix: String,
     total: Option<u64>,
+    /// The pending version, epoch-stripped. A cache file for any other
+    /// version is a stale leftover, not proof that this download finished.
+    version: Option<String>,
 }
 
 /// Turns the real download cache into [`LiveRun`] observations.
@@ -112,6 +115,7 @@ impl FetchMonitor {
                 name: row.name.clone(),
                 prefix: format!("{}-", row.name),
                 total: row.size,
+                version: row.available.clone(),
             })
             .collect();
         Ok(Self {
@@ -369,19 +373,36 @@ impl FetchMonitor {
         Ok(scan)
     }
 
-    /// The longest known package name whose cache-file shape matches.
+    /// The longest known package name whose cache-file shape and version
+    /// match. `paccache -rk1` leaves one old package behind, so the version
+    /// check is what stops a stale artifact from finishing the new download.
     fn match_package<'a>(&'a self, file_name: &str) -> Option<(&'a KnownPackage, bool)> {
         let mut best: Option<(&KnownPackage, bool)> = None;
         for package in &self.known {
-            let Some((_version, partial)) = entry_version(file_name, &package.prefix) else {
+            let Some((version, partial)) = entry_version(file_name, &package.prefix) else {
                 continue;
             };
+            let version_ok = match &package.version {
+                Some(pending) => version_matches(pending, &version),
+                None => true,
+            };
+            if !version_ok {
+                continue;
+            }
             if best.is_none_or(|(current, _)| package.name.len() > current.name.len()) {
                 best = Some((package, partial));
             }
         }
         best
     }
+}
+
+/// `entry_version` already strips an epoch from the cache name. Strip the same
+/// prefix from the pending version; the pkgrel stays significant, so
+/// `2.0.0-2` never matches a pending `2.0.0-1`.
+fn version_matches(pending: &str, cached: &str) -> bool {
+    let pending = pending.split_once(':').map_or(pending, |(_, rest)| rest);
+    pending == cached
 }
 
 fn frontier_error(error: FrontierError) -> Error {
@@ -777,6 +798,42 @@ mod tests {
             "the artifact finishes the node"
         );
         assert_eq!(monitor.live().state("tool"), Some(NodeState::Done));
+    }
+
+    #[test]
+    fn a_stale_artifact_for_another_version_proves_nothing() {
+        let fixture = Fixture::new();
+        let tree =
+            Tree::build(&[package("tool", ArtifactState::Missing, Some(1000), &[])]).expect("tree");
+        let mut monitor = FetchMonitor::new(&tree, &fixture.plan(), at(1)).expect("monitor");
+        assert_eq!(monitor.live().state("tool"), Some(NodeState::Ready));
+
+        // `paccache -rk1` leaves the old package behind. It is not proof the
+        // pending 2.0.0-1 download finished.
+        fixture.write("tool-1.0.0-1-x86_64.pkg.tar.zst", &[0; 1000]);
+        fixture.write("tool-1.0.0-1-x86_64.pkg.tar.zst.part", &[0; 400]);
+        // A different pkgrel of the same version is still a different build.
+        fixture.write("tool-2.0.0-2-x86_64.pkg.tar.zst", &[0; 1000]);
+        let transitions = monitor.poll(at(2)).expect("poll");
+        let touched: Vec<&str> = transitions
+            .iter()
+            .map(|transition| transition.node.as_str())
+            .collect();
+
+        assert!(
+            touched.is_empty(),
+            "a stale file moves nothing, got {touched:?}"
+        );
+        assert_eq!(monitor.live().state("tool"), Some(NodeState::Ready));
+
+        fixture.write(FINAL, &[0; 1000]);
+        let transitions = monitor.poll(at(3)).expect("poll");
+        assert!(
+            transitions
+                .iter()
+                .any(|transition| transition.to == NodeState::Done),
+            "the matching version finishes the node"
+        );
     }
 
     #[test]

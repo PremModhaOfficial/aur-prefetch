@@ -41,6 +41,9 @@ pub struct TreeRow {
     pub repo: Repo,
     pub artifact: Option<ArtifactState>,
     pub artifact_at: Option<SystemTime>,
+    /// The pending version this row will install, when known. The live cache
+    /// monitor compares it so a stale left-over cannot finish the row.
+    pub available: Option<String>,
     pub detail: Option<String>,
     pub size: Option<u64>,
 }
@@ -287,6 +290,11 @@ fn attach_package(
         repo: package.repo.clone(),
         artifact: Some(package.artifact),
         artifact_at: package.artifact_at,
+        available: if package.available.is_empty() {
+            None
+        } else {
+            Some(package.available.clone())
+        },
         detail: package.detail.clone(),
         size: package.download_bytes,
     });
@@ -309,6 +317,7 @@ fn attach_unknown(rows: &mut Vec<TreeRow>, parent: RowId, name: &str, depth: usi
         repo: Repo::Unknown,
         artifact: Some(ArtifactState::Unknown),
         artifact_at: None,
+        available: None,
         detail: None,
         size: None,
     });

@@ -13,7 +13,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
 use crate::frontier::{
-    ExecutionMode, FrontierError, GraphState, NodeId, NodeState, Observation, Observed, Transition,
+    Edge, ExecutionMode, FrontierError, GraphState, NodeId, NodeState, Observation, Observed,
+    Transition,
 };
 use crate::report::{ArtifactState, Repo};
 
@@ -190,6 +191,10 @@ pub struct LiveRun {
     activities: BTreeMap<NodeId, Activity>,
     evidence: BTreeMap<NodeId, String>,
     progress: BTreeMap<NodeId, Progress>,
+    /// The required prerequisite closure per node, computed once when the run
+    /// is planned. The topology is static; rebuilding it every tick was the
+    /// per-view quadratic cost.
+    closures: BTreeMap<NodeId, Vec<NodeId>>,
     first_at: SystemTime,
     clock: SystemTime,
 }
@@ -221,6 +226,7 @@ impl LiveRun {
             .map(|row| row.name.as_str())
             .collect();
         let graph = GraphState::seed_with_mode(nodes, tree.edges.clone(), mode)?;
+        let closures = prerequisite_closures(&graph.nodes, &graph.edges);
         let mut run = Self {
             graph,
             started: BTreeMap::new(),
@@ -228,6 +234,7 @@ impl LiveRun {
             activities: BTreeMap::new(),
             evidence: BTreeMap::new(),
             progress: BTreeMap::new(),
+            closures,
             first_at: at,
             clock: at,
         };
@@ -574,24 +581,14 @@ fn elapsed_for(run: &LiveRun, node: &str, state: NodeState, at: SystemTime) -> O
 
 /// Every required prerequisite, transitively. An unknown display-only
 /// dependency has no edge and therefore never appears here.
-fn prerequisites(run: &LiveRun, node: &str) -> BTreeSet<NodeId> {
-    let mut seen = BTreeSet::new();
-    let mut stack = vec![node.to_string()];
-    while let Some(current) = stack.pop() {
-        for edge in &run.graph.edges {
-            if edge.dependent == current && edge.required && seen.insert(edge.dependency.clone()) {
-                stack.push(edge.dependency.clone());
-            }
-        }
-    }
-    seen
-}
-
 fn waiting_for(run: &LiveRun, node: &str) -> Waiting {
     let mut waiting = Waiting::default();
-    for dependency in prerequisites(run, node) {
-        match run.graph.nodes.get(&dependency) {
-            Some(NodeState::Running) => match run.activities.get(&dependency) {
+    let Some(prerequisites) = run.closures.get(node) else {
+        return waiting;
+    };
+    for dependency in prerequisites {
+        match run.graph.nodes.get(dependency) {
+            Some(NodeState::Running) => match run.activities.get(dependency) {
                 Some(Activity::Build) => waiting.builds += 1,
                 Some(Activity::Download) => waiting.downloads += 1,
                 None => {}
@@ -601,6 +598,54 @@ fn waiting_for(run: &LiveRun, node: &str) -> Waiting {
         }
     }
     waiting
+}
+
+/// One closure per node, dependency to dependent, computed with an iterative
+/// post-order walk. The graph is acyclic by construction.
+fn prerequisite_closures(
+    nodes: &BTreeMap<NodeId, NodeState>,
+    edges: &[Edge],
+) -> BTreeMap<NodeId, Vec<NodeId>> {
+    let mut direct: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for edge in edges {
+        if edge.required {
+            direct
+                .entry(edge.dependent.clone())
+                .or_default()
+                .push(edge.dependency.clone());
+        }
+    }
+
+    let mut memo: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for node in nodes.keys() {
+        let mut stack = vec![node.clone()];
+        while let Some(current) = stack.last().cloned() {
+            if memo.contains_key(&current) {
+                stack.pop();
+                continue;
+            }
+            let deps = direct.get(&current).cloned().unwrap_or_default();
+            let pending: Vec<String> = deps
+                .iter()
+                .filter(|dep| !memo.contains_key(*dep))
+                .cloned()
+                .collect();
+            if pending.is_empty() {
+                let mut set: BTreeSet<NodeId> = BTreeSet::new();
+                for dep in deps {
+                    set.insert(dep.clone());
+                    if let Some(closure) = memo.get(&dep) {
+                        set.extend(closure.iter().cloned());
+                    }
+                }
+                memo.insert(current.clone(), set.into_iter().collect());
+                stack.pop();
+            } else {
+                stack.extend(pending);
+            }
+        }
+    }
+    memo
 }
 
 #[cfg(test)]
