@@ -247,7 +247,7 @@ impl GraphState {
             mode,
             ..Self::default()
         };
-        state.recompute(0, &mut Vec::new());
+        state.settle_all(0, &mut Vec::new());
         Ok(state)
     }
 
@@ -274,7 +274,8 @@ impl GraphState {
 
         match observation.kind {
             Observed::EdgeResolved => {
-                self.recompute(observation.seq, &mut transitions);
+                // A heartbeat: no prerequisite moved, so nothing to settle.
+                self.recompute(observation.seq, None, &mut transitions);
             }
             Observed::Started => {
                 let may_start = current == NodeState::Ready
@@ -286,7 +287,7 @@ impl GraphState {
                         observation.seq,
                         &mut transitions,
                     );
-                    self.recompute(observation.seq, &mut transitions);
+                    self.recompute(observation.seq, Some(&observation.node), &mut transitions);
                 }
             }
             Observed::Finished => {
@@ -297,7 +298,7 @@ impl GraphState {
                         observation.seq,
                         &mut transitions,
                     );
-                    self.recompute(observation.seq, &mut transitions);
+                    self.recompute(observation.seq, Some(&observation.node), &mut transitions);
                 }
             }
             Observed::Failed => {
@@ -309,7 +310,7 @@ impl GraphState {
                         &mut transitions,
                     );
                     self.frozen = true;
-                    self.recompute(observation.seq, &mut transitions);
+                    self.recompute(observation.seq, Some(&observation.node), &mut transitions);
                 }
             }
             Observed::Excluded => {
@@ -320,7 +321,7 @@ impl GraphState {
                         observation.seq,
                         &mut transitions,
                     );
-                    self.recompute(observation.seq, &mut transitions);
+                    self.recompute(observation.seq, Some(&observation.node), &mut transitions);
                 }
             }
             Observed::NoWork => {
@@ -331,7 +332,7 @@ impl GraphState {
                         observation.seq,
                         &mut transitions,
                     );
-                    self.recompute(observation.seq, &mut transitions);
+                    self.recompute(observation.seq, Some(&observation.node), &mut transitions);
                 }
             }
         }
@@ -343,20 +344,39 @@ impl GraphState {
         self.nodes.values().all(|state| state.is_terminal())
     }
 
-    /// Settle every pending node after a change.
+    /// Settle the initial plan: every pending node, in dependency order.
     ///
-    /// Only a node whose prerequisite state changed can move, so the walk
-    /// starts from the pending nodes that gained a blocking or satisfied
-    /// dependency and follows dependents. The graph is acyclic, so this is
-    /// linear in the changed subgraph, not a full quadratic rescan per pass.
-    fn recompute(&mut self, seq: u64, transitions: &mut Vec<Transition>) {
-        let mut queue: VecDeque<NodeId> = self
-            .nodes
-            .iter()
-            .filter(|(_, state)| **state == NodeState::Pending)
-            .map(|(node, _)| node.clone())
-            .collect();
-        let mut queued: BTreeSet<NodeId> = queue.iter().cloned().collect();
+    /// This runs once when the graph is seeded. Later changes use
+    /// [`Self::recompute`], which starts from the node that moved.
+    fn settle_all(&mut self, seq: u64, transitions: &mut Vec<Transition>) {
+        let ids: Vec<NodeId> = self.nodes.keys().cloned().collect();
+        for id in &ids {
+            self.recompute(seq, Some(id), transitions);
+        }
+    }
+
+    /// Settle the nodes a single state change can affect.
+    ///
+    /// Only a dependent of the node that moved can change state, so the walk
+    /// starts at that node's dependents and follows the changed subgraph. A
+    /// byte heartbeat (``moved = None``) changes no prerequisite, so it settles
+    /// nothing. The graph is acyclic, so each node is visited once.
+    fn recompute(&mut self, seq: u64, moved: Option<&NodeId>, transitions: &mut Vec<Transition>) {
+        let mut queue: VecDeque<NodeId> = VecDeque::new();
+        let mut queued: BTreeSet<NodeId> = BTreeSet::new();
+        if let Some(moved) = moved {
+            if self.nodes.get(moved) == Some(&NodeState::Pending) && queued.insert(moved.clone()) {
+                queue.push_back(moved.clone());
+            }
+            for edge in &self.edges {
+                if edge.dependency == *moved
+                    && self.nodes.get(&edge.dependent) == Some(&NodeState::Pending)
+                    && queued.insert(edge.dependent.clone())
+                {
+                    queue.push_back(edge.dependent.clone());
+                }
+            }
+        }
 
         while let Some(id) = queue.pop_front() {
             queued.remove(&id);
@@ -623,6 +643,23 @@ mod tests {
         assert_eq!(state.ready, BTreeSet::new());
         assert_eq!(state.running, BTreeSet::new());
         assert!(state.is_complete());
+    }
+
+    #[test]
+    fn a_byte_heartbeat_settles_nothing() {
+        let mut state =
+            GraphState::seed(["base", "child"], vec![edge("base", "child")]).expect("seed");
+        state
+            .reduce(&observation(1, "child", Observed::Started))
+            .expect("start");
+
+        // An EdgeResolved carries no state change, so it must not re-derive
+        // readiness for every pending node.
+        let transitions = state
+            .reduce(&observation(2, "child", Observed::EdgeResolved))
+            .expect("heartbeat");
+
+        assert!(transitions.is_empty(), "a heartbeat moves nothing");
     }
 
     #[test]
