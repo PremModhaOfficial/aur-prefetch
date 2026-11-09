@@ -18,7 +18,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::SystemTime;
 
-use crate::report::{ArtifactState, PackageView};
+use crate::frontier::{Edge, EdgeKind};
+use crate::report::{ArtifactState, PackageView, Repo};
 
 pub type RowId = usize;
 
@@ -37,6 +38,7 @@ pub struct TreeRow {
     pub kind: TreeRowKind,
     pub name: String,
     pub label: String,
+    pub repo: Repo,
     pub artifact: Option<ArtifactState>,
     pub artifact_at: Option<SystemTime>,
     pub detail: Option<String>,
@@ -74,6 +76,11 @@ impl std::error::Error for TreeError {}
 pub struct Tree {
     pub rows: Vec<TreeRow>,
     pub roots: Vec<RowId>,
+    /// The required dependency edges of the pending graph, dependency to
+    /// dependent. Display-only unknown dependencies produce no edge. This is
+    /// the input the frontier seed needs, so the live view does not re-resolve
+    /// dependencies on its own.
+    pub edges: Vec<Edge>,
 }
 
 impl Tree {
@@ -98,6 +105,25 @@ impl Tree {
             .iter()
             .map(|package| resolve(package, &index, &unique))
             .collect();
+
+        let mut edges = Vec::new();
+        for (owner, dependencies) in resolved.iter().enumerate() {
+            for dependency in dependencies {
+                if let Some(target) = dependency.pending {
+                    edges.push(Edge::new(
+                        unique[target].name.clone(),
+                        unique[owner].name.clone(),
+                        EdgeKind::Runtime,
+                        true,
+                    ));
+                }
+            }
+        }
+        edges.sort_by(|left, right| {
+            left.dependent
+                .cmp(&right.dependent)
+                .then_with(|| left.dependency.cmp(&right.dependency))
+        });
 
         let mut has_dependent = vec![false; unique.len()];
         for (owner, dependencies) in resolved.iter().enumerate() {
@@ -144,7 +170,7 @@ impl Tree {
         }
 
         sort_children(&mut rows);
-        Ok(Self { rows, roots })
+        Ok(Self { rows, roots, edges })
     }
 
     /// Bottom-up display order: every child subtree above its parent, each
@@ -258,6 +284,7 @@ fn attach_package(
         kind: TreeRowKind::Package,
         name: package.name.clone(),
         label,
+        repo: package.repo.clone(),
         artifact: Some(package.artifact),
         artifact_at: package.artifact_at,
         detail: package.detail.clone(),
@@ -279,6 +306,7 @@ fn attach_unknown(rows: &mut Vec<TreeRow>, parent: RowId, name: &str, depth: usi
         kind: TreeRowKind::UnknownDependency,
         name: name.to_string(),
         label: name.to_string(),
+        repo: Repo::Unknown,
         artifact: Some(ArtifactState::Unknown),
         artifact_at: None,
         detail: None,
@@ -362,6 +390,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{Tree, TreeError, TreeRow, TreeRowKind};
+    use crate::frontier::{Edge, EdgeKind};
     use crate::report::{ArtifactState, PackageView, Repo};
 
     fn package(name: &str, artifact: ArtifactState, depends: &[&str]) -> PackageView {
@@ -430,6 +459,28 @@ mod tests {
         // Nom reverses the stored sibling and root order: right is the last
         // child and therefore the top row; join closes the frame.
         assert_eq!(display_names(&tree), ["right", "base", "left", "join"]);
+    }
+
+    #[test]
+    fn the_tree_exposes_one_required_edge_per_pending_dependency() {
+        let tree = Tree::build(&[
+            package("base", ArtifactState::Missing, &[]),
+            package("left", ArtifactState::Missing, &["base"]),
+            package("right", ArtifactState::Missing, &["base"]),
+            package("join", ArtifactState::Missing, &["left", "right", "glibc"]),
+        ])
+        .expect("diamond is a forest");
+
+        assert_eq!(
+            tree.edges,
+            [
+                Edge::new("left", "join", EdgeKind::Runtime, true),
+                Edge::new("right", "join", EdgeKind::Runtime, true),
+                Edge::new("base", "left", EdgeKind::Runtime, true),
+                Edge::new("base", "right", EdgeKind::Runtime, true),
+            ],
+            "a join keeps both required edges; an unknown dependency adds none"
+        );
     }
 
     #[test]

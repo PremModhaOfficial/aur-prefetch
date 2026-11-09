@@ -4,6 +4,7 @@
 //! exits. Actions, fetch streaming and the install gate are later phases.
 
 pub mod guard;
+pub mod live;
 pub mod render;
 pub mod sanitize;
 pub mod tree;
@@ -29,7 +30,7 @@ use crate::runner::SystemRunner;
 
 pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
-    let color = std::env::var_os("NO_COLOR").is_none();
+    let color = use_color(ascii, std::env::var_os("NO_COLOR").is_some());
 
     if render_once {
         // A pipe diagnostic must work without a tty. Fall back to the compact
@@ -52,6 +53,12 @@ pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
         std::env::var("TERM").ok().as_deref(),
     )?;
     run_interactive(&config, ascii, color)
+}
+
+/// ASCII mode is a no-color mode: the glyph fallback is the signal, and the
+/// layout must read the same with or without a palette.
+fn use_color(ascii: bool, no_color: bool) -> bool {
+    !ascii && !no_color
 }
 
 fn ensure_interactive(stdin_tty: bool, stdout_tty: bool, term: Option<&str>) -> Result<(), Error> {
@@ -177,7 +184,15 @@ fn verdict(snapshot: &Snapshot) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_interactive;
+    use super::{ensure_interactive, use_color};
+
+    #[test]
+    fn ascii_and_no_color_both_disable_the_palette() {
+        assert!(use_color(false, false));
+        assert!(!use_color(false, true));
+        assert!(!use_color(true, false));
+        assert!(!use_color(true, true));
+    }
 
     #[test]
     fn a_pipe_is_not_interactive() {

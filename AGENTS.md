@@ -13,8 +13,9 @@ disagrees with it, `NEXT.md` wins.
 Current position: all six commands are implemented and sim-covered. Phases 4-6
 (chaos, VM, packaging) remain release hardening. Phase 7 T0 (the report layer),
 the T1 read-only shell, the DAG execution model, and its pure frontier reducer
-are landed. T2's prefetch badges, real cache scan, and pure bottom-up forest
-view (T2a) are landed; frontier wiring and live states are next.
+are landed. T2's prefetch badges, real cache scan, pure bottom-up forest view
+(T2a), and the pure live grammar/palette (T2b) are landed; the real fetch byte
+source, the repair card and the ledger are next.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -104,14 +105,16 @@ is the authoritative order of work. The TUI is specified in `TUI.md` and
 `PROGRESS.md`; its execution model is `docs/ANIMATION.md`. Phase 7 T0 (the
 shared report layer), the T1 shell, and the model are landed. The shell is
 read-only; there is no dashboard. The pure reducer is in `src/frontier.rs`;
-the tree adapter is not wired yet. The prefetch view is the T2a bottom-up
-dependency forest: one row per package, one root per pending package with no
-pending dependent, display-only `?` leaves for dependencies outside the
-pending set, and the real cached/stale/partial/missing/built badges. The
-`install N packages` total is header context, not a tree row. Sim 33 proves the
-badges and that the tree writes nothing.
+`src/tui/live.rs` is the pure adapter from the T2a forest and that reducer to
+nom rows. The prefetch view is the T2a bottom-up dependency forest: one row per
+package, one root per pending package with no pending dependent, display-only
+`?` leaves for dependencies outside the pending set, and the real
+cached/stale/partial/missing/built badges. The `install N packages` total is
+header context, not a tree row. T2b adds the live glyphs, waiting counts,
+timers, grouped summary and ANSI-16 palette on synthetic observations; the real
+fetch byte source is not wired. Sim 33 proves the badges and that the tree
+writes nothing.
 
-Next action: finish T2. The tree model and static render are landed; wire the
-tree to the ready-frontier reducer from `docs/ANIMATION.md`, then add live
-states. The tree reads `check::collect`, `progress::collect` and `fetch::plan`;
-it does not collect its own facts.
+Next action: finish T2. Wire the real fetch stream into `LiveRun`, then add the
+repair card and the ledger. The tree reads `check::collect`,
+`progress::collect` and `fetch::plan`; it does not collect its own facts.

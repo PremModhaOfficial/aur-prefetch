@@ -340,6 +340,10 @@ Acceptance: the diamond and two-root tests pass through the renderer, not only
 through the reducer. No node changes state without an observation and an
 evidence string.
 
+T2b landed the pure view (`src/tui/live.rs`) and the renderer goldens for the
+diamond, two roots and the failure freeze. It consumes synthetic observations;
+the fetch stream adapter is T2c.
+
 ### 3. Real progress bars
 
 Use the nom geometry, not a guessed one. `left_width = max 60 (1 + widest row
@@ -369,6 +373,10 @@ and `--ascii` must produce the same text with no color.
 
 Acceptance: color snapshots for the tree and the receipt, plus a no-color frame
 whose stripped text matches the color frame byte for byte.
+
+T2b landed the tree side: semantic ANSI-16 styles on the glyphs, names, branches,
+host, timer and waiting text, with bold headers and counts. `NO_COLOR` and
+`--ascii` keep the text and drop every color. The receipt palette is T3.
 
 ### 6. Live loop
 

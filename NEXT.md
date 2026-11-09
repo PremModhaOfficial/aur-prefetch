@@ -315,8 +315,11 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 - [x] `install N packages` header context, counters, `Σ`, host.
 - [x] Pure ready/running/done reducer with diamond and two-root tests
       (`src/frontier.rs`).
-- [ ] Wire the tree to reducer observations; parallel roots are sets, not a
+- [x] Wire the tree to reducer observations; parallel roots are sets, not a
       queue, and a join waits for every required edge.
+- [x] Live grammar and ANSI-16 palette: nom glyphs, activity kind, waiting
+      counts, timers after 1s, grouped counters (`src/tui/live.rs`,
+      `src/tui/render.rs`).
 - [ ] Live fetch: real state changes and counters; timers after 1s.
 - [x] No duplicate nodes; one placement per package, no repeated subtree.
 - [ ] Failure freeze, repair card, downstream blocked.
@@ -336,15 +339,27 @@ with no pending dependent, display-only `?` leaves for dependencies outside the
 pending set, deterministic artifact-rank/name siblings, and cycle/self-edge
 protection. A second pending edge does not duplicate a subtree. The
 `install N packages` total is header context, not a tree row; an unrooted
-cycle is a deterministic error. Frontier wiring, live states, the failure
-freeze and the ledger remain open.
+cycle is a deterministic error. The frontier is wired in T2b below; the real
+fetch source, the repair card and the ledger remain open.
+
+T2b landed: `src/tui/live.rs` is the pure live view over the forest and
+`frontier::GraphState`. It seeds cached/built artifacts as `NoWork`, records
+`Started`/`Finished`/`Failed` timestamps, derives per-row planned/running/done/
+failed/blocked/skipped state, activity kind (build or download), prerequisite
+waiting counts, and timers above 1 s. `render.rs` maps that to nom's glyphs and
+the ANSI-16 palette, and adds the grouped `Builds`/`Downloads` summary plus the
+host and `Σ`. The live frame is tested at 120x40 and 80x24 for the diamond, two
+roots, the failure freeze, sub-second and above-one-second timers, ASCII and
+NO_COLOR. This slice consumes synthetic observations only; T2c still wires the
+real fetch byte source. The failure freeze and downstream blocking are landed in
+the view; the repair card is not.
 
 The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,
 frontier wiring, real progress bars, layout and viewport, ANSI-16 palette,
 live loop, final receipt. The playable comparison is
 [`prototype/nom-study.html`](prototype/nom-study.html). The study is evidence,
-not implementation; it does not tick any T2 box above.
+not implementation.
 
 ### T3. Actions
 

@@ -1,7 +1,8 @@
 # PROGRESS.md — prefetch-aware dependency tree
 
-Status: **spec + implementation plan. The shared report layer, the T1 shell and
-the static bottom-up dependency forest (T2a) exist; the live frontier does not.**
+Status: **spec + implementation plan. The shared report layer, the T1 shell,
+the static bottom-up dependency forest (T2a) and the pure live grammar/palette
+(T2b) exist; the real fetch byte source does not.**
 Written 2026-11-08. Revised after review: the live tree is borrowed from
 `nix-output-monitor` (nom), not competed with.
 
@@ -590,6 +591,11 @@ Done when: `--render-once --at <t>` produces deterministic frames at 120×40 and
 - [ ] Failure freeze + repair card; downstream blocked.
 - [ ] No state writes on view/pause.
 - [ ] No live animation of the attached install; the tree is plan and result.
+
+T2b landed the pure path: `src/tui/live.rs` maps `GraphState` observations to
+rows with nom glyphs, activity kind, prerequisite waiting counts and timers, and
+`render.rs` goldens cover the diamond, two roots and the failure freeze. The
+streaming channel, the repair card and the live loop remain open.
 
 Done when: sim proves cached nodes never animate, live fetch nodes do, failure
 freezes instead of retrying, and the attached install still shows the raw

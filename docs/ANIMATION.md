@@ -1,9 +1,11 @@
 # ANIMATION.md: the DAG execution frontier
 
 Status: design note. The pure frontier reducer is implemented in
-[`src/frontier.rs`](../src/frontier.rs); the tree integration is not. It adds no
-command, no write path, and no network call. Read with [`TUI.md`](TUI.md),
-[`PROGRESS.md`](PROGRESS.md) and [`NEXT.md`](NEXT.md), which wins on order.
+[`src/frontier.rs`](../src/frontier.rs) and the pure live view in
+[`src/tui/live.rs`](../src/tui/live.rs); the real fetch byte source is not
+wired. It adds no command, no write path, and no network call. Read with
+[`TUI.md`](TUI.md), [`PROGRESS.md`](PROGRESS.md) and [`NEXT.md`](NEXT.md), which
+wins on order.
 
 ## 1. The graph
 

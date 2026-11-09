@@ -24,7 +24,16 @@ covers where things stand and the first move. Do not re-plan.
   `PROGRESS.md` now point at it.
 - The pure reducer is landed in `src/frontier.rs`: readiness, blocking,
   skipped-satisfied, freeze, replay, and a bounded trace. Diamond and two-root
-  unit tests pass. The tree is not wired to it yet.
+  unit tests pass.
+- T2b is landed: `src/tui/live.rs` is the pure live view over the forest and
+  `frontier::GraphState`. It seeds cached/built artifacts as `NoWork`, records
+  observation timestamps, derives planned/running/done/failed/blocked/skipped
+  rows, activity kind, prerequisite waiting counts, and timers above 1 s.
+  `render.rs` maps the states to nom's glyphs and the ANSI-16 palette and adds
+  the grouped `Builds`/`Downloads` summary. Goldens cover the diamond, two
+  roots, the failure freeze, sub-second and above-one-second timers, ASCII and
+  NO_COLOR. This slice uses synthetic observations; the real fetch byte source
+  is not wired.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -42,20 +51,21 @@ covers where things stand and the first move. Do not re-plan.
   the still is [`prototype/shots/nom-study.png`](prototype/shots/nom-study.png).
   No TUI code changed in that pass.
 - The T1 read-only shell is implemented. The prefetch view is the T2a
-  bottom-up dependency tree; the live frontier is still **specified, not
-  implemented**. `prototype/` holds the design sketches.
+  bottom-up dependency tree; the T2b live grammar and palette read the pure
+  frontier, but the real fetch source is not wired. `prototype/` holds the
+  design sketches.
 - `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is in progress
-  with T2a landed.
+  with T2a and T2b landed.
 
 ## Do this first: T2
 
-1. Finish T2: the pure tree model and the static bottom-up render are landed
-   (T2a). Wire the tree to the pure reducer in `src/frontier.rs`, then add live
-   fetch, the failure freeze and the ledger. Use `check::collect`,
-   `progress::collect` and `fetch::plan`; do not add a second update collector.
-   The ready set is a set, not a queue. Use the seven-step order in
-   `docs/NOM.md` (tree model, frontier wiring, real progress bars, layout and
-   viewport, ANSI-16 palette, live loop, final receipt).
+1. Finish T2: T2a (the forest) and T2b (the pure live view and palette) are
+   landed. T2c wires the real fetch byte source into `LiveRun` and adds the
+   repair card and the ledger. Use `check::collect`, `progress::collect` and
+   `fetch::plan`; do not add a second update collector. The ready set is a set,
+   not a queue. The remaining order in `docs/NOM.md` is real progress bars
+   (only with an observed byte source), layout and viewport, the live loop and
+   the final receipt.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;
