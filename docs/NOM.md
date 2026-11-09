@@ -5,8 +5,9 @@ Read with [`PROGRESS.md`](../PROGRESS.md), [`docs/ANIMATION.md`](ANIMATION.md),
 [`TUI.md`](../TUI.md) and [`NEXT.md`](../NEXT.md). `NEXT.md` wins on order.
 
 The visual companion is
-[`prototype/nom-study.html`](../prototype/nom-study.html). It plays the
-colorized frames, shows the gap table and repeats the T2 order.
+[`prototype/nom-study.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/nom-study.html),
+archived on the `archive/prototype-studies` branch. It plays the colorized
+frames, shows the gap table and repeats the T2 order.
 
 ## Why this exists
 

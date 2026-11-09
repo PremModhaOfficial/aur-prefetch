@@ -419,8 +419,9 @@ The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,
 frontier wiring, real progress bars, layout and viewport, ANSI-16 palette,
 live loop, final receipt. The playable comparison is
-[`prototype/nom-study.html`](prototype/nom-study.html). The study is evidence,
-not implementation.
+[`prototype/nom-study.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/nom-study.html),
+archived on `archive/prototype-studies` to keep the review diff renderable. The
+study is evidence, not implementation.
 
 ### T3. Actions
 

@@ -17,14 +17,15 @@ readiness, parallel fronts), [`NEXT.md`](NEXT.md) (order of work),
 This file covers one screen: the progress view. It is not a new TUI and not a
 second command layer.
 
-Visual tour: [`prototype/tui-walkthrough.html`](prototype/tui-walkthrough.html).
+Visual tour: [`prototype/tui-walkthrough.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/tui-walkthrough.html).
 The Markdown files remain the contract; the HTML shows the frames and the
-terminal limits together.
+terminal limits together. The HTML studies are archived on the
+`archive/prototype-studies` branch so the review diff stays renderable.
 
 Capture study: [`docs/NOM.md`](docs/NOM.md) compares a real `nh home switch` run
 with the current prefetch frame and orders the T2 adoption. The playable visual
-is [`prototype/nom-study.html`](prototype/nom-study.html); the still is
-[`prototype/shots/nom-study.png`](prototype/shots/nom-study.png).
+is [`prototype/nom-study.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/nom-study.html); the still is
+[`prototype/shots/nom-study.png`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/shots/nom-study.png).
 
 Reference: [`nix-output-monitor`](https://github.com/maralorn/nix-output-monitor).
 Its dependency graph, phase glyphs and summary counters are the model. This

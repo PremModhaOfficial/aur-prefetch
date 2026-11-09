@@ -110,13 +110,14 @@ covers where things stand and the first move. Do not re-plan.
   frontier is not wired yet.
 - The nom capture study is landed: [`docs/NOM.md`](docs/NOM.md) measures the
   2026-11-09 `nh home switch` run and orders the remaining T2 work. The
-  playable comparison is [`prototype/nom-study.html`](prototype/nom-study.html);
-  the still is [`prototype/shots/nom-study.png`](prototype/shots/nom-study.png).
+  playable comparison is [`prototype/nom-study.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/nom-study.html);
+  the still is [`prototype/shots/nom-study.png`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/shots/nom-study.png).
   No TUI code changed in that pass.
 - The T1 shell is implemented. The prefetch view is the T2a bottom-up
   dependency tree; the T2b live grammar and palette read the pure frontier, and
-  T2e runs the real fetch and drives the real cache source. `prototype/` holds
-  the design sketches.
+  T2e runs the real fetch and drives the real cache source. The design sketches
+  are archived on `archive/prototype-studies`, keeping this PR under GitHub's
+  diff render cap.
 - `NEXT.md` Phase 7 is the TUI order of work. T1, T2 and T3 are closed. T4
   polish is next.
 

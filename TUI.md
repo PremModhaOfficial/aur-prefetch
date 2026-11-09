@@ -4,28 +4,29 @@ Status: **spec. T0 report layer, the T1 shell, T2a–T2f and T3's fetch
 checklist/log, install gate, attached install and post-install receipt are
 implemented; T4 polish and later screens are not.** Written 2026-11-08.
 
-Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
+Prototype: [`prototype/tui-variants.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/tui-variants.html) — five
 explorations plus Atlas, the hillclimbed target, and a reviewed cross-tool
-scorecard. Throwaway, not a decision.
+scorecard. Throwaway, not a decision. The HTML studies are archived on the
+`archive/prototype-studies` branch so the review diff stays renderable.
 
-Dossier: [`prototype/atlas.html`](prototype/atlas.html) — every screen the rubric
+Dossier: [`prototype/atlas.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/atlas.html) — every screen the rubric
 scored, with the 50 checks and the proof for each. A design gallery, not a
 running TUI.
 
-Walkthrough: [`prototype/tui-walkthrough.html`](prototype/tui-walkthrough.html)
+Walkthrough: [`prototype/tui-walkthrough.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/tui-walkthrough.html)
 — one page for the screens, the state model and the terminal limits below. The
 Markdown file remains the contract.
 
 Execution model: [`docs/ANIMATION.md`](docs/ANIMATION.md) — the DAG frontier,
 readiness, parallel fronts and replay.
 
-Hillclimb: [`prototype/hillclimb/RESULTS.md`](prototype/hillclimb/RESULTS.md) —
+Hillclimb: [`prototype/hillclimb/RESULTS.md`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/hillclimb/RESULTS.md) —
 the harness claims 10/10 on ten metrics, but two independent clean-context audits
 put the same artifacts at **6.0 and 5.1 mean — conservative 4.7, floor 2.0** and
-flag 20 checks ([`AUDIT.md`](prototype/hillclimb/AUDIT.md)). That is a design
+flag 20 checks ([`AUDIT.md`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/hillclimb/AUDIT.md)). That is a design
 claim, not user testing.
 
-Progress lab: [`prototype/progress-lab.html`](prototype/progress-lab.html) —
+Progress lab: [`prototype/progress-lab.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/progress-lab.html) —
 five progress layouts selected and crossed. The lab self-scored Canopy+ at 9.86;
 two independent scorers put it at **6.29–6.86** against nom's **5.86–6.00**.
 That is not a win. The live tree is now borrowed from nom; the design value is
