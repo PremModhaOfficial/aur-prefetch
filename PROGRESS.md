@@ -1,12 +1,15 @@
 # PROGRESS.md — prefetch-aware dependency tree
 
-Status: **spec + implementation plan. Nothing here is implemented.** Written
-2026-11-08. Revised after review: the live tree is borrowed from
-`nix-output-monitor` (nom), not competed with.
+Status: **spec + implementation plan. The shared report layer and a read-only
+T1 shell exist; the prefetch tree below does not.** Written 2026-11-08. Revised
+after review: the live tree is borrowed from `nix-output-monitor` (nom), not
+competed with.
 
-Read with [`TUI.md`](TUI.md) (the shell, gates and keys), [`NEXT.md`](NEXT.md)
-(order of work), [`spec.md`](spec.md) (user flow) and [`context.md`](context.md)
-(edge cases). `NEXT.md` wins on order.
+Read with [`TUI.md`](TUI.md) (the shell, gates and keys),
+[`docs/ANIMATION.md`](docs/ANIMATION.md) (the execution frontier: states,
+readiness, parallel fronts), [`NEXT.md`](NEXT.md) (order of work),
+[`spec.md`](spec.md) (user flow) and [`context.md`](context.md) (edge cases).
+`NEXT.md` wins on order.
 
 This file covers one screen: the progress view. It is not a new TUI and not a
 second command layer.
@@ -79,18 +82,26 @@ is the line between a monitor and a screensaver.
 | Cache artifact, version match, mtime, `.part`, `.sig` | CacheDir scan | `✓ cached`, `▲ stale`, `◔ partial`, `○ missing` |
 | AUR built artifact and metadata | aurto repo, `.PKGINFO` | `◆ built` / `⏸ build-pending` |
 | AUR runtime and build deps | `.SRCINFO`, `pacman -Si` | Child rows; unknown edges are `?` |
-| Download started, bytes, finished | `pacman -Syuw` `downloading` lines, `.part` size | `↓` running, real bytes, `✔` done |
+| Download started, bytes, finished | `.part` size via `stat`; `pacman -Syuw` `downloading` lines only if present | `↓` running, real bytes, `✔` done |
 | Build phase started | `makepkg`/`yay` line: `Starting build()`, `check()`, `package()` | `⏵ buildPhase` |
 | Build finished or failed | exit code and last log line | `✔ done` / `⚠ failed` |
 | Package installed or upgraded | `pacman.log` `[ALPM] installed` / `upgraded` | `✔ installed` |
 | Last fetch and install | state file | Header ages |
 | Install plan and gates | existing `install` gate code | Ghost branch, gate overlay |
 
+The ready set is a **frontier**, not a list. Nodes whose required incoming
+edges are satisfied are ready together; a join waits for every required edge.
+Parsing preserves that partial order and never invents a single sequence.
+[`docs/ANIMATION.md`](docs/ANIMATION.md) has the formal states, the readiness
+rule and worked diamond and two-root examples.
+
 Rules:
 
 - If an observation does not prove a transition, the tree does not change.
-- No synthetic percentage. `pacman` gives a percentage only when it prints one;
-  otherwise show bytes and elapsed time.
+- No synthetic percentage. `pacman` suppresses progress when stdout is not a
+  TTY; live bytes come from `.part` growth, polled with `stat`. A percentage
+  appears only when both observed bytes and a known total exist. Otherwise show
+  bytes and elapsed time.
 - The 60s refresh only re-reads static facts. It is not animation.
 - Cached, built and installed nodes are static.
 - The live tree is allowed for captured phases: `fetch`, and an AUR build if
@@ -267,7 +278,7 @@ state file only.
 ### P7. Animation must encode a state change
 
 The only motion is a node changing state, a counter incrementing, the elapsed
-time advancing, or a failure freezing the branch. No ambient particles on
+time advancing, or a failure freezing the frontier. No ambient particles on
 cached nodes. No pulse that does not correspond to real work.
 
 Budget: 10–15 fps while a captured phase runs. `--no-motion` removes the pulse
@@ -387,8 +398,9 @@ Default state: prefetch complete, install future.
 ```
 
 - This is the nom shape: tree, phase glyphs, counters, host, `Σ`.
-- `pacman` does not emit structured progress, so the bytes are only what it
-  actually prints. No percentage is invented.
+- `pacman` suppresses progress when stdout is not a TTY. Live bytes come from
+  `.part` growth, polled with `stat`; no progress bar is parsed. A percentage
+  needs both observed bytes and a known total.
 - `waiting for download` and `build after linux` are reasons, not states.
 - Detach leaves `pacman` running. The next screen owns the drift state.
 
@@ -458,6 +470,10 @@ pub struct TreeRow {
     pub expanded: bool,
 }
 ```
+
+The reducer and frontier model are in
+[`docs/ANIMATION.md`](docs/ANIMATION.md). `ProgressReport` is the plan
+snapshot; it is not the mutable graph.
 
 Collectors:
 
@@ -540,6 +556,8 @@ Done when: `--render-once --at <t>` produces deterministic frames at 120×40 and
 ### P3. Live fetch tree
 
 - [ ] Streaming channel from `fetch` into the report.
+- [ ] Ready/running/done frontier from `docs/ANIMATION.md`; the ready set is a
+      set, not a queue.
 - [ ] Node state changes and counters update in place; timers after 1s.
 - [ ] Failure freeze + repair card; downstream blocked.
 - [ ] No state writes on view/pause.
@@ -574,7 +592,7 @@ default. AUR RPC (C) waits for a TUI.md amendment.
 
 | Level | What |
 |---|---|
-| unit | `-Qui` parser, cache matcher, `.SRCINFO`/`.PKGINFO`, edge states, tree construction, count precedence |
+| unit | `-Qui` parser, cache matcher, `.SRCINFO`/`.PKGINFO`, edge states, frontier reducer (diamond, two roots), tree construction, count precedence |
 | render | goldens at 80×24, 120×40, ASCII; fixed `--at` times |
 | cli | `--render-once` deterministic; offline default |
 | sim | 33 prefetched-ahead tree; 34 live fetch tree; 35 failure freeze |
@@ -613,6 +631,7 @@ implementation (30–32 are reserved for the main TUI in TUI.md).
 - 80×24 compact tree and 120×40 full tree read the same report.
 - Every package shows all dimensions in the inspector and one primary glyph.
 - A package appears once; a repeat is `↑ see above`.
+- A join waits for every required edge; parallel roots are not serialized.
 - Cached nodes are static; only the captured fetch and replay move.
 - The attached install is not faked as a live tree.
 - Unknown AUR edges are `?`, never invented, never gate.

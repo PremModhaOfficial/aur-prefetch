@@ -13,14 +13,17 @@ covers where things stand and the first move. Do not re-plan.
   (packaging) are open and still block a release.
 - Phase 7 T0 (the shared report layer) is landed: `src/report.rs`, collect and
   render splits for `check`/`fetch`/`clean`, the system cache paths in
-  `Config`, and frozen `check` text. The full CI and all 30 sim scenarios pass.
+  `Config`, and frozen `check` text. The full CI and all 31 sim scenarios pass.
 - Phase 7 T1's shell is landed: `aur-prefetch tui`, `--render-once`, `--ascii`,
   `NO_COLOR`, the Drop guard, the panic hook, the static tree frame, the
   sanitizer, and sim `31-tui-readonly.sh`. The pty check proves a normal quit
   restores the terminal and Ctrl-C exits 130.
-- The TUI is **specified, not implemented**: `TUI.md` (shell, keys, actions)
-  and `PROGRESS.md` (prefetch/install progress screen). `prototype/` holds the
-  design sketches those documents reference.
+- The DAG execution model is landed in `docs/ANIMATION.md`: states, readiness,
+  parallel fronts, replay, and the `.part` byte source. `TUI.md` and
+  `PROGRESS.md` now point at it.
+- The T1 read-only shell is implemented. The prefetch/install progress tree is
+  still **specified, not implemented**: `TUI.md` (shell, keys, actions) and
+  `PROGRESS.md` (progress screen). `prototype/` holds the design sketches.
 - `NEXT.md` Phase 7 is the TUI order of work. T1 is open only for the forced
   panic and Ctrl-Z pty checks; T2 is next.
 
@@ -32,7 +35,8 @@ covers where things stand and the first move. Do not re-plan.
    next frame draws and raw mode is back.
 3. Then start T2: prefetch badges, the ghost install branch, live fetch, no
    duplicate nodes, and the failure freeze. Use `check::collect` and
-   `fetch::plan`; do not add a second collector.
+   `fetch::plan`; do not add a second collector. Implement the ready-frontier
+   reducer from `docs/ANIMATION.md`; the ready set is a set, not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. T1's frame is deliberately static;

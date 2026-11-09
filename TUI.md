@@ -1,6 +1,7 @@
 # TUI.md — terminal UI spec
 
-Status: **spec only. Nothing here is implemented.** Written 2026-11-08.
+Status: **spec. T0 report layer and the T1 read-only shell are implemented; T2
+and later screens are not.** Written 2026-11-08.
 
 Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
 explorations plus Atlas, the hillclimbed target, and a reviewed cross-tool
@@ -13,6 +14,9 @@ running TUI.
 Walkthrough: [`prototype/tui-walkthrough.html`](prototype/tui-walkthrough.html)
 — one page for the screens, the state model and the terminal limits below. The
 Markdown file remains the contract.
+
+Execution model: [`docs/ANIMATION.md`](docs/ANIMATION.md) — the DAG frontier,
+readiness, parallel fronts and replay.
 
 Hillclimb: [`prototype/hillclimb/RESULTS.md`](prototype/hillclimb/RESULTS.md) —
 the harness claims 10/10 on ten metrics, but two independent clean-context audits
@@ -283,6 +287,10 @@ pub struct Check { pub id: &'static str, pub label: String, pub verdict: Verdict
 pub enum Verdict { Ok, Warn, Blocked, Error, Skipped }
 ```
 
+The execution model is in [`docs/ANIMATION.md`](docs/ANIMATION.md): a node moves
+pending -> ready -> running -> done, with parallel ready fronts and joins.
+`Snapshot` supplies facts and ages; it never supplies motion.
+
 Rules for the extraction:
 
 - A section is exactly one of `Ready`, `Failed`, `NotCollected`. There is no
@@ -446,7 +454,7 @@ list.
 │ Host     mirror.example.org                                                            │
 │ Σ        ⏵ 1  ✔ 1  ⏸ 1  ↓ 1  ⏱ 00:42                                                   │
 ├─ LOG ──────────────────────────────────────────────────────────────────────────────────┤
-│ 23:41:02  downloading linux 87/142 MiB · mirror.example.org                            │
+│ 23:41:02  bytes      linux 87/142 MiB · mirror.example.org                             │
 │ 23:41:04  queued yay-bin build after download                                          │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ esc detach · enter focus · l log · ? help                                              │
@@ -461,7 +469,9 @@ list.
   `↑ see above`, not a duplicate subtree. Running and failed nodes are never
   hidden by the relevance cut.
 - Timers appear only after 1s. Per-item and total elapsed are real; there is no
-  invented percentage. A download may show bytes because pacman emits them.
+  invented percentage. `pacman` suppresses progress when stdout is not a TTY, so
+  live bytes come from `.part` growth, polled with `stat`. A percentage appears
+  only when both observed bytes and a known total exist.
 - The `Σ` line is the summary: packages, running, planned, failed, elapsed.
   Failure counts are never hidden.
 - Tree rows show the relevant package and its build deps; the log keeps the
@@ -781,9 +791,10 @@ the result is a refresh against an old install — the drift state, not a
 corruption. The TUI never sends a signal to `pacman`.
 
 No fake progress. `pacman` does not emit machine-readable progress when piped,
-so the tree shows the gate checklist, the real output lines, and elapsed time.
-A percentage appears only if a real one is parsed. The install owns the
-terminal; it is not a captured tree.
+so the tree shows the gate checklist, the output it does emit, `.part` growth
+observed with `stat`, and elapsed time. A percentage appears only if both
+observed bytes and a known total exist. The install owns the terminal; it is not
+a captured tree.
 
 ---
 
@@ -975,6 +986,9 @@ Every string crosses one gate before it reaches a cell:
 - Motion encodes a state change, never decoration.
 - Cached and prefetched nodes are static. The live phase is the only animated
   one.
+- The ready set is a frontier, not a queue: parallel roots may run together, and
+  a join waits for every required edge.
+- A failure freezes the frontier and propagates blocked; no blind retry.
 - Replay uses the scrubber, not a fake real-time clock.
 - A value that cannot be collected is `unknown`, with the reason. It is never
   zero and never a guessed green check.
@@ -1092,14 +1106,16 @@ commit of T0.
 
 ### T0. Report layer (prerequisite, no UI)
 
-- [ ] `src/report.rs`: `Snapshot`, `Section<T>`, per-domain structs.
-- [ ] `check`, `fetch`, `clean`: split `collect` from text rendering.
+- [x] `src/report.rs`: `Snapshot`, `Section<T>`, per-domain structs.
+- [x] `check`, `fetch`, `clean`: split `collect` from text rendering.
 - [ ] Reuse `CommandRunner::run_interactive`; add only the fetch stream channel.
-- [ ] Move the three system cache paths into `Config`.
-- [ ] Golden text tests for `check` (the output is frozen during the move).
+- [x] Move the three system cache paths into `Config`.
+- [x] Golden text tests for `check` (the output is frozen during the move).
 
 Done when: `./ci.sh` and `./sim/run.sh` are green with no scenario edits, and
 CLI output is byte-identical.
+
+T0 landed as d7f159d. The fetch stream channel is T3.
 
 ### T1. Tree shell
 
@@ -1126,6 +1142,8 @@ closes.
 
 - [ ] Prefetch badges: cached, built, stale, partial, missing, unknown.
 - [ ] Ghost install branch, counters, `Σ`, host.
+- [ ] Ready/running/done frontier from `docs/ANIMATION.md`; the ready set is a
+      set, not a queue.
 - [ ] Live fetch: real state changes and counters; timers after 1s.
 - [ ] No duplicate nodes; `↑ see above` for a repeat.
 - [ ] Failure freeze, repair card, downstream blocked.

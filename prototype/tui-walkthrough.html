@@ -381,7 +381,7 @@ partial 0 · failed 0 · unknown 1 · held 0</div>
             <tr><td>Cache artifact, version match, mtime, <code>.part</code>, <code>.sig</code></td><td>CacheDir scan</td><td><code>✓ cached</code> <code>▲ stale</code> <code>◔ partial</code> <code>○ missing</code></td></tr>
             <tr><td>AUR built artifact and metadata</td><td>aurto repo, <code>.PKGINFO</code></td><td><code>◆ built</code> / <code>⏸ build-pending</code></td></tr>
             <tr><td>AUR runtime and build deps</td><td><code>.SRCINFO</code>, <code>pacman -Si</code></td><td>Child rows; unknown is <code>?</code></td></tr>
-            <tr><td>Download started, bytes, finished</td><td><code>pacman -Syuw</code> <code>downloading</code> lines, <code>.part</code> size</td><td><code>↓</code> running, real bytes, <code>✔</code> done</td></tr>
+            <tr><td>Download started, bytes, finished</td><td><code>.part</code> size via <code>stat</code>; <code>pacman -Syuw</code> <code>downloading</code> lines only if present</td><td><code>↓</code> running, real bytes, <code>✔</code> done</td></tr>
             <tr><td>Build phase started</td><td><code>makepkg</code>/<code>yay</code>: <code>Starting build()</code>, <code>check()</code>, <code>package()</code></td><td><code>⏵ buildPhase</code></td></tr>
             <tr><td>Build finished or failed</td><td>exit code / last log line</td><td><code>✔ done</code> / <code>⚠ failed</code></td></tr>
             <tr><td>Package installed or upgraded</td><td><code>pacman.log</code> <code>[ALPM] installed</code></td><td><code>✔ installed</code></td></tr>
@@ -390,6 +390,7 @@ partial 0 · failed 0 · unknown 1 · held 0</div>
         </table>
       </div>
       <p class="note" style="margin-top:14px"><b>Live where it is real:</b> v1 animates the captured fetch. The AUR build badge is static from the aurto repo; a live build tree needs a captured <code>build</code> action that owns <code>makepkg</code>, not v1. <b>Not live:</b> the attached <code>yay -Syuu</code> install. It is plan and result, because it owns the terminal and keeps the PKGBUILD review.</p>
+      <p class="note" style="margin-top:14px"><b>A frontier, not a queue:</b> the ready set holds every node whose required edges are satisfied. Parallel roots run together; a join waits for all of them. The view preserves that partial order and never invents one global sequence. <a href="../docs/ANIMATION.md">docs/ANIMATION.md</a> has the formal model and worked diamond and two-root examples.</p>
 
       <div class="cols-2">
         <div>
@@ -531,13 +532,13 @@ partial 0 · failed 0 · unknown 1 · held 0</div>
 │ Host     mirror.example.org                                                            │
 │ Σ        <span class="acc">⏵</span> 1  <span class="ok">✔</span> 1  <span class="warn">⏸</span> 1  ↓ 1  ⏱ 00:42                                                   │
 ├─ LOG ──────────────────────────────────────────────────────────────────────────────────┤
-│ 23:41:02  downloading linux 87/142 MiB · mirror.example.org                            │
+│ 23:41:02  bytes      linux 87/142 MiB · mirror.example.org                             │
 │ 23:41:04  queued yay-bin build after download                                          │
 ├────────────────────────────────────────────────────────────────────────────────────────┤
 │ esc detach · enter focus · l log · ? help                                              │
 └────────────────────────────────────────────────────────────────────────────────────────┘</pre>
           </div>
-          <p>No spinner percentage. The tree is nom's shape: gate checklist, direct dependencies, phase glyphs, counters and <code>Σ</code>. <code>pacman</code> does not emit structured progress when piped, so the bytes are only what it prints. Detach leaves pacman running and says so. The TUI never signals pacman.</p>
+          <p>No spinner percentage. The tree is nom's shape: gate checklist, direct dependencies, phase glyphs, counters and <code>Σ</code>. <code>pacman</code> suppresses progress when stdout is not a TTY, so live bytes come from <code>.part</code> growth polled with <code>stat</code>, not a parsed progress bar. Detach leaves pacman running and says so. The TUI never signals pacman.</p>
         </div>
       </div>
 
@@ -723,7 +724,7 @@ partial 0 · failed 0 · unknown 1 · held 0</div>
         <div class="cap">
           <div class="cap-top"><h3>8. Animation is a budget</h3><span class="tag ok">motion</span></div>
           <p class="cannot">You cannot promise 60 fps, smooth particles or low latency over SSH and tmux. Motion can lie about state.</p>
-          <p class="answer"><b>Response:</b> 10 to 15 fps only while a captured fetch runs. Cached nodes never animate. The tree updates in place; there are no particles and no fake install animation. <code>--no-motion</code> and a config key. Motion is never the only carrier of state. No idle tick.</p>
+          <p class="answer"><b>Response:</b> 10 to 15 fps only while a captured fetch runs. Cached nodes never animate. The ready set is a frontier, not a queue: parallel roots may run together and a join waits for every required edge. The tree updates in place; there are no particles and no fake install animation. <code>--no-motion</code> and a config key. Motion is never the only carrier of state. No idle tick.</p>
         </div>
       </div>
 

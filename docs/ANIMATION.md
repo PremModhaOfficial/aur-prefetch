@@ -160,7 +160,7 @@ queue.
 
 | view | input | states it may show |
 |---|---|---|
-| plan | `FetchPlan`, cache scan, state file | pending, ready, skipped |
+| plan | `ProgressReport`, cache scan, state file | pending, ready, skipped |
 | trace | append-only observations | every state |
 | result | fold of the trace | every state |
 
@@ -191,9 +191,8 @@ attribute a phase to a package.
    but no glyph, row, bar or tree line moves on a timer.
 2. **No synthetic percentage.** pacman suppresses progress when stdout is not a
    TTY. Live bytes come from `.part` growth, polled with `stat`. A percentage
-   needs both observed bytes and a known total. `PROGRESS.md` and `TUI.md` list
-   download lines as a byte source. This file takes `.part` growth as
-   authoritative and parses no progress bar.
+   needs both observed bytes and a known total. `PROGRESS.md` and `TUI.md` use
+   the same rule: `.part` growth is authoritative and no progress bar is parsed.
 3. **Freeze on failure.** The first failed transition sets `frozen`. Motion and
    byte polling stop globally, the failed node and its blocked dependents
    stay visible, and the repair card replaces the footer.
@@ -229,8 +228,8 @@ pub struct ViewModel { pub rows: Vec<Row>, pub counters: Counts, pub frozen: boo
 
 The layers, one direction only:
 
-- **Source**: `FetchPlan`, `Snapshot` sections, the captured fetch stream, the
-  CacheDir `.part` scan, the `pacman.log` tail.
+- **Source**: `ProgressReport`, `Snapshot` sections, the captured fetch stream,
+  the CacheDir `.part` scan, the `pacman.log` tail.
 - **Adapter**: turns a domain fact into observations. It owns sanitization and
   never guesses. A line that cannot be attributed produces no observation.
 - **Reducer**: deterministic, no I/O. Folds observations, appends the trace,
@@ -242,8 +241,9 @@ The layers, one direction only:
 
 How the report layer feeds it:
 
-- `FetchPlan` seeds node ids, edges, expected sizes, and the initial pending or
-  ready assignment. It seeds no dynamic state.
+- The T2 `ProgressReport` seeds node ids, edges, expected sizes, and the initial
+  pending or ready assignment. `FetchPlan` remains the fetch action's plan, not
+  the graph. Neither seeds dynamic state.
 - `Snapshot` is the static read path. `Section<T>` is a fact or a provenance
   record. `Ready { data, at }` yields facts stamped `at`.
   `Failed { error, at }` freezes the affected subtree and renders the message.
@@ -257,7 +257,7 @@ How the report layer feeds it:
 
 ```mermaid
 flowchart LR
-  FP["FetchPlan"] --> PA["PlanAdapter"]
+  FP["ProgressReport"] --> PA["PlanAdapter"]
   SN["Snapshot with Section T"] --> SA["SnapshotAdapter"]
   ST["captured pacman stream"] --> TA["StreamAdapter"]
   CD["CacheDir and .part scan"] --> FA["FileAdapter"]
@@ -281,13 +281,13 @@ sequenceDiagram
   autonumber
   participant U as User
   participant T as TUI
-  participant P as fetch plan
+  participant P as progress plan
   participant Y as pacman
   participant C as CacheDir
   participant R as Reducer
   participant V as Renderer
   U->>T: press F
-  T->>P: collect FetchPlan
+  T->>P: collect ProgressReport
   P-->>T: nodes, edges, sizes
   T->>R: seed GraphState
   T->>Y: sudo -n pacman -Syuw --noconfirm, captured

@@ -269,6 +269,9 @@ A container cannot test snapshots or boot.
 `PROGRESS.md` is the prefetch/install progress screen. This section is only the
 order of work and the acceptance gates.
 
+`docs/ANIMATION.md` is the execution model: states, readiness, parallel fronts
+and replay. T2 implements its reducer; the tree is a view of that graph.
+
 Phase 7 can start before Phases 4-6 because T0 changes no pacman behaviour. It
 does not make them optional; they still block a release.
 
@@ -311,13 +314,16 @@ closes.
 
 - [ ] Prefetch badges: cached, built, stale, partial, missing, unknown.
 - [ ] Ghost install branch, counters, `Σ`, host.
+- [ ] Ready/running/done frontier from `docs/ANIMATION.md`; parallel roots are
+      sets, not a queue, and a join waits for every required edge.
 - [ ] Live fetch: real state changes and counters; timers after 1s.
 - [ ] No duplicate nodes; `↑ see above` for a repeat.
 - [ ] Failure freeze, repair card, downstream blocked.
 - [ ] Ledger fallback (`g`). No timeline in v1.
 
 Done when a prefetched fixture shows the correct tree, no state is invented,
-and sim 33 proves the counts.
+the ready frontier is correct for a diamond and two roots, and sim 33 proves
+the counts.
 
 ### T3. Actions
 
