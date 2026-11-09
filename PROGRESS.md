@@ -18,6 +18,11 @@ Visual tour: [`prototype/tui-walkthrough.html`](prototype/tui-walkthrough.html).
 The Markdown files remain the contract; the HTML shows the frames and the
 terminal limits together.
 
+Capture study: [`docs/NOM.md`](docs/NOM.md) compares a real `nh home switch` run
+with the current prefetch frame and orders the T2 adoption. The playable visual
+is [`prototype/nom-study.html`](prototype/nom-study.html); the still is
+[`prototype/shots/nom-study.png`](prototype/shots/nom-study.png).
+
 Reference: [`nix-output-monitor`](https://github.com/maralorn/nix-output-monitor).
 Its dependency graph, phase glyphs and summary counters are the model. This
 screen is not trying to beat that view. It puts the prefetch state on the same

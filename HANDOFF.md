@@ -30,6 +30,11 @@ covers where things stand and the first move. Do not re-plan.
   cached/stale/partial/missing/build-pending/built badges, counts, host and
   `Σ`. Sim 33 proves cached, stale, partial, missing and built, and no writes.
   The tree is still a flat install list.
+- The nom capture study is landed: [`docs/NOM.md`](docs/NOM.md) measures the
+  2026-11-09 `nh home switch` run and orders the remaining T2 work. The
+  playable comparison is [`prototype/nom-study.html`](prototype/nom-study.html);
+  the still is [`prototype/shots/nom-study.png`](prototype/shots/nom-study.png).
+  No TUI code changed in that pass.
 - The T1 read-only shell is implemented. The prefetch view is a flat install
   list; the dependency tree and live frontier are still **specified, not
   implemented**. `prototype/` holds the design sketches.
@@ -41,6 +46,9 @@ covers where things stand and the first move. Do not re-plan.
    reducer in `src/frontier.rs`, then add live fetch, the failure freeze and
    the ledger. Use `check::collect`, `progress::collect` and `fetch::plan`; do
    not add a second update collector. The ready set is a set, not a queue.
+   Use the seven-step order in `docs/NOM.md` (tree model, frontier wiring,
+   real progress bars, layout and viewport, ANSI-16 palette, live loop, final
+   receipt).
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The flat prefetch frame is

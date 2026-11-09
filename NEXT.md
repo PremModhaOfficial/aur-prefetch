@@ -330,6 +330,13 @@ T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
 writes. The tree is still a flat install list.
 
+The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
+120x40 `nh home switch` run and orders the remaining T2 work: tree model,
+frontier wiring, real progress bars, layout and viewport, ANSI-16 palette,
+live loop, final receipt. The playable comparison is
+[`prototype/nom-study.html`](prototype/nom-study.html). The study is evidence,
+not implementation; it does not tick any T2 box above.
+
 ### T3. Actions
 
 - [ ] Fetch tree with the gate checklist and streamed lines.

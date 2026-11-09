@@ -174,6 +174,15 @@ keyboard surface.
 Open [`progress-lab.html`](progress-lab.html). The lab, selection and hillclimb
 are a design exercise, not a running TUI.
 
+## Nom capture study
+
+[`nom-study.html`](nom-study.html) is the evidence page for
+[`../docs/NOM.md`](../docs/NOM.md). It plays 32 colorized frames from a real
+`nh home switch` run, puts the current prefetch golden frame beside them, and
+shows the measured cadence, the gap table and the T2 order. It is
+self-contained; state lives in memory. The still is
+[`shots/nom-study.png`](shots/nom-study.png).
+
 ## What the prototype says
 
 Build **Deck** as the shell: verdict, drift and next action on one screen.
