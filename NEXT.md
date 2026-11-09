@@ -313,8 +313,10 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 
 - [ ] Prefetch badges: cached, built, stale, partial, missing, unknown.
 - [ ] Ghost install branch, counters, `Σ`, host.
-- [ ] Ready/running/done frontier from `docs/ANIMATION.md`; parallel roots are
-      sets, not a queue, and a join waits for every required edge.
+- [x] Pure ready/running/done reducer with diamond and two-root tests
+      (`src/frontier.rs`).
+- [ ] Wire the tree to reducer observations; parallel roots are sets, not a
+      queue, and a join waits for every required edge.
 - [ ] Live fetch: real state changes and counters; timers after 1s.
 - [ ] No duplicate nodes; `↑ see above` for a repeat.
 - [ ] Failure freeze, repair card, downstream blocked.

@@ -12,8 +12,8 @@ disagrees with it, `NEXT.md` wins.
 
 Current position: all six commands are implemented and sim-covered. Phases 4-6
 (chaos, VM, packaging) remain release hardening. Phase 7 T0 (the report layer),
-the T1 read-only shell, and the DAG execution model are landed. The next ordered
-work is T2, the tree.
+the T1 read-only shell, the DAG execution model, and its pure frontier reducer
+are landed. The next ordered work is T2, wiring the tree to real state.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -102,9 +102,10 @@ All six subcommands are implemented and every one has sim coverage. `NEXT.md`
 is the authoritative order of work. The TUI is specified in `TUI.md` and
 `PROGRESS.md`; its execution model is `docs/ANIMATION.md`. Phase 7 T0 (the
 shared report layer), the T1 shell, and the model are landed. The shell is
-read-only; there is no dashboard.
+read-only; there is no dashboard. The pure reducer is in `src/frontier.rs`;
+the tree adapter is not wired yet.
 
 Next action: start T2, the tree. T1 is closed; sim 31 covers normal quit,
-Ctrl-C, forced panic, and Ctrl-Z. T2 implements the ready-frontier reducer from
-`docs/ANIMATION.md`. The tree reads `check::collect` and `fetch::plan`; it does
-not collect its own facts.
+Ctrl-C, forced panic, and Ctrl-Z. T2 wires the tree to the ready-frontier
+reducer from `docs/ANIMATION.md`. The tree reads `check::collect` and
+`fetch::plan`; it does not collect its own facts.

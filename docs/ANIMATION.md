@@ -1,7 +1,8 @@
 # ANIMATION.md: the DAG execution frontier
 
-Status: design note, not implemented. It adds no command, no write path, no
-network call, and no `src/` change. Read with [`TUI.md`](TUI.md),
+Status: design note. The pure frontier reducer is implemented in
+[`src/frontier.rs`](../src/frontier.rs); the tree integration is not. It adds no
+command, no write path, and no network call. Read with [`TUI.md`](TUI.md),
 [`PROGRESS.md`](PROGRESS.md) and [`NEXT.md`](NEXT.md), which wins on order.
 
 ## 1. The graph
@@ -50,8 +51,10 @@ An observation is `(seq, at, node, kind, evidence)`. `seq` is assigned by the
 reducer, monotonic, no gaps. `evidence` is the smallest proof: exit code, cache
 filename, `.part` size, `pacman.log` line, section timestamp.
 
-`delta` maps `GraphState` and one observation to `GraphState` plus at most one
-`Transition`.
+`delta` maps `GraphState` and one observation to `GraphState` plus a transition
+batch. The batch includes the observed node's change and any readiness or
+blocked changes it releases; every transition in the batch carries the same
+`seq`.
 
 | from | observation | to |
 |---|---|---|
@@ -109,7 +112,8 @@ never block it. Known required edges alone decide.
 
 The ready set is a frontier, not a list. Render order is stable and name-sorted,
 but it is not execution order. A table step is one coalesced frame, so two
-observations may land together.
+observations may land together. The reducer itself folds one observation at a
+time; the adapter may coalesce a frame's observations before the renderer draws.
 
 ### Diamond: base, left, right, join
 
@@ -168,7 +172,9 @@ The plan predicts. It never shows running, done, or failed. A `cached` badge is
 a skipped-satisfied node with cache evidence.
 
 The trace is `[(seq, at, node, kind, evidence)]`, append only, in memory, capped,
-never on disk in v1. Replay is the same fold stopped at `k`:
+never on disk in v1. Overflow drops the oldest entry and increments `dropped`;
+the view shows `events dropped: N`. A replay that needs a dropped entry refuses
+rather than guessing. Replay is the same fold stopped at `k`:
 
 ```text
 R = fold(reduce, GraphState::seed(plan), trace)
@@ -217,7 +223,10 @@ pub struct Observation { pub seq: u64, pub at: Instant, pub node: NodeId,
                          pub kind: Observed, pub evidence: Evidence }
 pub enum Observed { EdgeResolved, Started, Finished, Failed, Excluded, NoWork }
 
-pub fn reduce(state: &mut GraphState, obs: &Observation) -> Option<Transition>;
+pub fn reduce(state: &mut GraphState, obs: &Observation) -> Vec<Transition>;
+
+pub struct Transition { pub seq: u64, pub node: NodeId,
+                        pub from: NodeState, pub to: NodeState }
 
 pub struct GraphState { pub nodes: BTreeMap<NodeId, NodeState>, pub edges: Vec<Edge>,
                         pub ready: BTreeSet<NodeId>, pub running: BTreeSet<NodeId>,
@@ -306,7 +315,7 @@ sequenceDiagram
 
 ## 11. Invariants
 
-1. Every transition has an observation with `seq` and evidence.
+1. Every transition belongs to an observation batch with `seq` and evidence.
 2. The section 4 rule is the only way into `ready`.
 3. The seven states partition `V` at every `seq`.
 4. Terminal states are absorbing inside a run.

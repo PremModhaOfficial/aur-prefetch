@@ -22,6 +22,9 @@ covers where things stand and the first move. Do not re-plan.
 - The DAG execution model is landed in `docs/ANIMATION.md`: states, readiness,
   parallel fronts, replay, and the `.part` byte source. `TUI.md` and
   `PROGRESS.md` now point at it.
+- The pure reducer is landed in `src/frontier.rs`: readiness, blocking,
+  skipped-satisfied, freeze, replay, and a bounded trace. Diamond and two-root
+  unit tests pass. The tree is not wired to it yet.
 - The T1 read-only shell is implemented. The prefetch/install progress tree is
   still **specified, not implemented**: `TUI.md` (shell, keys, actions) and
   `PROGRESS.md` (progress screen). `prototype/` holds the design sketches.
@@ -31,8 +34,8 @@ covers where things stand and the first move. Do not re-plan.
 
 1. Start T2: prefetch badges, the ghost install branch, live fetch, no
    duplicate nodes, and the failure freeze. Use `check::collect` and
-   `fetch::plan`; do not add a second collector. Implement the ready-frontier
-   reducer from `docs/ANIMATION.md`; the ready set is a set, not a queue.
+   `fetch::plan`; do not add a second collector. Wire the pure reducer in
+   `src/frontier.rs` to the tree; the ready set is a set, not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. T1's frame is deliberately static;
