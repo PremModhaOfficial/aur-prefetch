@@ -55,14 +55,12 @@ v1 ships them.
 
 ```text
 ┌ aur-prefetch ───────────────────── Progress · 3 pending · prefetched 2 · built 0 ┐
-│ Dependency tree                                         static prefetch · ghost  │
+│ Dependency Graph:                        install 3 packages · static prefetch · ghost │
 ├──────────────────────────────────────────────────────────────────────────────────┤
-│ ▾ install 3 packages                                             ghost · press i │
-│   ├── bash 5.2.037-2                    ✓ cached 4m ago            1.2 MiB       │
-│   ├── linux 6.11.6.arch1-1              ✓ cached 4m ago            142 MiB       │
-│   └── yay-bin 12.4.1-1                  ○ missing · build pending                │
-│       ├── go 1.23.4                     ✓ installed                              │
-│       └── git 2.47.1                    ✓ installed                              │
+│  ┌─ ? go                              unknown                                  │
+│  ○ yay-bin 12.4.1-1                     ○ missing · build pending               │
+│  ✓ linux 6.11.6.arch1-1                 ✓ cached 4m ago                142 MiB  │
+│  ✓ bash 5.2.037-2                       ✓ cached 4m ago                  1.2 MiB│
 │                                                                                  │
 │ ▾ builds                                          0 running · 1 planned          │
 │   └── yay-bin 12.4.1-1                  ⏸ planned           waiting for download │
@@ -74,6 +72,13 @@ v1 ships them.
 │ space pause · enter focus · g tree/ledger · f failures · i install · ? help      │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+The sketch above is top-down for reading. The implemented T2a frame is the nom
+forest (see `docs/NOM.md` and `PROGRESS.md`): roots are pending packages with no
+pending dependent, printed bottom-up, so each root is the last row of its own
+subtree. There is no synthetic install node; the `install N packages` total is
+header context. Siblings use nom's `┌─`/`├─`/`│` branches with the ASCII
+`` `-- ``/`|--`/`|` fallback.
 
 | In v1 | v2 |
 |---|---|
@@ -1151,7 +1156,7 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 - [ ] Wire the tree to reducer observations; the ready set is a set, not a
       queue.
 - [ ] Live fetch: real state changes and counters; timers after 1s.
-- [ ] No duplicate nodes; `↑ see above` for a repeat.
+- [x] No duplicate nodes; one placement per package, no repeated subtree.
 - [ ] Failure freeze, repair card, downstream blocked.
 - [ ] Ledger fallback (`g`). No timeline in v1.
 
@@ -1160,7 +1165,14 @@ and sim 33 proves the counts.
 
 T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
-writes. The tree is still a flat install list.
+writes.
+
+T2a landed: `src/tui/tree.rs` builds the pure forest and `render.rs` prints it
+bottom-up with nom's branch grammar. One row per package, one root per pending
+package with no pending dependent, display-only `?` leaves for dependencies
+outside the pending set, deterministic siblings, and no duplicate subtree. The
+`install N packages` total is header context, not a row. An unrooted cycle is a
+deterministic error. Frontier wiring and live states remain.
 
 ### T3. Actions
 

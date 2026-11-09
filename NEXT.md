@@ -318,7 +318,7 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 - [ ] Wire the tree to reducer observations; parallel roots are sets, not a
       queue, and a join waits for every required edge.
 - [ ] Live fetch: real state changes and counters; timers after 1s.
-- [ ] No duplicate nodes; `↑ see above` for a repeat.
+- [x] No duplicate nodes; one placement per package, no repeated subtree.
 - [ ] Failure freeze, repair card, downstream blocked.
 - [ ] Ledger fallback (`g`). No timeline in v1.
 
@@ -328,7 +328,16 @@ the counts.
 
 T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
-writes. The tree is still a flat install list.
+writes.
+
+T2a landed: `src/tui/tree.rs` is the pure forest model and `render.rs` prints it
+bottom-up like nom. It has one row per package, one root per pending package
+with no pending dependent, display-only `?` leaves for dependencies outside the
+pending set, deterministic artifact-rank/name siblings, and cycle/self-edge
+protection. A second pending edge does not duplicate a subtree. The
+`install N packages` total is header context, not a tree row; an unrooted
+cycle is a deterministic error. Frontier wiring, live states, the failure
+freeze and the ledger remain open.
 
 The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,

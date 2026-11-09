@@ -11,10 +11,11 @@ use ratatui::{Frame, Terminal};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::report::{ArtifactState, PackageView, PrefetchReport, Snapshot, Update};
+use crate::report::{ArtifactState, PrefetchReport, Snapshot, Update};
 use crate::util::human_bytes;
 
 use super::sanitize::{cell_text, display_width};
+use super::tree::{Tree, TreeError, TreeRow};
 
 pub fn render_frame(
     snapshot: &Snapshot,
@@ -69,10 +70,15 @@ pub fn draw(frame: &mut Frame, snapshot: &Snapshot, ascii: bool, color: bool, he
         ])
         .split(area);
 
-    let header = header_lines(snapshot, chunks[0].width as usize, ascii);
+    let tree = snapshot
+        .prefetch
+        .data()
+        .map(|report| Tree::build(&report.packages));
+
+    let header = header_lines(snapshot, tree.as_ref(), chunks[0].width as usize, ascii);
     frame.render_widget(Paragraph::new(header), chunks[0]);
 
-    let body = body_lines(snapshot, ascii, chunks[1].width as usize);
+    let body = body_lines(snapshot, tree.as_ref(), ascii, chunks[1].width as usize);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     let footer = if ascii {
@@ -92,7 +98,12 @@ pub fn draw(frame: &mut Frame, snapshot: &Snapshot, ascii: bool, color: bool, he
     }
 }
 
-fn header_lines(snapshot: &Snapshot, width: usize, ascii: bool) -> Vec<Line<'static>> {
+fn header_lines(
+    snapshot: &Snapshot,
+    tree: Option<&Result<Tree, TreeError>>,
+    width: usize,
+    ascii: bool,
+) -> Vec<Line<'static>> {
     let separator = if ascii { "|" } else { "·" };
     let Some(report) = snapshot.prefetch.data() else {
         let pending = pending_count(snapshot);
@@ -113,13 +124,22 @@ fn header_lines(snapshot: &Snapshot, width: usize, ascii: bool) -> Vec<Line<'sta
         counts.ready(),
         counts.built
     );
-    let left = "Dependency tree";
-    let right = if ascii {
-        "static prefetch | ghost"
-    } else {
-        "static prefetch · ghost"
+    let roots = match tree {
+        Some(Ok(tree)) => tree.roots.len(),
+        _ => 0,
     };
-    let padding = width.saturating_sub(left.chars().count() + right.chars().count());
+    let packages = match tree {
+        Some(Ok(tree)) => tree.pending_count(),
+        _ => counts.total(),
+    };
+    // T2a has no viewport, so every root fits. The clipped form is kept for
+    // the viewport slice and tested directly.
+    let left = graph_title(roots, roots);
+    let right = format!(
+        "install {} {separator} static prefetch {separator} ghost",
+        package_count(packages)
+    );
+    let padding = width.saturating_sub(display_width(&left) + display_width(&right));
     let title = format!("{left}{}{right}", " ".repeat(padding));
 
     vec![
@@ -132,6 +152,16 @@ fn header_lines(snapshot: &Snapshot, width: usize, ascii: bool) -> Vec<Line<'sta
             Style::default().add_modifier(Modifier::DIM),
         ),
     ]
+}
+
+/// Nom's graph header. T2a shows every root; the clipped form is ready for the
+/// viewport slice.
+fn graph_title(shown: usize, total: usize) -> String {
+    if shown >= total {
+        "Dependency Graph:".to_string()
+    } else {
+        format!("Dependency Graph showing {shown} of {total} roots:")
+    }
 }
 
 fn pending_count(snapshot: &Snapshot) -> usize {
@@ -153,7 +183,12 @@ fn updates(snapshot: &Snapshot) -> Vec<&Update> {
     all
 }
 
-fn body_lines(snapshot: &Snapshot, ascii: bool, width: usize) -> Vec<Line<'static>> {
+fn body_lines(
+    snapshot: &Snapshot,
+    tree: Option<&Result<Tree, TreeError>>,
+    ascii: bool,
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     if let Some(error) = &snapshot.fatal {
@@ -174,7 +209,14 @@ fn body_lines(snapshot: &Snapshot, ascii: bool, width: usize) -> Vec<Line<'stati
     }
 
     if let Some(report) = snapshot.prefetch.data() {
-        lines.extend(prefetch_lines(report, snapshot.prefetch.at(), ascii, width));
+        let tree = tree.expect("the prefetch tree is built with the report");
+        lines.extend(prefetch_lines(
+            report,
+            tree,
+            snapshot.prefetch.at(),
+            ascii,
+            width,
+        ));
         return lines;
     }
 
@@ -208,6 +250,7 @@ fn body_lines(snapshot: &Snapshot, ascii: bool, width: usize) -> Vec<Line<'stati
 
 fn prefetch_lines(
     report: &PrefetchReport,
+    tree: &Result<Tree, TreeError>,
     at: Option<SystemTime>,
     ascii: bool,
     width: usize,
@@ -220,44 +263,19 @@ fn prefetch_lines(
     if report.packages.is_empty() {
         lines.push(Line::from("system current"));
     } else {
-        let root = if ascii {
-            format!("v install {}", package_count(total))
-        } else {
-            format!("▾ install {}", package_count(total))
-        };
-        let ghost = if ascii {
-            "ghost | read-only"
-        } else {
-            "ghost · read-only"
-        };
-        let padding = width.saturating_sub(root.chars().count() + ghost.chars().count());
-        lines.push(Line::from(cell_text(
-            &format!("{root}{}{ghost}", " ".repeat(padding)),
-            width,
-            ascii,
-        )));
-
-        let mut packages: Vec<&PackageView> = report.packages.iter().collect();
-        packages.sort_by(|left, right| {
-            left.artifact
-                .rank()
-                .cmp(&right.artifact.rank())
-                .then_with(|| left.name.cmp(&right.name))
-        });
-        let last = packages.len().saturating_sub(1);
-        for (index, package) in packages.into_iter().enumerate() {
-            let prefix = if ascii {
-                if index == last { "`-- " } else { "|-- " }
-            } else if index == last {
-                "└── "
-            } else {
-                "├── "
-            };
-            lines.push(Line::from(cell_text(
-                &package_row(package, prefix, now, ascii, width),
+        match tree {
+            Ok(tree) => {
+                for row in tree.display_rows() {
+                    let prefix = branch_prefix(tree, row, ascii);
+                    let text = package_row(row, &prefix, now, ascii, width);
+                    lines.push(Line::from(cell_text(&text, width, ascii)));
+                }
+            }
+            Err(error) => lines.push(Line::from(cell_text(
+                &format!("error: {error}"),
                 width,
                 ascii,
-            )));
+            ))),
         }
     }
 
@@ -318,6 +336,57 @@ fn prefetch_lines(
     lines
 }
 
+/// Nom's bottom-up branch grammar. The last child is the top row and gets the
+/// `┌─` corner; earlier children get `├─`; an ancestor that is not its parent's
+/// last child keeps a `│` lane. ASCII uses the existing `` `-- `` fallback for
+/// the last child and `|--` for the rest. A root has no branch prefix.
+fn branch_prefix(tree: &Tree, row: &TreeRow, ascii: bool) -> String {
+    if row.depth == 0 {
+        return String::new();
+    }
+
+    let mut prefix = String::new();
+    let mut ancestors = Vec::new();
+    let mut current = row.parent;
+    while let Some(id) = current {
+        let ancestor = &tree.rows[id];
+        if ancestor.depth == 0 {
+            break;
+        }
+        ancestors.push(id);
+        current = ancestor.parent;
+    }
+    ancestors.reverse();
+    for id in ancestors {
+        let last = tree.rows[id]
+            .parent
+            .is_some_and(|parent| tree.rows[parent].children.last() == Some(&id));
+        prefix.push_str(if last {
+            "   "
+        } else if ascii {
+            "|  "
+        } else {
+            "│  "
+        });
+    }
+
+    let Some(parent) = row.parent else {
+        return prefix;
+    };
+    let siblings = &tree.rows[parent].children;
+    let position = siblings.iter().position(|id| *id == row.id).unwrap_or(0);
+    let last = position + 1 == siblings.len();
+    let connector = if ascii {
+        if last { "`-- " } else { "|-- " }
+    } else if last {
+        "┌─ "
+    } else {
+        "├─ "
+    };
+    prefix.push_str(connector);
+    prefix
+}
+
 fn package_count(count: usize) -> String {
     if count == 1 {
         "1 package".to_string()
@@ -326,17 +395,12 @@ fn package_count(count: usize) -> String {
     }
 }
 
-fn package_row(
-    package: &PackageView,
-    prefix: &str,
-    now: SystemTime,
-    ascii: bool,
-    width: usize,
-) -> String {
+fn package_row(row: &TreeRow, prefix: &str, now: SystemTime, ascii: bool, width: usize) -> String {
     let separator = if ascii { "|" } else { "·" };
-    let (glyph, label) = artifact_glyph(package.artifact, ascii);
+    let artifact = row.artifact.unwrap_or(ArtifactState::Unknown);
+    let (glyph, label) = artifact_glyph(artifact, ascii);
     let mut suffix = label.to_string();
-    if let Some(detail) = package.detail.as_deref() {
+    if let Some(detail) = row.detail.as_deref() {
         if !detail.is_empty() && detail != label {
             suffix.push(' ');
             suffix.push_str(separator);
@@ -344,31 +408,23 @@ fn package_row(
             suffix.push_str(detail);
         }
     }
-    if matches!(
-        package.artifact,
-        ArtifactState::Cached | ArtifactState::Built
-    ) {
-        if let Some(age) = age_label(package.artifact_at, now) {
+    if matches!(artifact, ArtifactState::Cached | ArtifactState::Built) {
+        if let Some(age) = age_label(row.artifact_at, now) {
             suffix.push(' ');
             suffix.push_str(separator);
             suffix.push(' ');
             suffix.push_str(&age);
         }
     }
-    let size = package.download_bytes.map_or_else(String::new, human_bytes);
-    let version = if package.available.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", package.available)
-    };
-    let name = format!("{}{version}", package.name);
-    let name_width = (width / 3).clamp(12, 36);
+    let size = row.size.map_or_else(String::new, human_bytes);
+    let lead = 2 + display_width(prefix) + display_width(glyph) + 1;
+    let name_width = ((width.saturating_sub(lead)) / 3).clamp(12, 36);
     let size_width = if width >= 60 { 8 } else { 0 };
-    let state_width =
-        width.saturating_sub(8 + name_width + 1 + if size_width > 0 { size_width + 1 } else { 0 });
+    let state_width = width
+        .saturating_sub(lead + name_width + 1 + if size_width > 0 { size_width + 1 } else { 0 });
     let base = format!(
         "  {prefix}{glyph} {} {}",
-        fit(&name, name_width, ascii),
+        fit(&row.label, name_width, ascii),
         fit(&suffix, state_width, ascii)
     );
     if size_width > 0 {
@@ -500,6 +556,7 @@ mod tests {
         artifact: ArtifactState,
         detail: &str,
         artifact_at: SystemTime,
+        depends: &[&str],
     ) -> PackageView {
         PackageView {
             name: name.to_string(),
@@ -510,42 +567,12 @@ mod tests {
             artifact,
             artifact_at: Some(artifact_at),
             detail: Some(detail.to_string()),
-            depends: Vec::new(),
+            depends: depends.iter().map(|dep| (*dep).to_string()).collect(),
         }
     }
 
-    fn prefetch_snapshot() -> Snapshot {
+    fn prefetch_snapshot_with(packages: Vec<PackageView>) -> Snapshot {
         let now = at();
-        let packages = vec![
-            prefetch_package(
-                "bash",
-                "5.2.037-2",
-                ArtifactState::Cached,
-                "cached",
-                now - Duration::from_secs(240),
-            ),
-            prefetch_package(
-                "linux",
-                "6.17.2.arch1-1",
-                ArtifactState::Stale,
-                "older cache file 6.16.1-1",
-                now - Duration::from_secs(2 * 86_400),
-            ),
-            prefetch_package(
-                "yay-bin",
-                "12.4.1-1",
-                ArtifactState::BuildPending,
-                "build pending",
-                now,
-            ),
-            prefetch_package(
-                "simapp",
-                "2.0.0-1",
-                ArtifactState::Missing,
-                "not in cache",
-                now,
-            ),
-        ];
         let report =
             PrefetchReport::new(packages, Some("mirror.example.org".to_string()), Vec::new());
         Snapshot {
@@ -553,6 +580,44 @@ mod tests {
             actionable: 1,
             ..Snapshot::default()
         }
+    }
+
+    fn prefetch_snapshot() -> Snapshot {
+        let now = at();
+        prefetch_snapshot_with(vec![
+            prefetch_package(
+                "bash",
+                "5.2.037-2",
+                ArtifactState::Cached,
+                "cached",
+                now - Duration::from_secs(240),
+                &["glibc"],
+            ),
+            prefetch_package(
+                "linux",
+                "6.17.2.arch1-1",
+                ArtifactState::Stale,
+                "older cache file 6.16.1-1",
+                now - Duration::from_secs(2 * 86_400),
+                &["bash", "yay-bin"],
+            ),
+            prefetch_package(
+                "yay-bin",
+                "12.4.1-1",
+                ArtifactState::BuildPending,
+                "build pending",
+                now,
+                &[],
+            ),
+            prefetch_package(
+                "simapp",
+                "2.0.0-1",
+                ArtifactState::Missing,
+                "not in cache",
+                now,
+                &[],
+            ),
+        ])
     }
 
     #[test]
@@ -594,6 +659,156 @@ mod tests {
         assert!(
             frame.is_ascii(),
             "ascii prefetch frame contained a non-ASCII character"
+        );
+    }
+
+    #[test]
+    fn the_prefetch_forest_is_bottom_up_with_nom_branches() {
+        let frame = render_frame(&prefetch_snapshot(), 120, 40, false, false, false);
+        let lines: Vec<&str> = frame.lines().collect();
+
+        assert!(lines[1].contains("Dependency Graph:"));
+        assert!(lines[1].contains("install 4 packages"));
+        assert!(
+            lines
+                .iter()
+                .skip(2)
+                .all(|line| !line.trim_start().starts_with("install")),
+            "no tree row may be an install node\n{frame}"
+        );
+        assert!(
+            lines[2].contains("simapp"),
+            "the first tree row is a real root\n{frame}"
+        );
+
+        for (child, parent) in [("yay-bin", "linux"), ("glibc", "bash"), ("bash", "linux")] {
+            let child_line = lines
+                .iter()
+                .position(|line| line.contains(child))
+                .unwrap_or_else(|| panic!("{child} missing in\n{frame}"));
+            let parent_line = lines
+                .iter()
+                .position(|line| line.contains(parent))
+                .unwrap_or_else(|| panic!("{parent} missing in\n{frame}"));
+            assert!(
+                child_line < parent_line,
+                "{child} must render above {parent} in\n{frame}"
+            );
+        }
+        assert!(
+            frame.contains("┌─"),
+            "a last child uses the corner\n{frame}"
+        );
+        assert!(
+            frame.contains("├─"),
+            "an earlier child uses a branch\n{frame}"
+        );
+        assert!(frame.contains("│"), "a lane continues\n{frame}");
+        assert_eq!(frame.matches("? glibc").count(), 1);
+        assert_eq!(frame.matches("simapp").count(), 1);
+        assert!(frame.contains("unknown"));
+    }
+
+    #[test]
+    fn the_prefetch_forest_ascii_uses_ascii_branches() {
+        let frame = render_frame(&prefetch_snapshot(), 80, 24, true, false, false);
+        assert!(frame.is_ascii(), "ascii frame had non-ASCII bytes\n{frame}");
+        assert!(
+            frame.contains("`--") || frame.contains("|--"),
+            "no ascii branch in\n{frame}"
+        );
+        assert!(frame.contains("install 4 packages"));
+        assert!(frame.contains("Dependency Graph:"));
+    }
+
+    #[test]
+    fn the_prefetch_forest_truncates_safely_at_40_columns() {
+        let frame = render_frame(&prefetch_snapshot(), 40, 24, false, false, false);
+        for line in frame.lines() {
+            assert!(
+                line.chars().count() <= 40,
+                "row wider than 40 cells: {line:?}"
+            );
+        }
+        assert!(frame.contains("Dependency Graph:"));
+    }
+
+    #[test]
+    fn two_independent_roots_render_as_two_top_level_rows() {
+        let now = at();
+        let snapshot = prefetch_snapshot_with(vec![
+            prefetch_package(
+                "root-a",
+                "2.0.0-1",
+                ArtifactState::Cached,
+                "cached",
+                now,
+                &[],
+            ),
+            prefetch_package(
+                "root-b",
+                "2.0.0-1",
+                ArtifactState::Missing,
+                "not in cache",
+                now,
+                &[],
+            ),
+        ]);
+        let frame = render_frame(&snapshot, 80, 24, false, false, false);
+        let lines: Vec<&str> = frame.lines().collect();
+
+        assert!(lines[1].contains("Dependency Graph:"));
+        assert!(lines[1].contains("install 2 packages"));
+        assert!(
+            lines[2].contains("root-b"),
+            "last root is the top row\n{frame}"
+        );
+        assert!(
+            lines[3].contains("root-a"),
+            "first root is the bottom row\n{frame}"
+        );
+        assert!(
+            lines.iter().skip(2).all(|line| !line.contains("install")),
+            "the forest contains no install row\n{frame}"
+        );
+    }
+
+    #[test]
+    fn the_graph_header_uses_nom_forms() {
+        assert_eq!(super::graph_title(3, 3), "Dependency Graph:");
+        assert_eq!(
+            super::graph_title(2, 5),
+            "Dependency Graph showing 2 of 5 roots:"
+        );
+    }
+
+    #[test]
+    fn an_unrooted_cycle_renders_a_deterministic_error() {
+        let now = at();
+        let snapshot = prefetch_snapshot_with(vec![
+            prefetch_package(
+                "a",
+                "2.0.0-1",
+                ArtifactState::Missing,
+                "not in cache",
+                now,
+                &["b"],
+            ),
+            prefetch_package(
+                "b",
+                "2.0.0-1",
+                ArtifactState::Missing,
+                "not in cache",
+                now,
+                &["a"],
+            ),
+        ]);
+        let frame = render_frame(&snapshot, 80, 24, false, false, false);
+
+        assert!(frame.contains("error: dependency cycle has no root: a, b"));
+        assert!(
+            !frame.contains("┌─"),
+            "no tree is drawn for a cycle\n{frame}"
         );
     }
 

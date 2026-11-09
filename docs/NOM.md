@@ -319,6 +319,13 @@ Acceptance: a diamond fixture produces one row per package, one node per
 installed-only dependency, and no duplicate row. A package with an unknown
 dependency stays display-only and never gates.
 
+T2a landed: `src/tui/tree.rs` is the pure forest and `render.rs` prints it
+bottom-up. Roots are pending packages with no pending dependent; there is no
+synthetic install node, and the `install N packages` total is header context.
+Unknown dependencies are deduped display-only `?` leaves, a package reachable
+from more than one parent keeps one placement, and an unrooted cycle is a
+deterministic error. Step 2 (frontier wiring) is still open.
+
 ### 2. Frontier wiring
 
 Feed `GraphState` in `src/frontier.rs` from the tree adapter. Seed cached and

@@ -6,6 +6,7 @@
 pub mod guard;
 pub mod render;
 pub mod sanitize;
+pub mod tree;
 
 use std::io::{self, IsTerminal, stdout};
 use std::sync::Arc;

@@ -1,7 +1,7 @@
 # PROGRESS.md — prefetch-aware dependency tree
 
 Status: **spec + implementation plan. The shared report layer, the T1 shell and
-a flat prefetch view exist; the dependency tree and live frontier do not.**
+the static bottom-up dependency forest (T2a) exist; the live frontier does not.**
 Written 2026-11-08. Revised after review: the live tree is borrowed from
 `nix-output-monitor` (nom), not competed with.
 
@@ -139,7 +139,7 @@ What the tree is in each phase:
 
 | Phase | What is live | What the tree shows |
 |---|---|---|
-| **Prefetch (past)** | Nothing | Static cache/build badges, timestamps, the ghost install branch |
+| **Prefetch (past)** | Nothing | Static cache/build badges, timestamps, the `install N packages` header context |
 | **Fetch (captured)** | The `pacman` download stream | Live download nodes and counters |
 | **Install gate** | Nothing | The plan, gate by gate, and the exact argv |
 | **Install (attached)** | `yay` owns the terminal | The TUI is suspended; on return the tree re-collects the result |
@@ -350,14 +350,12 @@ Default state: prefetch complete, install future.
 
 ```text
 ┌ aur-prefetch ───────────────────── Progress · 3 pending · prefetched 2 · built 0 ┐
-│ Dependency tree                                         static prefetch · ghost  │
+│ Dependency Graph:                        install 3 packages · static prefetch · ghost │
 ├──────────────────────────────────────────────────────────────────────────────────┤
-│ ▾ install 3 packages                                             ghost · press i │
-│   ├── bash 5.2.037-2                    ✓ cached 4m ago            1.2 MiB       │
-│   ├── linux 6.11.6.arch1-1              ✓ cached 4m ago            142 MiB       │
-│   └── yay-bin 12.4.1-1                  ○ missing · build pending                │
-│       ├── go 1.23.4                     ✓ installed                              │
-│       └── git 2.47.1                    ✓ installed                              │
+│  ┌─ ? go                              unknown                                  │
+│  ○ yay-bin 12.4.1-1                     ○ missing · build pending               │
+│  ✓ linux 6.11.6.arch1-1                 ✓ cached 4m ago                142 MiB  │
+│  ✓ bash 5.2.037-2                       ✓ cached 4m ago                  1.2 MiB│
 │                                                                                  │
 │ ▾ builds                                          0 running · 1 planned          │
 │   └── yay-bin 12.4.1-1                  ⏸ planned           waiting for download │
@@ -370,14 +368,22 @@ Default state: prefetch complete, install future.
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+The sketch above is top-down for reading. The implemented T2a frame is the nom
+forest: roots are pending packages with no pending dependent, printed
+bottom-up, so each root is the last row of its own subtree. There is no
+synthetic install node. The last child gets `┌─`, earlier children get `├─`,
+and non-last ancestors keep a `│` lane. The ASCII frame uses `` `-- `` / `|-- ` /
+`|`. The `install N packages` total is header context. See `docs/NOM.md` for
+the measured grammar.
+
 - Every row is one package. Children are direct dependencies.
-- A package appears once, at its lowest dependency. A second reference says
-  `↑ see above`, not a duplicate subtree.
+- A package appears once, at one deterministic parent. A second edge does not
+  draw a duplicate subtree; later references are not expanded.
 - The tree shows the most relevant third: running and failed nodes always;
   then the active branch; then collapsed groups (`▸ 12 more cached`). `enter`
   expands.
 - Prefetch badges are static. `✓ cached 4m ago` is evidence, not motion.
-- The install branch is a ghost. No ETA and no invented duration.
+- The `install N packages` total is header context, not a fake derivation node.
 - The block under `builds` is the AUR build plan, not a live build. It becomes
   live only during a captured fetch/build, never during the attached install.
 - The `Σ` line is the only summary; no duplicated totals elsewhere.
@@ -386,13 +392,12 @@ Default state: prefetch complete, install future.
 
 ```text
 ┌ aur-prefetch ─────────────────────── Fetch · 3 packages · live · 00:42 ────┐
-│ Dependency tree                                            captured · live │
+│ Dependency Graph:                                          captured · live │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ ▾ 3 packages                                         1 running · 1 planned │
-│   ├── bash 5.2.037-2                ✔ done             1.2 MiB · 2s        │
-│   ├── linux 6.11.6.arch1-1          ⏵ downloading      87/142 MiB · 21s    │
-│   └── yay-bin 12.4.1-1              ⏸ waiting          build after linux   │
-│       └── build deps: go, git                          ✓ installed         │
+│  ✔ bash 5.2.037-2                   ✔ done             1.2 MiB · 2s        │
+│  ⏵ linux 6.11.6.arch1-1             ⏵ downloading      87/142 MiB · 21s    │
+│  ⏸ yay-bin 12.4.1-1                 ⏸ waiting          build after linux   │
+│     ? go, git                                          unknown             │
 │                                                                            │
 │ Builds   ⏵ 0   ✔ 0   ⏸ 1   ⚠ 0    Downloads  ↓ 1   ✔ 1   ⏸ 1               │
 │ Host     mirror.example.org                                                │
@@ -402,6 +407,8 @@ Default state: prefetch complete, install future.
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
+- The T2a forest rule applies here too: roots are pending packages with no
+  pending dependent, and the `N packages` total is header context, not a row.
 - This is the nom shape: tree, phase glyphs, counters, host, `Σ`.
 - `pacman` suppresses progress when stdout is not a TTY. Live bytes come from
   `.part` growth, polled with `stat`; no progress bar is parsed. A percentage
@@ -529,7 +536,8 @@ The CLI text stays byte-identical; the TUI is a second renderer.
 - [ ] Aurto: `pacman -Sl`/`-Si`; `.SRCINFO`; `.PKGINFO` for built packages.
 - [ ] `EdgeView` with source/version/state; no network.
 - [x] `PrefetchReport`, `Counts`, `Section<PrefetchReport>`.
-- [ ] `TreeRow` construction from packages and edges; pure and unit-tested.
+- [x] `TreeRow` construction from packages and derived edges; pure and
+      unit-tested.
 - [x] Add system cache paths to `Config`.
 - [x] Fixtures: `-Qui` parser and cache filename tests; sim 33 uses real cache
       files.
@@ -540,22 +548,25 @@ duplicates a node, the CLI output is unchanged, and no new command runs by
 default.
 
 Landed: `src/progress.rs` fills `report::PrefetchReport` from the `check`
-snapshot and a read-only cache/AUR scan. The tree is flat; dependency edges are
-not wired.
+snapshot and a read-only cache/AUR scan. The T2a forest model reads
+`PackageView.depends`; the live frontier is not wired.
 
 ### P1. Tree at 80×24
 
 - [x] State glyph + name-version + state + time; compact columns.
-- [x] Prefetch badges, ghost install branch, counters line.
-- [ ] No duplicate nodes; `↑ see above` for repeats.
+- [x] Prefetch badges, `install N packages` header context, counters line.
+- [x] No duplicate nodes; one placement per package, no repeated subtree.
 - [ ] Ledger fallback via `g`.
 - [x] Golden frames at 80×24 and 120×40.
 
 Done when: a prefetched fixture with cached/stale/missing/built/build-pending
 packages renders the correct tree and never invents a state.
 
-The current frame is a flat install list, one row per pending package. It
-does not yet draw dependency edges.
+The current frame is the T2a bottom-up forest: one row per package, one root
+per pending package with no pending dependent, display-only `?` leaves for
+dependencies outside the pending set, and no duplicate subtree. The
+`install N packages` total is header context, not a row. Dependency edges come
+from `PackageView.depends`; no second collector is added.
 
 ### P2. Full tree at 120×40
 

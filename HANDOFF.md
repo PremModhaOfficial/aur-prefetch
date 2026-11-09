@@ -29,30 +29,37 @@ covers where things stand and the first move. Do not re-plan.
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
   `Σ`. Sim 33 proves cached, stale, partial, missing and built, and no writes.
-  The tree is still a flat install list.
+- T2a is landed: `src/tui/tree.rs` is a pure forest model over
+  `PackageView.depends`, and the prefetch frame is the bottom-up dependency
+  forest. One row per package, one root per pending package with no pending
+  dependent, display-only `?` leaves for dependencies outside the pending set,
+  deterministic siblings, cycle/self-edge protection, and no duplicate
+  subtree. The `install N packages` total is header context, not a row. The
+  frontier is not wired yet.
 - The nom capture study is landed: [`docs/NOM.md`](docs/NOM.md) measures the
   2026-11-09 `nh home switch` run and orders the remaining T2 work. The
   playable comparison is [`prototype/nom-study.html`](prototype/nom-study.html);
   the still is [`prototype/shots/nom-study.png`](prototype/shots/nom-study.png).
   No TUI code changed in that pass.
-- The T1 read-only shell is implemented. The prefetch view is a flat install
-  list; the dependency tree and live frontier are still **specified, not
+- The T1 read-only shell is implemented. The prefetch view is the T2a
+  bottom-up dependency tree; the live frontier is still **specified, not
   implemented**. `prototype/` holds the design sketches.
-- `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is next.
+- `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is in progress
+  with T2a landed.
 
 ## Do this first: T2
 
-1. Finish T2: build dependency edges and the no-duplicate tree, wire the pure
-   reducer in `src/frontier.rs`, then add live fetch, the failure freeze and
-   the ledger. Use `check::collect`, `progress::collect` and `fetch::plan`; do
-   not add a second update collector. The ready set is a set, not a queue.
-   Use the seven-step order in `docs/NOM.md` (tree model, frontier wiring,
-   real progress bars, layout and viewport, ANSI-16 palette, live loop, final
-   receipt).
+1. Finish T2: the pure tree model and the static bottom-up render are landed
+   (T2a). Wire the tree to the pure reducer in `src/frontier.rs`, then add live
+   fetch, the failure freeze and the ledger. Use `check::collect`,
+   `progress::collect` and `fetch::plan`; do not add a second update collector.
+   The ready set is a set, not a queue. Use the seven-step order in
+   `docs/NOM.md` (tree model, frontier wiring, real progress bars, layout and
+   viewport, ANSI-16 palette, live loop, final receipt).
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
-collectors; that is how the two paths drift. The flat prefetch frame is
-read-only; tree edges and the frontier are next.
+collectors; that is how the two paths drift. The prefetch tree is read-only;
+frontier wiring and live states are next.
 
 ## Gates
 

@@ -17,7 +17,7 @@ status=$?
 
 assert_eq "$status" "1" "render-once exits 1 for a pending snapshot"
 assert_contains "$(cat "$frame")" "simapp" "the frame names the pending package"
-assert_contains "$(cat "$frame")" "install" "the frame has an install group"
+assert_contains "$(cat "$frame")" "install" "the frame has install context"
 assert_eq "$(usr_state)" "$before_usr" "tui left /usr unchanged"
 assert_eq "$(pkg_state)" "$before_pkgs" "tui installed nothing"
 assert_eq "$(cache_files)" "$before_cache" "tui left the cache unchanged"

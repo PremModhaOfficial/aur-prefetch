@@ -13,8 +13,8 @@ disagrees with it, `NEXT.md` wins.
 Current position: all six commands are implemented and sim-covered. Phases 4-6
 (chaos, VM, packaging) remain release hardening. Phase 7 T0 (the report layer),
 the T1 read-only shell, the DAG execution model, and its pure frontier reducer
-are landed. T2's prefetch badges and real cache scan are landed; the dependency
-edges and frontier wiring are next.
+are landed. T2's prefetch badges, real cache scan, and pure bottom-up forest
+view (T2a) are landed; frontier wiring and live states are next.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -104,10 +104,14 @@ is the authoritative order of work. The TUI is specified in `TUI.md` and
 `PROGRESS.md`; its execution model is `docs/ANIMATION.md`. Phase 7 T0 (the
 shared report layer), the T1 shell, and the model are landed. The shell is
 read-only; there is no dashboard. The pure reducer is in `src/frontier.rs`;
-the tree adapter is not wired yet. The prefetch view is a flat install list
-with real cached/stale/partial/missing/built badges; sim 33 proves it.
+the tree adapter is not wired yet. The prefetch view is the T2a bottom-up
+dependency forest: one row per package, one root per pending package with no
+pending dependent, display-only `?` leaves for dependencies outside the
+pending set, and the real cached/stale/partial/missing/built badges. The
+`install N packages` total is header context, not a tree row. Sim 33 proves the
+badges and that the tree writes nothing.
 
-Next action: finish T2. Build the dependency edges and the no-duplicate tree,
-then wire it to the ready-frontier reducer from `docs/ANIMATION.md`. The tree
-reads `check::collect`, `progress::collect` and `fetch::plan`; it does not
-collect its own facts.
+Next action: finish T2. The tree model and static render are landed; wire the
+tree to the ready-frontier reducer from `docs/ANIMATION.md`, then add live
+states. The tree reads `check::collect`, `progress::collect` and `fetch::plan`;
+it does not collect its own facts.
