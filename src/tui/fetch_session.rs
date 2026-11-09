@@ -140,7 +140,7 @@ impl FetchSession {
             Err(error) => return Err(StartFailure { error, gates }),
         };
 
-        let (sender, receiver) = mpsc::sync_channel(LOG_CHANNEL + 1);
+        let (sender, receiver) = mpsc::sync_channel(LOG_CHANNEL);
         let stream_argv = argv.clone();
         thread::spawn(move || {
             let args: Vec<&str> = stream_argv.iter().map(String::as_str).collect();
@@ -158,9 +158,10 @@ impl FetchSession {
                     stderr: error.to_string(),
                 },
             };
-            // `LOG_CHANNEL + 1` leaves one slot that lines can never take, so
-            // the exit always lands even when the log queue is full.
-            let _ = sender.try_send(FetchEvent::Exit(output));
+            // The child has exited, so no more lines can compete for a slot.
+            // Block until the tick drains one: the UI thread keeps ticking
+            // while the session runs, so this cannot deadlock.
+            let _ = sender.send(FetchEvent::Exit(output));
         });
 
         let status = format!("fetch: running {}", argv.join(" "));
@@ -440,7 +441,7 @@ mod tests {
     use std::sync::{Arc, Condvar, Mutex};
     use std::time::{Duration, UNIX_EPOCH};
 
-    use super::{FetchSession, LOG_LINE_CHARS, Phase};
+    use super::{FetchSession, LOG_LINE_CHARS, LOG_LINES, Phase};
     use crate::config::Config;
     use crate::error::Error;
     use crate::frontier::NodeState;
@@ -724,6 +725,33 @@ mod tests {
             .map(|line| line.line.as_str())
             .collect();
         assert_eq!(lines, ["first line", "second line", "stderr line"]);
+    }
+
+    #[test]
+    fn a_flood_of_lines_cannot_starve_the_real_exit() {
+        let fixture = Fixture::new();
+        let fake = Arc::new(FakeRunner::new());
+        fixture.queue_gates(&fake);
+        let lines: Vec<String> = (0..5_000).map(|index| format!("line {index}")).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        fake.push_stream(0, &refs, &[]);
+        let runner = BlockingRunner::new(Arc::clone(&fake));
+
+        let mut session =
+            FetchSession::start(&fixture.config, runner.clone(), fixture.tree(), at(1))
+                .expect("session starts");
+        runner.release();
+        assert!(wait_until(|| {
+            session.tick(at(2), false);
+            !session.running()
+        }));
+
+        assert!(
+            matches!(session.phase(), Phase::Finished { unproven: 0 }),
+            "the real exit survives a full log queue: {:?}",
+            session.phase()
+        );
+        assert_eq!(session.lines().len(), LOG_LINES);
     }
 
     #[test]
