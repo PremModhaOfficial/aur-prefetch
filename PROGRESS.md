@@ -609,7 +609,9 @@ same checks the CLI runs, a session-only news attestation and the exact command;
 sim 32 proves it cancels without installing. T3c arms `enter` after attestation
 and runs the same CLI path attached; sim 36 proves the upgrade and the terminal
 restore. T3d collects the real exit, kernel, `.pacnew` count and reboot advice
-into the read-only post-install receipt.
+into the read-only post-install receipt. The T4 visual pass adopts nom's heavy
+frame (`┏━`, `┃`, `┣━━━`, `┗━ ∑`) with an ASCII equivalent and regenerated
+goldens.
 
 Done when: sim proves cached nodes never animate, live fetch nodes do, failure
 freezes instead of retrying, and the attached install still shows the raw

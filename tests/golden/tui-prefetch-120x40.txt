@@ -1,14 +1,14 @@
 aur-prefetch · Progress · 4 pending · 1 prefetched · 0 built
-Dependency Graph:                                                           install 4 packages · static prefetch · ghost
-  ○ simapp 2.0.0-1                       missing · not in cache                                                  1.1 MiB
-  ┌─ ⏸ yay-bin 12.4.1-1                     build-pending · build pending                                        1.1 MiB
-  │  ┌─ ? glibc                                unknown
-  ├─ ✓ bash 5.2.037-2                       cached · 4m ago                                                      1.1 MiB
-  ▲ linux 6.17.2.arch1-1                 stale · older cache file 6.16.1-1                                       1.1 MiB
-ready 1 = 1 cached + 0 built · stale 1 · partial 0
-missing 1 · build-pending 1 · failed 0 · unknown 0
-Host     mirror.example.org
-Σ        4 packages · 4.6 MiB · 1 ready · 0 failed
+┏━ Dependency Graph:                                                        install 4 packages · static prefetch · ghost
+┃ ○ simapp 2.0.0-1                       missing · not in cache                                                  1.1 MiB
+┃ ┌─ ⏸ yay-bin 12.4.1-1                     build-pending · build pending                                        1.1 MiB
+┃    ┌─ ? glibc                                unknown
+┃ ├─ ✓ bash 5.2.037-2                       cached · 4m ago                                                      1.1 MiB
+┃ ▲ linux 6.17.2.arch1-1                 stale · older cache file 6.16.1-1                                       1.1 MiB
+┣━━━ Ready 1 = 1 cached + 0 built · stale 1 · partial 0
+┃    missing 1 · build-pending 1 · failed 0 · unknown 0
+┃    Host      mirror.example.org
+┗━ Σ 4 packages · 4.6 MiB · 1 ready · 0 failed
 
 
 

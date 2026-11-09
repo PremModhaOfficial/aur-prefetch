@@ -17,8 +17,8 @@ assert_eq "$status" "1" "render-once exits 1 for a pending package"
 assert_contains "$(cat "$frame")" "simapp" "the frame names simapp"
 assert_contains "$(cat "$frame")" "missing" "an empty cache is missing"
 assert_contains "$(cat "$frame")" "install 1 package" "the install context is singular"
-assert_contains "$(cat "$frame")" "Host     local" "the file:// repo host is local"
-assert_contains "$(cat "$frame")" "ready 0 = 0 cached + 0 built" "missing is not ready"
+assert_contains "$(cat "$frame")" "Host      local" "the file:// repo host is local"
+assert_contains "$(cat "$frame")" "Ready 0 = 0 cached + 0 built" "missing is not ready"
 assert_eq "$(usr_state)" "$before_usr" "the tree left /usr unchanged"
 assert_eq "$(pkg_state)" "$before_pkgs" "the tree installed nothing"
 assert_false "the tree wrote no state" test -e /home/builder/.local/state/aur-prefetch/state.json
@@ -26,7 +26,7 @@ assert_false "the tree wrote no state" test -e /home/builder/.local/state/aur-pr
 cp /srv/simrepo/simapp-2.0.0-1-x86_64.pkg.tar.zst "$cache"/
 runuser -l builder -c 'aur-prefetch tui --render-once' >"$frame" 2>&1
 assert_contains "$(cat "$frame")" "cached" "an exact cache file is cached"
-assert_contains "$(cat "$frame")" "ready 1 = 1 cached + 0 built" "cached counts as ready"
+assert_contains "$(cat "$frame")" "Ready 1 = 1 cached + 0 built" "cached counts as ready"
 assert_contains "$(cat "$frame")" "missing 0" "cached is not missing"
 
 rm -f "$cache"/simapp-*
@@ -34,14 +34,14 @@ cp /srv/simrepo/simapp-1.0.0-1-x86_64.pkg.tar.zst "$cache"/
 runuser -l builder -c 'aur-prefetch tui --render-once' >"$frame" 2>&1
 assert_contains "$(cat "$frame")" "stale" "an older cache file is stale"
 assert_contains "$(cat "$frame")" "older cache file 1.0.0-1" "the stale reason names the old version"
-assert_contains "$(cat "$frame")" "ready 0 = 0 cached + 0 built" "stale is not ready"
+assert_contains "$(cat "$frame")" "Ready 0 = 0 cached + 0 built" "stale is not ready"
 
 rm -f "$cache"/simapp-*
 printf 'partial' >"$cache/simapp-2.0.0-1-x86_64.pkg.tar.zst.part"
 runuser -l builder -c 'aur-prefetch tui --render-once' >"$frame" 2>&1
 assert_contains "$(cat "$frame")" "partial" "a .part file is partial"
 assert_contains "$(cat "$frame")" "partial download" "the partial reason is explicit"
-assert_contains "$(cat "$frame")" "ready 0 = 0 cached + 0 built" "partial is not ready"
+assert_contains "$(cat "$frame")" "Ready 0 = 0 cached + 0 built" "partial is not ready"
 
 rm -f "$cache"/simapp-*
 mkdir -p /var/cache/pacman/aurto
@@ -52,7 +52,7 @@ before_aurto=$(find /var/cache/pacman/aurto -maxdepth 1 -type f -printf '%f\n' |
 runuser -l builder -c 'aur-prefetch tui --render-once' >"$frame" 2>&1
 assert_contains "$(cat "$frame")" "aurpkg" "the frame names the AUR package"
 assert_contains "$(cat "$frame")" "built" "an exact aurto artifact is built"
-assert_contains "$(cat "$frame")" "ready 1 = 0 cached + 1 built" "built counts as ready"
+assert_contains "$(cat "$frame")" "Ready 1 = 0 cached + 1 built" "built counts as ready"
 assert_contains "$(cat "$frame")" "install 2 packages" "the install context counts both pending packages"
 assert_eq "$(find /var/cache/pacman/aurto -maxdepth 1 -type f -printf '%f\n' | sort)" \
     "$before_aurto" "the tree left the aurto repo unchanged"

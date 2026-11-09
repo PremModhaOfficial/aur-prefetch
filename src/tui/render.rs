@@ -905,8 +905,9 @@ fn header_lines(
             package_count(packages)
         ),
     };
-    let padding = width.saturating_sub(display_width(&left) + display_width(&right));
-    let title = format!("{left}{}{right}", " ".repeat(padding));
+    let top = if ascii { "+- " } else { "┏━ " };
+    let padding = width.saturating_sub(3 + display_width(&left) + display_width(&right));
+    let title = format!("{top}{left}{}{right}", " ".repeat(padding));
 
     vec![
         Line::styled(cell_text(&header, width, ascii), bold()),
@@ -1094,10 +1095,11 @@ fn prefetch_lines(
                         }
                         WindowSlot::Row(id) => {
                             let row = &tree.rows[id];
+                            let border = if ascii { "| " } else { "┃ " };
                             let prefix = if ledger {
-                                String::new()
+                                border.to_string()
                             } else {
-                                branch_prefix(tree, row, ascii)
+                                format!("{border}{}", branch_prefix(tree, row, ascii))
                             };
                             if row.kind == TreeRowKind::Package {
                                 if let Some(live) = live {
@@ -1155,66 +1157,71 @@ fn static_summary_lines(
     color: bool,
 ) -> Vec<Line<'static>> {
     let counts = &report.counts;
-    let mut lines = Vec::new();
-
-    lines.push(Line::styled(
-        cell_text(
-            &format!(
-                "ready {} = {} cached + {} built {separator} stale {} {separator} partial {}",
-                counts.ready(),
-                counts.cached,
-                counts.built,
-                counts.stale,
-                counts.partial
-            ),
-            width,
-            ascii,
-        ),
-        bold(),
-    ));
+    let header = if ascii { "+--- " } else { "┣━━━ " };
+    let row = if ascii { "|    " } else { "┃    " };
+    let bottom = if ascii { "+- " } else { "┗━ " };
     let held = counts
         .held
         .map_or_else(String::new, |held| format!(" {separator} held {held}"));
-    lines.push(Line::styled(
-        cell_text(
-            &format!(
-                "missing {} {separator} build-pending {} {separator} failed {} {separator} unknown {}{held}",
-                counts.missing, counts.build_pending, counts.failed, counts.unknown
-            ),
-            width,
-            ascii,
-        ),
-        bold(),
-    ));
-    lines.push(labeled_line(
-        "Host     ",
-        report.host.as_deref().unwrap_or("unknown"),
-        bold(),
-        accent(color, HOST),
-        width,
-        ascii,
-    ));
+    let sigma = if ascii { "S" } else { "Σ" };
     let bytes: u64 = report
         .packages
         .iter()
         .filter_map(|package| package.download_bytes)
         .sum();
-    let sigma = if ascii { "S" } else { "Σ" };
-    lines.push(labeled_line(
-        &format!("{sigma}        "),
-        &format!(
-            "{} {separator} {} {separator} {} ready {separator} {} failed",
-            package_count(report.counts.total()),
-            human_bytes(bytes),
-            counts.ready(),
-            counts.failed
+    vec![
+        Line::styled(
+            cell_text(
+                &format!(
+                    "{header}Ready {} = {} cached + {} built {separator} stale {} {separator} partial {}",
+                    counts.ready(),
+                    counts.cached,
+                    counts.built,
+                    counts.stale,
+                    counts.partial
+                ),
+                width,
+                ascii,
+            ),
+            bold(),
         ),
-        bold(),
-        Style::default(),
-        width,
-        ascii,
-    ));
-    lines
+        Line::styled(
+            cell_text(
+                &format!(
+                    "{row}missing {} {separator} build-pending {} {separator} failed {} {separator} unknown {}{held}",
+                    counts.missing, counts.build_pending, counts.failed, counts.unknown
+                ),
+                width,
+                ascii,
+            ),
+            bold(),
+        ),
+        Line::styled(
+            cell_text(
+                &format!(
+                    "{row}Host      {}",
+                    report.host.as_deref().unwrap_or("unknown")
+                ),
+                width,
+                ascii,
+            ),
+            accent(color, HOST),
+        ),
+        Line::styled(
+            cell_text(
+                &format!(
+                    "{bottom}{sigma} {} {separator} {} {separator} {} ready {separator} {} failed",
+                    package_count(report.counts.total()),
+                    human_bytes(bytes),
+                    counts.ready(),
+                    counts.failed
+                ),
+                width,
+                ascii,
+            ),
+            bold(),
+        ),
+    ]
 }
 
 fn live_summary_lines(
@@ -1225,151 +1232,74 @@ fn live_summary_lines(
     color: bool,
 ) -> Vec<Line<'static>> {
     let separator = if ascii { "|" } else { "·" };
+    let bar = if ascii { "|" } else { "│" };
+    let header = if ascii { "+--- " } else { "┣━━━ " };
+    let row = if ascii { "|    " } else { "┃    " };
+    let bottom = if ascii { "+- " } else { "┗━ " };
+    let sigma = if ascii { "S" } else { "Σ" };
+    let builds = group_cell(live.summary.builds, Activity::Build, ascii);
+    let downloads = group_cell(live.summary.downloads, Activity::Download, ascii);
+    let host = report.host.as_deref().unwrap_or("unknown");
+    let mut tail = format!("{bottom}{sigma} {}", package_count(live.summary.total));
+    if let Some(timer) = super::live::timer_label(live.summary.elapsed, ascii) {
+        tail.push_str(&format!(" {separator} {timer}"));
+    }
+    if live.summary.failed > 0 {
+        tail.push_str(&format!(" {separator} {} failed", live.summary.failed));
+    }
+    if live.summary.frozen {
+        tail.push_str(&format!(" {separator} frozen"));
+    }
+    let sigma_style = if live.summary.failed > 0 || live.summary.frozen {
+        accent_bold(color, FAILURE)
+    } else {
+        bold()
+    };
     vec![
-        summary_group_line(
-            "Builds",
-            live.summary.builds,
-            Activity::Build,
-            ascii,
-            width,
-            color,
-        ),
-        summary_group_line(
-            "Downloads",
-            live.summary.downloads,
-            Activity::Download,
-            ascii,
-            width,
-            color,
-        ),
-        labeled_line(
-            "Host      ",
-            report.host.as_deref().unwrap_or("unknown"),
+        Line::styled(
+            cell_text(
+                &format!(
+                    "{header}{} {bar} {} {bar} Host",
+                    pad_cell("Builds", 17),
+                    pad_cell("Downloads", 18)
+                ),
+                width,
+                ascii,
+            ),
             bold(),
-            accent(color, HOST),
-            width,
-            ascii,
         ),
-        sigma_line(live, separator, ascii, width, color),
+        Line::styled(
+            cell_text(
+                &format!(
+                    "{row}{} {bar} {} {bar} {host}",
+                    pad_cell(&builds, 17),
+                    pad_cell(&downloads, 18)
+                ),
+                width,
+                ascii,
+            ),
+            bold(),
+        ),
+        Line::styled(cell_text(&tail, width, ascii), sigma_style),
     ]
 }
 
-fn summary_group_line(
-    label: &str,
-    counts: GroupCounts,
-    activity: Activity,
-    ascii: bool,
-    width: usize,
-    color: bool,
-) -> Line<'static> {
+fn pad_cell(text: &str, width: usize) -> String {
+    let used = display_width(text);
+    format!("{text}{}", " ".repeat(width.saturating_sub(used)))
+}
+
+fn group_cell(counts: GroupCounts, activity: Activity, ascii: bool) -> String {
     let (running, done, planned) = match (activity, ascii) {
         (Activity::Build, false) => ("⏵", "✔", "⏸"),
         (Activity::Build, true) => (">", "+", "="),
         (Activity::Download, false) => ("↓", "✔", "⏸"),
         (Activity::Download, true) => ("v", "+", "="),
     };
-    let mut remaining = width;
-    let mut spans = Vec::new();
-    push_span(
-        &mut spans,
-        &format!("{label:<10}"),
-        bold(),
-        &mut remaining,
-        ascii,
-    );
-    push_span(
-        &mut spans,
-        &format!("{running} {}", counts.running),
-        accent_bold(color, ACTIVE),
-        &mut remaining,
-        ascii,
-    );
-    push_span(&mut spans, "   ", Style::default(), &mut remaining, ascii);
-    push_span(
-        &mut spans,
-        &format!("{done} {}", counts.done),
-        accent_bold(color, DONE),
-        &mut remaining,
-        ascii,
-    );
-    push_span(&mut spans, "   ", Style::default(), &mut remaining, ascii);
-    push_span(
-        &mut spans,
-        &format!("{planned} {}", counts.planned),
-        accent_bold(color, PLANNED),
-        &mut remaining,
-        ascii,
-    );
-    Line::from(spans)
-}
-
-fn sigma_line(
-    live: &LiveView,
-    separator: &str,
-    ascii: bool,
-    width: usize,
-    color: bool,
-) -> Line<'static> {
-    let mut remaining = width;
-    let mut spans = Vec::new();
-    let sigma = if ascii { "S" } else { "Σ" };
-    push_span(
-        &mut spans,
-        &format!("{sigma:<10}"),
-        bold(),
-        &mut remaining,
-        ascii,
-    );
-    push_span(
-        &mut spans,
-        &package_count(live.summary.total),
-        bold(),
-        &mut remaining,
-        ascii,
-    );
-    if let Some(timer) = super::live::timer_label(live.summary.elapsed, ascii) {
-        push_span(
-            &mut spans,
-            &format!(" {separator} {timer}"),
-            dim(color),
-            &mut remaining,
-            ascii,
-        );
-    }
-    if live.summary.failed > 0 {
-        push_span(
-            &mut spans,
-            &format!(" {separator} {} failed", live.summary.failed),
-            accent_bold(color, FAILURE),
-            &mut remaining,
-            ascii,
-        );
-    }
-    if live.summary.frozen {
-        push_span(
-            &mut spans,
-            &format!(" {separator} frozen"),
-            accent_bold(color, FAILURE),
-            &mut remaining,
-            ascii,
-        );
-    }
-    Line::from(spans)
-}
-
-fn labeled_line(
-    label: &str,
-    value: &str,
-    label_style: Style,
-    value_style: Style,
-    width: usize,
-    ascii: bool,
-) -> Line<'static> {
-    let mut remaining = width;
-    let mut spans = Vec::new();
-    push_span(&mut spans, label, label_style, &mut remaining, ascii);
-    push_span(&mut spans, value, value_style, &mut remaining, ascii);
-    Line::from(spans)
+    format!(
+        "{running} {}   {done} {}   {planned} {}",
+        counts.running, counts.done, counts.planned
+    )
 }
 
 /// Nom's bottom-up branch grammar. The last child is the top row and gets the
@@ -1393,17 +1323,9 @@ fn branch_prefix(tree: &Tree, row: &TreeRow, ascii: bool) -> String {
         current = ancestor.parent;
     }
     ancestors.reverse();
-    for id in ancestors {
-        let last = tree.rows[id]
-            .parent
-            .is_some_and(|parent| tree.rows[parent].children.last() == Some(&id));
-        prefix.push_str(if last {
-            "   "
-        } else if ascii {
-            "|  "
-        } else {
-            "│  "
-        });
+    for _ in ancestors {
+        // Nom's heavy box border carries the vertical lane; depth is spaces.
+        prefix.push_str("   ");
     }
 
     let Some(parent) = row.parent else {
@@ -1444,7 +1366,7 @@ struct RowPaint<'a> {
 /// Lay out one tree row. Every column is measured in terminal cells, and the
 /// optional size column is right-aligned exactly as the static frame did.
 fn row_line(row: &TreeRow, paint: RowPaint<'_>, ascii: bool, width: usize) -> Line<'static> {
-    let lead = 2 + display_width(paint.prefix) + display_width(paint.glyph) + 1;
+    let lead = display_width(paint.prefix) + display_width(paint.glyph) + 1;
     let name_width = ((width.saturating_sub(lead)) / 3).clamp(12, 36);
     let size_width = if width >= 60 { 8 } else { 0 };
     let state_width = width
@@ -1452,7 +1374,6 @@ fn row_line(row: &TreeRow, paint: RowPaint<'_>, ascii: bool, width: usize) -> Li
 
     let mut remaining = width;
     let mut spans = Vec::new();
-    push_span(&mut spans, "  ", Style::default(), &mut remaining, ascii);
     push_span(
         &mut spans,
         paint.prefix,
@@ -1760,13 +1681,6 @@ fn progress_row_line(
     let mut left_remaining = geometry.left_width;
     push_span(
         &mut spans,
-        "  ",
-        Style::default(),
-        &mut left_remaining,
-        ascii,
-    );
-    push_span(
-        &mut spans,
         prefix,
         accent(color, PLANNED),
         &mut left_remaining,
@@ -1889,7 +1803,7 @@ fn progress_fill(progress: Progress, bar_width: usize) -> (usize, usize, usize) 
 }
 
 fn clipped_line(width: usize, ascii: bool, color: bool) -> Line<'static> {
-    let marker = if ascii { "  :" } else { "  ⋮" };
+    let marker = if ascii { "|  :" } else { "┃  ⋮" };
     Line::styled(cell_text(marker, width, ascii), dim(color))
 }
 
@@ -2848,10 +2762,11 @@ mod tests {
             "done",
             "waiting for 1 ⏵ 1 ⏸",
             "⏱ 2s",
-            "Builds    ⏵ 1   ✔ 0   ⏸ 1",
-            "Downloads ↓ 0   ✔ 1   ⏸ 1",
-            "Host      mirror.example.org",
-            "Σ         4 packages · ⏱ 2s",
+            "┣━━━ Builds",
+            "⏵ 1   ✔ 0   ⏸ 1",
+            "↓ 0   ✔ 1   ⏸ 1",
+            "mirror.example.org",
+            "┗━ Σ 4 packages · ⏱ 2s",
         ] {
             assert!(frame.contains(needle), "missing {needle:?} in\n{frame}");
         }
@@ -3681,15 +3596,14 @@ mod tests {
         let done_glyph = text_column(&buffer, 120, done, "✔").expect("done glyph");
         assert_eq!(cell_at(&buffer, 120, done, done_glyph).fg, Color::Green);
 
-        let host = find_row(&buffer, 120, "Host");
-        let host_column = text_column(&buffer, 120, host, "mirror").expect("host value");
-        assert_eq!(
-            cell_at(&buffer, 120, host, host_column).fg,
-            Color::Magenta,
-            "the host is magenta"
-        );
+        let host = find_row(&buffer, 120, "mirror.example.org");
         assert!(
-            cell_at(&buffer, 120, host, 0)
+            text_column(&buffer, 120, host, "mirror").is_some(),
+            "the host value sits on the summary row"
+        );
+        let labels = find_row(&buffer, 120, "Builds");
+        assert!(
+            cell_at(&buffer, 120, labels, 0)
                 .modifier
                 .contains(Modifier::BOLD),
             "summary labels are bold"
@@ -3817,8 +3731,8 @@ mod tests {
             assert!(frame.contains(label), "missing {label} in\n{frame}");
         }
         assert_eq!(frame.matches("simapp").count(), 1);
-        assert!(frame.contains("ready 1 = 1 cached + 0 built"));
-        assert!(frame.contains("Host     mirror.example.org"));
+        assert!(frame.contains("Ready 1 = 1 cached + 0 built"));
+        assert!(frame.contains("Host      mirror.example.org"));
         assert!(frame.contains("4 packages"));
     }
 
@@ -3872,7 +3786,15 @@ mod tests {
             frame.contains("├─"),
             "an earlier child uses a branch\n{frame}"
         );
-        assert!(frame.contains("│"), "a lane continues\n{frame}");
+        assert!(
+            frame.contains("┏━ Dependency Graph:"),
+            "the nom box top\n{frame}"
+        );
+        assert!(
+            frame.contains("┃ ┌─"),
+            "the box border carries the connector\n{frame}"
+        );
+        assert!(!frame.contains("│  "), "no light tree lanes\n{frame}");
         assert_eq!(frame.matches("? glibc").count(), 1);
         assert_eq!(frame.matches("simapp").count(), 1);
         assert!(frame.contains("unknown"));

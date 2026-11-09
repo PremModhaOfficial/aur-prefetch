@@ -473,6 +473,9 @@ and install-log keys from `TUI.md` are not wired; the receipt says to run
 
 ### T4. Polish
 
+- [x] Nom's frame grammar: `┏━ Dependency Graph:`, a `┃` left border on every
+      row, `┣━━━ Builds │ Downloads │ Host`, and `┗━ ∑ …`; the ASCII frame uses
+      `+-` / `|` / `+---` and keeps the same meaning.
 - [ ] `--no-motion`, ASCII, 2,000-package performance pass.
 - [ ] Keymap overrides for the v1 keys.
 - [ ] No mouse, themes, or `tui.conf` in v1.

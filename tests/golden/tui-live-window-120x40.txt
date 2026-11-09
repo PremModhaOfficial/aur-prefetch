@@ -1,24 +1,24 @@
 aur-prefetch · Fetch · 200 packages · live
-Dependency Graph showing 11 of 197 roots:                                                    install 200 packages · live
-  ⋮
-  ┌─ ↓ ⏵ z-mid 2.0.0-1                        downloading · ⏱ 2s                                                 1.1 MiB
-  ⋮
-  ⏸ pkg-009 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-008 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-007 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-006 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-005 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-004 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-003 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-002 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-001 2.0.0-1                      planned                                                                 1.1 MiB
-  ⏸ pkg-000 2.0.0-1                      planned                                                                 1.1 MiB
-  ┌─ ⚠ a-base 2.0.0-1                       failed · exit 2 · ⏱ 2s                                               1.1 MiB
-  ■ a-top 2.0.0-1                        blocked                                                                 1.1 MiB
-Builds    ⏵ 0   ✔ 0   ⏸ 0
-Downloads ↓ 1   ✔ 1   ⏸ 196
-Host      mirror.example.org
-Σ         200 packages · ⏱ 2s · 1 failed · frozen
+┏━ Dependency Graph showing 11 of 197 roots:                                                 install 200 packages · live
+┃  ⋮
+┃ ┌─ ↓ ⏵ z-mid 2.0.0-1                        downloading · ⏱ 2s                                                 1.1 MiB
+┃  ⋮
+┃ ⏸ pkg-009 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-008 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-007 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-006 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-005 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-004 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-003 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-002 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-001 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ⏸ pkg-000 2.0.0-1                      planned                                                                 1.1 MiB
+┃ ┌─ ⚠ a-base 2.0.0-1                       failed · exit 2 · ⏱ 2s                                               1.1 MiB
+┃ ■ a-top 2.0.0-1                        blocked                                                                 1.1 MiB
+┣━━━ Builds            │ Downloads          │ Host
+┃    ⏵ 0   ✔ 0   ⏸ 0   │ ↓ 1   ✔ 1   ⏸ 196  │ mirror.example.org
+┗━ Σ 200 packages · ⏱ 2s · 1 failed · frozen
+
 
 
 
