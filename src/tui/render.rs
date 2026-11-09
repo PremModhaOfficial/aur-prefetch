@@ -69,6 +69,49 @@ pub struct Footer<'a> {
     pub status: Option<&'a str>,
     pub keys: Option<&'a str>,
     pub failure: bool,
+    /// When present, the repair card replaces the action status line. It
+    /// carries only observed facts: the failed row, the command evidence and
+    /// the blocked count.
+    pub repair: Option<&'a RepairCard>,
+}
+
+/// A failure summary built from the real exit and the frozen frontier.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepairCard {
+    /// The failed row's label, when one node carries the evidence.
+    pub node: Option<String>,
+    /// `exit N` plus the first stderr line, exactly as the failed row shows it.
+    pub evidence: String,
+    /// A suggestion keyed to the evidence, never a claim that it was tried.
+    pub repair: String,
+    /// Nodes the frozen frontier blocked downstream.
+    pub blocked: usize,
+    /// An observation error that sits beside the exit; never hidden by the
+    /// card.
+    pub note: Option<String>,
+}
+
+/// The smallest honest repair suggestion for a fetch failure.
+///
+/// Keyed to the observed stderr text. It never claims a fix ran and never
+/// hides the original evidence.
+pub fn repair_hint(evidence: &str) -> &'static str {
+    let evidence = evidence.to_ascii_lowercase();
+    if evidence.contains("no space left") || evidence.contains("disk full") {
+        "free disk space, then fetch again"
+    } else if evidence.contains("unable to lock database") {
+        "wait for the other pacman to finish; never delete the lock file"
+    } else if evidence.contains("invalid or corrupted package") || evidence.contains("checksum") {
+        "remove the bad .part from the cache, then fetch again"
+    } else if evidence.contains("failed retrieving")
+        || evidence.contains("failed to synchronise")
+        || evidence.contains("could not resolve")
+        || evidence.contains("network is unreachable")
+    {
+        "check the network and the mirror, then fetch again"
+    } else {
+        "fix the reported error, then fetch again"
+    }
 }
 
 pub fn render_frame(
@@ -88,6 +131,7 @@ pub fn render_frame(
         ascii,
         color,
         help,
+        false,
     )
 }
 
@@ -111,11 +155,12 @@ pub fn render_live_frame(
         ascii,
         color,
         help,
+        false,
     )
 }
 
 /// Render one live frame with an action status line. Used by the fetch loop
-/// and by the live-fetch goldens.
+/// and by the live-fetch goldens. `ledger` flattens the forest rows.
 #[allow(clippy::too_many_arguments)] // the goldens read the flat frame inputs
 pub fn render_live_frame_status(
     snapshot: &Snapshot,
@@ -126,6 +171,7 @@ pub fn render_live_frame_status(
     ascii: bool,
     color: bool,
     help: bool,
+    ledger: bool,
 ) -> String {
     render_with(
         snapshot,
@@ -136,11 +182,13 @@ pub fn render_live_frame_status(
         ascii,
         color,
         help,
+        ledger,
     )
 }
 
 /// Render the static frame with a status line, for a refused action that has
 /// no live run to show.
+#[allow(clippy::too_many_arguments)] // the ledger goldens read the flat frame inputs
 pub fn render_frame_status(
     snapshot: &Snapshot,
     footer: Footer<'_>,
@@ -149,8 +197,11 @@ pub fn render_frame_status(
     ascii: bool,
     color: bool,
     help: bool,
+    ledger: bool,
 ) -> String {
-    render_with(snapshot, None, footer, width, height, ascii, color, help)
+    render_with(
+        snapshot, None, footer, width, height, ascii, color, help, ledger,
+    )
 }
 
 #[allow(clippy::too_many_arguments)] // one call site per renderer entry point
@@ -163,6 +214,7 @@ fn render_with(
     ascii: bool,
     color: bool,
     help: bool,
+    ledger: bool,
 ) -> String {
     if width == 0 || height == 0 {
         return String::new();
@@ -171,7 +223,7 @@ fn render_with(
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("test backend");
     terminal
-        .draw(|frame| draw_with(frame, snapshot, run, footer, ascii, color, help))
+        .draw(|frame| draw_with(frame, snapshot, run, footer, ascii, color, help, ledger))
         .expect("draw frame");
 
     let buffer = terminal.backend().buffer();
@@ -189,7 +241,16 @@ fn render_with(
 }
 
 pub fn draw(frame: &mut Frame, snapshot: &Snapshot, ascii: bool, color: bool, help: bool) {
-    draw_with(frame, snapshot, None, Footer::default(), ascii, color, help);
+    draw_with(
+        frame,
+        snapshot,
+        None,
+        Footer::default(),
+        ascii,
+        color,
+        help,
+        false,
+    );
 }
 
 pub fn draw_live(
@@ -208,9 +269,11 @@ pub fn draw_live(
         ascii,
         color,
         help,
+        false,
     );
 }
 
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 pub fn draw_live_status(
     frame: &mut Frame,
     snapshot: &Snapshot,
@@ -219,8 +282,18 @@ pub fn draw_live_status(
     ascii: bool,
     color: bool,
     help: bool,
+    ledger: bool,
 ) {
-    draw_with(frame, snapshot, Some(run), footer, ascii, color, help);
+    draw_with(
+        frame,
+        snapshot,
+        Some(run),
+        footer,
+        ascii,
+        color,
+        help,
+        ledger,
+    );
 }
 
 pub fn draw_status(
@@ -230,10 +303,12 @@ pub fn draw_status(
     ascii: bool,
     color: bool,
     help: bool,
+    ledger: bool,
 ) {
-    draw_with(frame, snapshot, None, footer, ascii, color, help);
+    draw_with(frame, snapshot, None, footer, ascii, color, help, ledger);
 }
 
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn draw_with(
     frame: &mut Frame,
     snapshot: &Snapshot,
@@ -242,6 +317,7 @@ fn draw_with(
     ascii: bool,
     color: bool,
     help: bool,
+    ledger: bool,
 ) {
     let area = frame.area();
     if area.width < 40 || area.height < 12 {
@@ -254,12 +330,16 @@ fn draw_with(
         return;
     }
 
+    let footer = footer_lines(footer, area.width as usize, ascii, color);
+    // Static and running footers keep the original two rows; the repair card
+    // takes only the rows it needs.
+    let footer_height = (footer.len() as u16).max(2);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),
             Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(footer_height),
         ])
         .split(area);
 
@@ -284,6 +364,7 @@ fn draw_with(
         chunks[0].width as usize,
         ascii,
         color,
+        ledger,
     );
     frame.render_widget(Paragraph::new(header), chunks[0]);
 
@@ -295,13 +376,11 @@ fn draw_with(
         ascii,
         chunks[1].width as usize,
         color,
+        ledger,
     );
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
-    frame.render_widget(
-        Paragraph::new(footer_lines(footer, chunks[2].width as usize, ascii, color)),
-        chunks[2],
-    );
+    frame.render_widget(Paragraph::new(footer), chunks[2]);
 
     if help {
         draw_help(frame, area, ascii);
@@ -316,7 +395,9 @@ fn footer_lines(footer: Footer<'_>, width: usize, ascii: bool, color: bool) -> V
     };
     let keys = footer.keys.unwrap_or(default_keys);
     let mut lines = Vec::new();
-    if let Some(status) = footer.status {
+    if let Some(card) = footer.repair {
+        lines.extend(repair_lines(card, width, ascii, color));
+    } else if let Some(status) = footer.status {
         let style = if footer.failure {
             accent_bold(color, FAILURE)
         } else {
@@ -328,6 +409,45 @@ fn footer_lines(footer: Footer<'_>, width: usize, ascii: bool, color: bool) -> V
     lines
 }
 
+/// Three observed lines above the keys. The hint is a suggestion, not proof
+/// that anything was repaired; the evidence stays verbatim.
+fn repair_lines(card: &RepairCard, width: usize, ascii: bool, color: bool) -> Vec<Line<'static>> {
+    let warning = if ascii { "!" } else { "⚠" };
+    let separator = if ascii { "|" } else { "·" };
+    let head = match &card.node {
+        Some(node) => format!("{warning} {node} {separator} {}", card.evidence),
+        None => format!("{warning} {}", card.evidence),
+    };
+    let blocked = match card.blocked {
+        0 => "no downstream blocked".to_string(),
+        1 => "1 blocked downstream".to_string(),
+        count => format!("{count} blocked downstream"),
+    };
+    let mut lines = vec![
+        Line::styled(cell_text(&head, width, ascii), accent_bold(color, FAILURE)),
+        Line::styled(
+            cell_text(&format!("repair: {}", card.repair), width, ascii),
+            bold(),
+        ),
+        Line::styled(
+            cell_text(
+                &format!("{blocked} {separator} no state written"),
+                width,
+                ascii,
+            ),
+            dim(color),
+        ),
+    ];
+    if let Some(note) = &card.note {
+        lines.push(Line::styled(
+            cell_text(&format!("cache read: {note}"), width, ascii),
+            dim(color),
+        ));
+    }
+    lines
+}
+
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn header_lines(
     snapshot: &Snapshot,
     tree: Option<&Result<Tree, TreeError>>,
@@ -336,6 +456,7 @@ fn header_lines(
     width: usize,
     ascii: bool,
     color: bool,
+    ledger: bool,
 ) -> Vec<Line<'static>> {
     let separator = if ascii { "|" } else { "·" };
     let Some(report) = snapshot.prefetch.data() else {
@@ -376,7 +497,11 @@ fn header_lines(
             (roots, roots)
         }
     };
-    let left = graph_title(shown_roots, total_roots);
+    let left = if ledger {
+        "Ledger:".to_string()
+    } else {
+        graph_title(shown_roots, total_roots)
+    };
     let right = match live {
         Some(_) => format!("install {} {separator} live", package_count(packages)),
         None => format!(
@@ -429,6 +554,7 @@ struct FrameStyle {
     color: bool,
 }
 
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn body_lines(
     snapshot: &Snapshot,
     tree: Option<&Result<Tree, TreeError>>,
@@ -437,6 +563,7 @@ fn body_lines(
     ascii: bool,
     width: usize,
     color: bool,
+    ledger: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -470,6 +597,7 @@ fn body_lines(
                 width,
                 color,
             },
+            ledger,
         ));
         return lines;
     }
@@ -502,6 +630,7 @@ fn body_lines(
     lines
 }
 
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn prefetch_lines(
     report: &PrefetchReport,
     tree: &Result<Tree, TreeError>,
@@ -509,6 +638,7 @@ fn prefetch_lines(
     window: Option<&Window>,
     at: Option<SystemTime>,
     style: FrameStyle,
+    ledger: bool,
 ) -> Vec<Line<'static>> {
     let FrameStyle {
         ascii,
@@ -538,7 +668,11 @@ fn prefetch_lines(
                         }
                         WindowSlot::Row(id) => {
                             let row = &tree.rows[id];
-                            let prefix = branch_prefix(tree, row, ascii);
+                            let prefix = if ledger {
+                                String::new()
+                            } else {
+                                branch_prefix(tree, row, ascii)
+                            };
                             if row.kind == TreeRowKind::Package {
                                 if let Some(live) = live {
                                     if let Some(live_row) = live.row(id) {
@@ -1431,6 +1565,7 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
         Line::from("q       quit"),
         Line::from("? / esc close help"),
         Line::from("F       fetch downloads"),
+        Line::from("g       tree/ledger"),
         Line::from("r       refresh"),
         Line::from("ctrl-c  quit with 130"),
         Line::from("ctrl-z  suspend"),
@@ -1446,7 +1581,10 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::style::{Color, Modifier};
 
-    use super::{Footer, display_width, render_frame, render_live_frame, render_live_frame_status};
+    use super::{
+        Footer, RepairCard, display_width, render_frame, render_live_frame,
+        render_live_frame_status, repair_hint,
+    };
     use crate::frontier::Observed;
     use crate::report::{
         ArtifactState, Cached, PackageView, PrefetchReport, Repo, Section, Snapshot, Update,
@@ -1825,8 +1963,37 @@ mod tests {
     fn fetch_footer() -> Footer<'static> {
         Footer {
             status: Some("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
-            keys: Some("esc detach · ? help"),
+            keys: Some("esc detach · g ledger · ? help"),
             failure: false,
+            repair: None,
+        }
+    }
+
+    fn repair_card() -> RepairCard {
+        RepairCard {
+            node: Some("base 2.0.0-1".to_string()),
+            evidence: "exit 2: error: target not found: go".to_string(),
+            repair: repair_hint("exit 2: error: target not found: go").to_string(),
+            blocked: 3,
+            note: None,
+        }
+    }
+
+    fn repair_footer(card: &RepairCard) -> Footer<'_> {
+        Footer {
+            status: Some("fetch failed: exit 2: error: target not found: go"),
+            keys: Some("esc dismiss · F fetch again · g ledger · q quit · ? help"),
+            failure: true,
+            repair: Some(card),
+        }
+    }
+
+    fn ledger_footer() -> Footer<'static> {
+        Footer {
+            status: None,
+            keys: Some("q quit · g tree · ? help · r refresh"),
+            failure: false,
+            repair: None,
         }
     }
 
@@ -2068,6 +2235,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
         assert!(
             frame.contains("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
@@ -2092,8 +2260,17 @@ mod tests {
     fn live_fetch_frame_is_stable_at_80x24() {
         let snapshot = progress_snapshot();
         let run = fetch_run();
-        let frame =
-            render_live_frame_status(&snapshot, &run, fetch_footer(), 80, 24, false, false, false);
+        let frame = render_live_frame_status(
+            &snapshot,
+            &run,
+            fetch_footer(),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+        );
         assert!(frame.contains("fetch: running"));
         assert!(frame.contains('%'));
         assert_eq!(
@@ -2110,9 +2287,11 @@ mod tests {
                 status: Some("fetch blocked: pacman is running"),
                 keys: Some("r refresh · q quit · ? help"),
                 failure: true,
+                repair: None,
             },
             120,
             40,
+            false,
             false,
             false,
             false,
@@ -2179,6 +2358,206 @@ mod tests {
         assert!(frame.contains("1 failed"));
         assert!(frame.contains("frozen"));
         assert_eq!(frame.matches("blocked").count(), 3);
+    }
+
+    #[test]
+    fn repair_hints_name_the_observed_cause() {
+        for (evidence, expected) in [
+            (
+                "exit 1: No space left on device",
+                "free disk space, then fetch again",
+            ),
+            (
+                "exit 1: error: failed retrieving file 'x'",
+                "check the network and the mirror, then fetch again",
+            ),
+            (
+                "exit 1: error: unable to lock database",
+                "wait for the other pacman to finish; never delete the lock file",
+            ),
+            (
+                "exit 1: error: invalid or corrupted package",
+                "remove the bad .part from the cache, then fetch again",
+            ),
+            (
+                "exit 1: something else",
+                "fix the reported error, then fetch again",
+            ),
+        ] {
+            assert_eq!(repair_hint(evidence), expected, "{evidence}");
+        }
+    }
+
+    #[test]
+    fn the_repair_card_names_the_failed_node_evidence_and_blocked_count() {
+        let card = repair_card();
+        let frame = render_live_frame_status(
+            &failure_snapshot(),
+            &failure_run(),
+            repair_footer(&card),
+            120,
+            40,
+            false,
+            false,
+            false,
+            false,
+        );
+
+        assert!(
+            frame.contains("⚠ base 2.0.0-1 · exit 2: error: target not found: go"),
+            "the real evidence stays verbatim\n{frame}"
+        );
+        assert!(
+            frame.contains("repair: fix the reported error, then fetch again"),
+            "the correction for this error\n{frame}"
+        );
+        assert!(
+            frame.contains("3 blocked downstream · no state written"),
+            "the frozen frontier reports its blocked dependents\n{frame}"
+        );
+        assert!(frame.contains("esc dismiss · F fetch again · g ledger"));
+        assert!(
+            !frame.contains("fetch failed:"),
+            "the card replaces the duplicated status line\n{frame}"
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-repair-120x40.txt")
+        );
+    }
+
+    #[test]
+    fn the_repair_card_is_stable_at_80x24_and_in_ascii() {
+        let card = repair_card();
+        let frame = render_live_frame_status(
+            &failure_snapshot(),
+            &failure_run(),
+            repair_footer(&card),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-repair-80x24.txt")
+        );
+
+        let ascii = render_live_frame_status(
+            &failure_snapshot(),
+            &failure_run(),
+            repair_footer(&card),
+            120,
+            40,
+            true,
+            false,
+            false,
+            false,
+        );
+        assert!(ascii.contains("! base 2.0.0-1 | exit 2"), "{ascii}");
+        assert!(ascii.contains("repair: "), "{ascii}");
+        assert!(
+            !ascii.contains('⚠'),
+            "ASCII has no unicode card glyph\n{ascii}"
+        );
+    }
+
+    #[test]
+    fn a_failure_without_a_blamed_node_keeps_the_evidence_and_the_note() {
+        let card = RepairCard {
+            node: None,
+            evidence: "exit 1: error: failed to synchronise any database".to_string(),
+            repair: repair_hint("failed to synchronise").to_string(),
+            blocked: 0,
+            note: Some("cannot read cache dir".to_string()),
+        };
+        let frame = render_live_frame_status(
+            &failure_snapshot(),
+            &failure_run(),
+            repair_footer(&card),
+            120,
+            40,
+            false,
+            false,
+            false,
+            false,
+        );
+
+        assert!(
+            frame.contains("⚠ exit 1: error: failed to synchronise any database"),
+            "{frame}"
+        );
+        assert!(frame.contains("no downstream blocked"), "{frame}");
+        assert!(
+            frame.contains("cache read: cannot read cache dir"),
+            "{frame}"
+        );
+    }
+
+    #[test]
+    fn the_ledger_lists_the_same_rows_without_branch_connectors() {
+        let frame = render_live_frame_status(
+            &diamond_snapshot(),
+            &diamond_run(),
+            ledger_footer(),
+            120,
+            40,
+            false,
+            false,
+            false,
+            true,
+        );
+        assert!(frame.contains("Ledger:"), "{frame}");
+        assert!(!frame.contains("├─ "), "no tree connectors\n{frame}");
+        assert!(!frame.contains("┌─ "), "no tree corners\n{frame}");
+        for name in ["base", "left", "right", "join"] {
+            assert!(frame.contains(name), "{name} is in the ledger\n{frame}");
+        }
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-ledger-120x40.txt")
+        );
+    }
+
+    #[test]
+    fn the_ledger_is_stable_at_80x24() {
+        let frame = render_live_frame_status(
+            &diamond_snapshot(),
+            &diamond_run(),
+            ledger_footer(),
+            80,
+            24,
+            false,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-ledger-80x24.txt")
+        );
+    }
+
+    #[test]
+    fn the_static_prefetch_frame_is_unchanged_by_the_ledger() {
+        let tree = render_frame(&prefetch_snapshot(), 120, 40, false, false, false);
+        let ledger = super::render_frame_status(
+            &prefetch_snapshot(),
+            ledger_footer(),
+            120,
+            40,
+            false,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(
+            tree,
+            include_str!("../../tests/golden/tui-prefetch-120x40.txt")
+        );
+        assert!(ledger.contains("Ledger:"));
     }
 
     #[test]
@@ -2975,6 +3354,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             ),
         )
         .expect("write live fetch 120x40");
@@ -2989,8 +3369,72 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             ),
         )
         .expect("write live fetch 80x24");
+
+        let card = repair_card();
+        std::fs::write(
+            dir.join("tui-repair-120x40.txt"),
+            render_live_frame_status(
+                &failure_snapshot(),
+                &failure_run(),
+                repair_footer(&card),
+                120,
+                40,
+                false,
+                false,
+                false,
+                false,
+            ),
+        )
+        .expect("write repair 120x40");
+        std::fs::write(
+            dir.join("tui-repair-80x24.txt"),
+            render_live_frame_status(
+                &failure_snapshot(),
+                &failure_run(),
+                repair_footer(&card),
+                80,
+                24,
+                false,
+                false,
+                false,
+                false,
+            ),
+        )
+        .expect("write repair 80x24");
+
+        std::fs::write(
+            dir.join("tui-ledger-120x40.txt"),
+            render_live_frame_status(
+                &diamond,
+                &diamond_run,
+                ledger_footer(),
+                120,
+                40,
+                false,
+                false,
+                false,
+                true,
+            ),
+        )
+        .expect("write ledger 120x40");
+        std::fs::write(
+            dir.join("tui-ledger-80x24.txt"),
+            render_live_frame_status(
+                &diamond,
+                &diamond_run,
+                ledger_footer(),
+                80,
+                24,
+                false,
+                false,
+                false,
+                true,
+            ),
+        )
+        .expect("write ledger 80x24");
     }
 }

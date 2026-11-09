@@ -18,7 +18,9 @@ are landed. T2's prefetch badges, real cache scan, pure bottom-up forest view
 viewport (T2c) are landed. T2d's real cache observation source is landed in
 `src/fetch_source.rs`. T2e runs the real fetch from `F`: `src/tui/fetch_session.rs`
 streams the command on a worker, polls the real cache, and redraws on real
-changes; sim 34 proves it under a pty. The repair card and the ledger are next.
+changes; sim 34 proves it under a pty. T2f adds the repair card on a real
+failure and the `g` ledger; sim 35 proves both. T2 is closed; T3 actions are
+next.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -116,9 +118,12 @@ package, one root per pending package with no pending dependent, display-only
 cached/stale/partial/missing/built badges. The `install N packages` total is
 header context, not a tree row. T2b adds the live glyphs, waiting counts,
 timers, grouped summary and ANSI-16 palette. T2e streams the real fetch command
-and polls the real cache for `.part` bytes. Sim 33 proves the badges; sim 34
-proves the live fetch, the real bytes and the one state write.
+and polls the real cache for `.part` bytes. T2f turns a nonzero exit into the
+repair card, freezes the failed row and blocked dependents, and adds the `g`
+ledger. Sim 33 proves the badges; sim 34 proves the live fetch, the real bytes
+and the one state write; sim 35 proves the failure freeze.
 
-Next action: finish T2. The real fetch stream is wired into `LiveRun`; add the
-repair card and the ledger. The tree reads `check::collect`,
-`progress::collect` and `fetch::plan`; it does not collect its own facts.
+Next action: T3. Add the fetch gate checklist and the streamed log panel, then
+the install gate overlay and post-install block. The tree reads
+`check::collect`, `progress::collect` and `fetch::plan`; it does not collect its
+own facts.

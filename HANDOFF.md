@@ -62,8 +62,16 @@ covers where things stand and the first move. Do not re-plan.
   artifact alone finishes a pending or ready node, so a tiny package that
   renames between polls is never falsely ready. Sim 34 proves the real `.part`
   bytes, the bar, the done row, the unchanged `/usr`, the one state write and
-  the one allowed escalation under a pty. The repair card, the fetch log and
-  the ledger remain.
+  the one allowed escalation under a pty.
+- T2f is landed: a nonzero exit builds one `RepairCard` from observed facts
+  (failed row, `exit N` plus the first stderr line, a hint keyed to that
+  evidence, the blocked count, and no state write) and the card replaces the
+  duplicated status line. `g` toggles a flat ledger over the same rows,
+  statically and live; the static `--render-once` frame is unchanged. Sim 35
+  corrupts the repo artifact behind the paced transfer and proves the running
+  row, the real failure, the frozen frontier, the card, no install, no state
+  write and the one allowed escalation. The fetch log and the T3 actions
+  remain.
 - T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
   the real download cache, fills `report::PrefetchReport`, and the TUI draws
   cached/stale/partial/missing/build-pending/built badges, counts, host and
@@ -84,17 +92,17 @@ covers where things stand and the first move. Do not re-plan.
   dependency tree; the T2b live grammar and palette read the pure frontier, and
   T2e runs the real fetch and drives the real cache source. `prototype/` holds
   the design sketches.
-- `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is in progress
-  with T2a, T2b, T2c, T2d and T2e landed. The repair card and the ledger remain.
+- `NEXT.md` Phase 7 is the TUI order of work. T1 is closed; T2 is closed with
+  T2a–T2f landed. T3 actions are next.
 
-## Do this first: T2
+## Do this first: T3
 
-1. Finish T2: T2a (the forest), T2b (the pure live view and palette), T2c's
-   progress bars and viewport, T2d's real `FetchMonitor`, and T2e's live fetch
-   loop are landed. The remaining T2 work is the repair card on failure and the
-   ledger fallback (`g`); T2f owns both. Use `check::collect`,
-   `progress::collect` and `fetch::plan`; do not add a second update collector.
-   The ready set is a set, not a queue.
+1. T2 is closed: the forest, the pure live view and palette, the bars and
+   viewport, the real `FetchMonitor`, the live fetch loop, the repair card and
+   the ledger are landed. The next TUI work is T3: the fetch gate checklist and
+   the streamed log panel, then the install gate overlay and post-install
+   block. Use `check::collect`, `progress::collect` and `fetch::plan`; do not
+   add a second update collector. The ready set is a set, not a queue.
 
 Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
 collectors; that is how the two paths drift. The prefetch tree is read-only;

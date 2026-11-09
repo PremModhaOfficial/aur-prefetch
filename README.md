@@ -55,7 +55,9 @@ gates and its exact `sudo -n pacman -Syuw --noconfirm` argv. While it runs, the
 tree shows each download from the real `.part` length against the real
 `Download Size`; a percentage appears only when both are known. The command is
 captured, never attached, and nothing is installed. `Esc` or `q` detaches and
-leaves the child running; the result stays on screen until dismissed. The
+leaves the child running; the result stays on screen until dismissed. A failed
+fetch freezes the tree and shows the failed row, the exit evidence, a repair
+hint and the blocked count. `g` toggles a flat ledger of the same rows. The
 fetch's only write is its existing state file after a successful exit.
 
 ### `check`

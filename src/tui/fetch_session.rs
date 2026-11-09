@@ -24,10 +24,10 @@ use crate::runner::{CommandOutput, CommandRunner, StreamLine};
 use crate::tui::live::{
     Activity, GroupCounts, LiveRun, LiveState, LiveView, Progress, timer_label,
 };
-use crate::tui::render::Footer;
+use crate::tui::render::{Footer, RepairCard, repair_hint};
 use crate::tui::tree::{RowId, Tree};
 
-/// One worker message. Lines are kept for the T2f log; the exit is folded.
+/// One worker message. Lines are kept for the T3 log; the exit is folded.
 #[derive(Debug)]
 enum FetchEvent {
     Line(StreamLine),
@@ -83,6 +83,9 @@ pub struct FetchSession {
     observation_error: Option<String>,
     status: String,
     failure: bool,
+    /// Built once from the real exit and the frozen frontier. `None` until a
+    /// nonzero exit proves a failure.
+    card: Option<RepairCard>,
     last_key: Option<FrameKey>,
     argv: Vec<String>,
 }
@@ -130,6 +133,7 @@ impl FetchSession {
             observation_error: None,
             status,
             failure: false,
+            card: None,
             last_key: None,
             argv,
         };
@@ -163,19 +167,26 @@ impl FetchSession {
     /// The action line and the keys that are legal in this phase.
     pub fn footer(&self, ascii: bool) -> Footer<'_> {
         let keys = match (&self.phase, ascii) {
-            (Phase::Running, false) => "esc detach · ? help",
-            (Phase::Running, true) => "esc detach | ? help",
-            (Phase::Finished { .. } | Phase::Failed { .. }, false) => {
-                "esc dismiss · F fetch again · q quit · ? help"
+            (Phase::Running, false) => "esc detach · g ledger · ? help",
+            (Phase::Running, true) => "esc detach | g ledger | ? help",
+            (Phase::Finished { .. }, false) => {
+                "esc dismiss · F fetch again · g ledger · q quit · ? help"
             }
-            (Phase::Finished { .. } | Phase::Failed { .. }, true) => {
-                "esc dismiss | F fetch again | q quit | ? help"
+            (Phase::Finished { .. }, true) => {
+                "esc dismiss | F fetch again | g ledger | q quit | ? help"
+            }
+            (Phase::Failed { .. }, false) => {
+                "esc dismiss · F fetch again · g ledger · q quit · ? help"
+            }
+            (Phase::Failed { .. }, true) => {
+                "esc dismiss | F fetch again | g ledger | q quit | ? help"
             }
         };
         Footer {
             status: Some(&self.status),
             keys: Some(keys),
             failure: self.failure,
+            repair: self.card.as_ref(),
         }
     }
 
@@ -267,6 +278,24 @@ impl FetchSession {
             }
         } else {
             let evidence = failure_evidence(code, &stderr);
+            let view = LiveView::build(&self.tree, self.monitor.live());
+            let blocked = view
+                .rows
+                .values()
+                .filter(|row| row.state == LiveState::Blocked)
+                .count();
+            let node = view
+                .rows
+                .values()
+                .find(|row| row.state == LiveState::Failed)
+                .map(|row| self.tree.rows[row.row].label.clone());
+            self.card = Some(RepairCard {
+                node,
+                evidence: evidence.clone(),
+                repair: repair_hint(&evidence).to_string(),
+                blocked,
+                note: self.observation_error.clone(),
+            });
             self.status = format!("fetch failed: {evidence}");
             self.failure = true;
             self.phase = Phase::Failed { evidence };
@@ -542,7 +571,7 @@ mod tests {
             footer.status,
             Some("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm")
         );
-        assert_eq!(footer.keys, Some("esc detach · ? help"));
+        assert_eq!(footer.keys, Some("esc detach · g ledger · ? help"));
         assert!(!footer.failure);
         assert!(session.running());
     }
@@ -590,7 +619,7 @@ mod tests {
         assert_eq!(footer.status, Some("fetch: exit 0"));
         assert_eq!(
             footer.keys,
-            Some("esc dismiss · F fetch again · q quit · ? help")
+            Some("esc dismiss · F fetch again · g ledger · q quit · ? help")
         );
         assert!(!footer.failure);
         let state = fs::read_to_string(fixture.root.join("state.json")).expect("state file");
@@ -627,6 +656,15 @@ mod tests {
         assert!(
             matches!(session.phase(), Phase::Failed { .. }),
             "the result is a failure even though no node froze"
+        );
+        let card = footer
+            .repair
+            .expect("a failure with no blamed node still gets a card");
+        assert_eq!(card.node, None, "no node is blamed without evidence");
+        assert_eq!(card.blocked, 0);
+        assert!(
+            card.repair.contains("network"),
+            "the hint reads the synchronise evidence"
         );
         assert_eq!(
             session.live().state("tool"),
@@ -669,6 +707,17 @@ mod tests {
             Some("fetch failed: exit 1: error: failed retrieving file 'tool'")
         );
         assert!(footer.failure);
+        let card = footer.repair.expect("the repair card carries the failure");
+        assert_eq!(card.node.as_deref(), Some("tool 2.0.0-1"));
+        assert_eq!(
+            card.evidence,
+            "exit 1: error: failed retrieving file 'tool'"
+        );
+        assert_eq!(card.blocked, 0);
+        assert_eq!(
+            card.repair,
+            "check the network and the mirror, then fetch again"
+        );
         assert!(!fixture.root.join("state.json").exists());
     }
 

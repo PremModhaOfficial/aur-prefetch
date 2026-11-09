@@ -1,7 +1,7 @@
 # TUI.md — terminal UI spec
 
-Status: **spec. T0 report layer, the T1 read-only shell and T2a–T2e are
-implemented; the repair card, the ledger and later screens are not.**
+Status: **spec. T0 report layer, the T1 read-only shell and T2a–T2f are
+implemented; T3 actions and later screens are not.**
 Written 2026-11-08.
 
 Prototype: [`prototype/tui-variants.html`](prototype/tui-variants.html) — five
@@ -1160,11 +1160,12 @@ and Ctrl-Z re-entry/clear with raw mode restored.
       queue.
 - [x] Live fetch: real state changes and counters; timers after 1s.
 - [x] No duplicate nodes; one placement per package, no repeated subtree.
-- [ ] Failure freeze, repair card, downstream blocked.
-- [ ] Ledger fallback (`g`). No timeline in v1.
+- [x] Failure freeze, repair card, downstream blocked.
+- [x] Ledger fallback (`g`). No timeline in v1.
 
 Done when: a prefetched fixture shows the correct tree, no state is invented,
-and sim 33 proves the counts.
+sim 33 proves the counts, sim 34 proves the live fetch, and sim 35 proves the
+failure freeze and the repair card.
 
 T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
@@ -1183,6 +1184,17 @@ frame shows real `.part` bytes and a bar when the total is known; the result
 frame keeps done and failed rows and an honest exit footer. `Esc`/`q` detach
 without killing the child. Sim 34 drives the pty path and proves the one state
 write and the allowed escalation.
+
+T2f landed: a nonzero fetch exit builds one repair card from observed facts
+(the failed row, `exit N` plus the first stderr line, a hint keyed to that
+evidence, the blocked count, and no state write) and the card replaces the
+duplicated status line above the keys. A failure with no running node still
+shows the card and blames no row. `g` toggles the ledger, a flat list of the
+same rows with no branch connectors, statically and during a fetch. The static
+`--render-once` frame and its goldens are unchanged. Sim 35 corrupts the repo
+artifact behind the paced transfer and proves the running row, the real
+failure, the frozen frontier, the card, no install, no state write and the one
+allowed escalation.
 
 ### T3. Actions
 

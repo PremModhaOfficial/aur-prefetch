@@ -37,4 +37,4 @@ Host      mirror.example.org
 
 
 fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm
-esc detach · ? help
+esc detach · g ledger · ? help

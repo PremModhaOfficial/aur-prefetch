@@ -322,12 +322,13 @@ and Ctrl-Z re-entry/clear with raw mode restored.
       `src/tui/render.rs`).
 - [x] Live fetch: real state changes and counters; timers after 1s.
 - [x] No duplicate nodes; one placement per package, no repeated subtree.
-- [ ] Failure freeze, repair card, downstream blocked.
-- [ ] Ledger fallback (`g`). No timeline in v1.
+- [x] Failure freeze, repair card, downstream blocked.
+- [x] Ledger fallback (`g`). No timeline in v1.
 
 Done when a prefetched fixture shows the correct tree, no state is invented,
 the ready frontier is correct for a diamond and two roots, sim 33 proves the
-counts, and sim 34 proves the live fetch path.
+counts, sim 34 proves the live fetch path, and sim 35 proves the failure
+freeze and the repair card.
 
 T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
@@ -397,8 +398,19 @@ node. `pacman -Si` fills a download size that `pacman -Qui` does not provide on
 pacman 7.1, so a known total can draw a real bar. Sim 34 drives the real TUI
 under a pty with a paced pacman `XferCommand` and proves the real `.part`
 bytes, the bar, the final artifact, the unchanged `/usr`, the one state write
-and the one allowed escalation. The repair card, the fetch log and the ledger
-are still T2f/T3.
+and the one allowed escalation. The fetch log remains T3.
+
+T2f landed: a nonzero fetch exit builds one repair card from observed facts
+only: the failed row, `exit N` plus the first stderr line, a hint keyed to that
+evidence, the blocked count, and the fact that no state was written. The card
+replaces the duplicated status line and leaves the frozen tree in place; a
+failure with no running node still gets the card and blames no row. `g` toggles
+the ledger, a flat list of the same rows with no branch connectors, statically
+and during a fetch. The static `--render-once` frame, its goldens and the CLI
+text are unchanged. Sim 35 corrupts the repo artifact behind the paced
+transfer and proves the running row, the real failure, the frozen frontier, the
+card, no install, no state write and the one allowed escalation. T2 is closed;
+T3 actions are next.
 
 The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
 120x40 `nh home switch` run and orders the remaining T2 work: tree model,

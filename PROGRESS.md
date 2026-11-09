@@ -2,7 +2,8 @@
 
 Status: **spec + implementation plan. The shared report layer, the T1 shell,
 the static bottom-up dependency forest (T2a), the pure live grammar/palette
-(T2b), and the real live fetch (T2e) exist.**
+(T2b), the real live fetch (T2e), the repair card and the ledger (T2f)
+exist.**
 Written 2026-11-08. Revised after review: the live tree is borrowed from
 `nix-output-monitor` (nom), not competed with.
 
@@ -557,7 +558,7 @@ snapshot and a read-only cache/AUR scan. The T2a forest model reads
 - [x] State glyph + name-version + state + time; compact columns.
 - [x] Prefetch badges, `install N packages` header context, counters line.
 - [x] No duplicate nodes; one placement per package, no repeated subtree.
-- [ ] Ledger fallback via `g`.
+- [x] Ledger fallback via `g`.
 - [x] Golden frames at 80×24 and 120×40.
 
 Done when: a prefetched fixture with cached/stale/missing/built/build-pending
@@ -588,7 +589,7 @@ Done when: `--render-once --at <t>` produces deterministic frames at 120×40 and
 - [x] Wire the frontier to fetch observations; the ready set is a set, not a
       queue.
 - [x] Node state changes and counters update in place; timers after 1s.
-- [ ] Failure freeze + repair card; downstream blocked.
+- [x] Failure freeze + repair card; downstream blocked.
 - [x] No state writes on view/pause.
 - [x] No live animation of the attached install; the tree is plan and result.
 
@@ -597,7 +598,10 @@ rows with nom glyphs, activity kind, prerequisite waiting counts and timers, and
 `render.rs` goldens cover the diamond, two roots and the failure freeze. T2e
 landed the streaming channel and the live loop: `F` runs the real fetch on a
 worker, polls the real cache and folds the real exit, with one state write.
-The repair card remains open.
+T2f landed the repair card and the ledger: a nonzero exit shows the failed row,
+the evidence, a hint keyed to it and the blocked count instead of the status
+line, and `g` flattens the same rows into a ledger. Sim 35 proves the real
+failure and the freeze under a pty.
 
 Done when: sim proves cached nodes never animate, live fetch nodes do, failure
 freezes instead of retrying, and the attached install still shows the raw
@@ -631,7 +635,7 @@ default. AUR RPC (C) waits for a TUI.md amendment.
 | unit | `-Qui` parser, cache matcher, `.SRCINFO`/`.PKGINFO`, edge states, frontier reducer (diamond, two roots), tree construction, count precedence |
 | render | goldens at 80×24, 120×40, ASCII; fixed `--at` times |
 | cli | `--render-once` deterministic; offline default |
-| sim | 33 prefetch badges from the real cache; 34 live fetch tree; 35 failure freeze |
+| sim | 33 prefetch badges from the real cache; 34 live fetch tree; 35 failure freeze and repair card |
 
 What the tests must prove:
 

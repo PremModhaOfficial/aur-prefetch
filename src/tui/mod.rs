@@ -98,6 +98,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     let mut session: Option<FetchSession> = None;
     let mut notice: Option<Notice> = None;
     let mut help = false;
+    let mut ledger = false;
     let mut dirty = true;
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -132,6 +133,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                         ascii,
                         color,
                         help,
+                        ledger,
                     ),
                     (None, Some(notice)) => render::draw_status(
                         frame,
@@ -140,12 +142,30 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             status: Some(&notice.status),
                             keys: Some(notice_keys(ascii)),
                             failure: notice.failure,
+                            repair: None,
                         },
                         ascii,
                         color,
                         help,
+                        ledger,
                     ),
-                    (None, None) => render::draw(frame, &snapshot, ascii, color, help),
+                    (None, None) => {
+                        let keys = static_keys(ascii, ledger);
+                        render::draw_status(
+                            frame,
+                            &snapshot,
+                            render::Footer {
+                                status: None,
+                                keys: Some(keys),
+                                failure: false,
+                                repair: None,
+                            },
+                            ascii,
+                            color,
+                            help,
+                            ledger,
+                        )
+                    }
                 })
                 .map_err(|err| Error::failed(format!("cannot draw the terminal: {err}")))?;
             dirty = false;
@@ -203,6 +223,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     } else {
                         notice = None;
                     }
+                    dirty = true;
+                }
+                KeyCode::Char('g') => {
+                    // A view toggle only; it never touches the fetch or a file.
+                    ledger = !ledger;
                     dirty = true;
                 }
                 KeyCode::Char('r') => {
@@ -275,9 +300,20 @@ impl Notice {
 
 fn notice_keys(ascii: bool) -> &'static str {
     if ascii {
-        "F retry | r refresh | q quit | ? help"
+        "F retry | g ledger | r refresh | q quit | ? help"
     } else {
-        "F retry · r refresh · q quit · ? help"
+        "F retry · g ledger · r refresh · q quit · ? help"
+    }
+}
+
+/// The static tree's own key line. `--render-once` uses `render_frame`
+/// directly, so its frozen frame is unchanged.
+fn static_keys(ascii: bool, ledger: bool) -> &'static str {
+    match (ascii, ledger) {
+        (false, false) => "q quit · g ledger · ? help · r refresh",
+        (false, true) => "q quit · g tree · ? help · r refresh",
+        (true, false) => "q quit | g ledger | ? help | r refresh",
+        (true, true) => "q quit | g tree | ? help | r refresh",
     }
 }
 

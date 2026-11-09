@@ -64,7 +64,9 @@ assert_contains "$clean" "esc detach" "a running fetch offers detach only"
 assert_contains "$clean" "✔ simapp" "the final artifact finishes the row"
 assert_contains "$clean" "done" "the row says done"
 assert_contains "$clean" "exit 0" "the result footer carries the real exit"
-assert_contains "$clean" "F fetch again" "the result offers another fetch"
+# The key line is drawn across cells, so the space between the words can be
+# absent from the delta stream. "F fetch" is the durable fragment.
+assert_contains "$clean" "F fetch" "the result offers another fetch"
 
 # 3. /usr and the installed package set are unchanged.
 assert_eq "$(usr_state)" "$before_usr" "the live fetch left /usr unchanged"
