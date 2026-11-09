@@ -83,7 +83,7 @@ header context. Siblings use nom's `┌─`/`├─`/`│` branches with the ASC
 | In v1 | v2 |
 |---|---|
 | Dependency tree with prefetch badges | Dashboard |
-| Ghost install branch | Updates table and filters |
+| `install N packages` header context | Updates table and filters |
 | Live fetch tree | Caches panel |
 | Install gate overlay | Doctor panel |
 | Post-install receipt | Activity, Settings, Palette |
@@ -1150,7 +1150,7 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 ### T2. The tree
 
 - [x] Prefetch badges: cached, built, stale, partial, missing, unknown.
-- [x] Ghost install branch, counters, `Σ`, host.
+- [x] `install N packages` header context, counters, `Σ`, host.
 - [x] Pure ready/running/done reducer with diamond and two-root tests
       (`src/frontier.rs`).
 - [ ] Wire the tree to reducer observations; the ready set is a set, not a

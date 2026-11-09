@@ -7,6 +7,10 @@ Five structural explorations plus **Atlas**, the hillclimbed composite, in one
 self-contained HTML file. No build, no server, no dependency, no real commands.
 State lives in memory.
 
+Note: `tui-walkthrough.html` and `nom-study.html` are pre-T2a design snapshots.
+The implemented prefetch frame is the nom forest; see [`PROGRESS.md`](../PROGRESS.md)
+and `tests/golden/tui-prefetch-*.txt`.
+
 Open it:
 
 ```bash

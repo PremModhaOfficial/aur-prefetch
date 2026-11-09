@@ -63,7 +63,7 @@ on one axis. It is not the dependency graph.
 
 - The same tree shows the **prefetch result** before the install: cached, built,
   stale, partial, missing, unknown, with timestamps.
-- The future install is a **ghost branch** on the same tree until you start it.
+- The future install is `install N packages` header context until you start it.
 - Edges are local-only in v1. Unknown edges are `?`, display-only, never gate.
 - A failure freezes the tree and shows a repair card, not a blind retry.
 - Keyboard focus, failure lens, log, ASCII and mono modes.
@@ -92,7 +92,7 @@ is the line between a monitor and a screensaver.
 | Build finished or failed | exit code and last log line | `✔ done` / `⚠ failed` |
 | Package installed or upgraded | `pacman.log` `[ALPM] installed` / `upgraded` | `✔ installed` |
 | Last fetch and install | state file | Header ages |
-| Install plan and gates | existing `install` gate code | Ghost branch, gate overlay |
+| Install plan and gates | existing `install` gate code | Install plan context, gate overlay |
 
 The ready set is a **frontier**, not a list. Nodes whose required incoming
 edges are satisfied are ready together; a join waits for every required edge.
@@ -158,10 +158,10 @@ a `TUI.md` amendment and a sim scenario that proves the review still happened.
 
 The default screen is one dependency tree of the pending set. Before the
 install, the tree carries the prefetch result: each node says `✓ cached`,
-`◆ built`, `▲ stale`, `◔ partial`, `○ missing` or `? unknown`. The install
-branch is a ghost. During a captured fetch, the tree's live nodes update in
-place. During the attached install, the tree is a plan; after it returns, the
-same tree shows the result.
+`◆ built`, `▲ stale`, `◔ partial`, `○ missing` or `? unknown`. The
+`install N packages` total is header context. During a captured fetch, the
+tree's live nodes update in place. During the attached install, the tree is a
+plan; after it returns, the same tree shows the result.
 
 There is no separate timeline in v1. The dependency graph is the data; the tree
 view is the screen. A timeline is an optional replay view, not the default.

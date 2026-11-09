@@ -312,7 +312,7 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 ### T2. The tree
 
 - [x] Prefetch badges: cached, built, stale, partial, missing, unknown.
-- [x] Ghost install branch, counters, `Σ`, host.
+- [x] `install N packages` header context, counters, `Σ`, host.
 - [x] Pure ready/running/done reducer with diamond and two-root tests
       (`src/frontier.rs`).
 - [ ] Wire the tree to reducer observations; parallel roots are sets, not a

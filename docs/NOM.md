@@ -259,10 +259,13 @@ These claims are consistent with the capture but not proven by the source:
 
 ## Gap table: nom versus aur-prefetch
 
-Ours is the T1/T2 prefetch frame in
-`tests/golden/tui-prefetch-120x40.txt` and `src/tui/render.rs`.
+The right column is the pre-T2a T1/T2 prefetch frame in
+`tests/golden/tui-prefetch-120x40.txt` and `src/tui/render.rs`. T2a has since
+landed the nom forest (orientation, edges and the no-duplicate rule), so read
+this table as the measured baseline, not the current frame. The T2a note under
+step 1 records what changed.
 
-| Aspect | nom (measured) | aur-prefetch (current) | Verdict |
+| Aspect | nom (measured) | aur-prefetch (pre-T2a) | Verdict |
 |---|---|---|---|
 | Orientation | Bottom-up. Goal is the last row; dependencies above. Frame 0456 rows 2-14. | Top-down `▾ install` root followed by a sorted list. Golden lines 3-7. | Differ. Adopt bottom-up for the tree. |
 | Edges | One node per derivation, deduped by `seen_ids`, children are direct dependencies. | No edges. `packages.sort_by(artifact.rank(), name)` at `render.rs:241`. | Differ. Adopt the tree model. |
