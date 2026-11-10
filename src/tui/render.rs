@@ -763,18 +763,20 @@ fn draw_with(
             gates.len() as u16 + 1
         }
     });
-    let body_height = chunks[1].height;
-    // Summary first: a frame without it cannot be read. Then the gates, capped
-    // so they never take more than half of what is left. The tree gets the
-    // remainder, and the bottom-up fill keeps the roots and the goal.
-    let after_summary = body_height.saturating_sub(1);
-    let gate_cap = if gates.is_some_and(|gates| !gates.is_empty()) {
-        (after_summary / 2).min(gate_rows)
-    } else {
-        0
-    };
-    let tree_rows = after_summary.saturating_sub(gate_cap).max(1);
-    let gate_rows = gate_rows.min(gate_cap);
+    // One owner for the split, shared with the key handler in `tui::mod`, so
+    // `j`/`k` walks exactly the rows this frame draws.
+    let gate_count = gates.map_or(0, <[Gate]>::len);
+    let split = super::live::BodySplit::of(chunks[1].height, gate_count);
+    let gate_rows = u16::try_from(split.gate_rows.min(usize::from(gate_rows))).unwrap_or(0);
+    // The notes are rows too, and the window must not spend their space. This
+    // was the bug: the summary was reserved but the notes were not, so with
+    // enough rows the live path clipped every note away while the static path
+    // kept them.
+    let notes = snapshot
+        .prefetch
+        .data()
+        .map_or(0, |report| report.notes.len());
+    let tree_rows = u16::try_from(split.tree_rows.saturating_sub(notes).max(1)).unwrap_or(u16::MAX);
     let window = match (live.as_ref(), tree.as_ref()) {
         (Some(live), Some(Ok(tree))) => Some(live.window(tree, usize::from(tree_rows))),
         _ => None,
@@ -811,10 +813,20 @@ fn draw_with(
     // and a summary says how the whole run is going, so the summary wins.
     let mut body = body;
     let budget = usize::from(chunks[1].height);
+    // The last rows are the summary and the notes. They are the reason the
+    // frame can be read at all, so they are reserved before any row is cut;
+    // `truncate` from the end is what silently ate every live note.
+    let tail = snapshot
+        .prefetch
+        .data()
+        .map_or(1, |report| 1 + report.notes.len())
+        .min(body.len());
+    let keep_tail: Vec<_> = body.split_off(body.len() - tail);
     // Only a marker that belongs to a run still represented by another marker
     // may go. Dropping the last `⋮` would make the frame claim it shows
     // everything, which is the one thing a clipped frame must not do.
-    while body.len() > budget {
+    let row_budget = budget.saturating_sub(keep_tail.len());
+    while body.len() > row_budget {
         let markers: Vec<usize> = body
             .iter()
             .enumerate()
@@ -830,6 +842,8 @@ fn draw_with(
         }
         body.remove(markers[0]);
     }
+    body.truncate(row_budget);
+    body.extend(keep_tail);
     body.truncate(budget);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
@@ -1188,14 +1202,25 @@ fn prefetch_lines(
                 // The live path already windowed itself and carries its own
                 // clipped markers. The static path has no window, so it keeps
                 // the roots and prints how many rows it dropped.
-                let static_window = (live.is_none() && window.is_none())
-                    .then(|| static_window(&display, body_budget))
-                    .flatten();
-                let slots: Vec<WindowSlot> = match (window, &static_window) {
-                    (Some(window), _) => window.slots.clone(),
-                    (None, Some((_, rows))) => rows.iter().copied().map(WindowSlot::Row).collect(),
-                    (None, None) => display.iter().map(|row| WindowSlot::Row(row.id)).collect(),
+                // One rule for the static frame, in live.rs, because the key
+                // handler must name the same rows the frame draws.
+                // `static_slots` already leads with one `Clipped` marker, so
+                // the visible count is the rows it kept and the hidden count
+                // is everything else. Emitting a second `hidden_line` on top
+                // of that marker printed `⋮ N more` and a bare `⋮`.
+                let slots: Vec<WindowSlot> = match window {
+                    Some(window) => window.slots.clone(),
+                    None => super::live::static_slots(tree, body_budget),
                 };
+                let static_hidden = (live.is_none() && window.is_none())
+                    .then(|| {
+                        let kept = slots
+                            .iter()
+                            .filter(|slot| matches!(slot, WindowSlot::Row(_)))
+                            .count();
+                        display.len().saturating_sub(kept)
+                    })
+                    .filter(|hidden| *hidden > 0);
                 let geometry = progress_geometry(tree, live, &slots, ascii, width);
                 // Live rows draw a 3-cell marker, static rows a 1-cell glyph.
                 let lead = solve_lead(
@@ -1207,14 +1232,17 @@ fn prefetch_lines(
                     width,
                 );
 
-                if let Some((hidden, _)) = &static_window {
-                    lines.push(hidden_line(*hidden, width, ascii, color));
-                }
-
                 for slot in slots {
                     match slot {
                         WindowSlot::Clipped => {
-                            lines.push(clipped_line(width, ascii, color));
+                            // A static frame can count what it dropped; a live
+                            // frame only knows the run is hidden.
+                            match static_hidden {
+                                Some(hidden) => {
+                                    lines.push(hidden_line(hidden, width, ascii, color));
+                                }
+                                None => lines.push(clipped_line(width, ascii, color)),
+                            }
                         }
                         WindowSlot::Row(id) => {
                             let row = &tree.rows[id];
@@ -2026,25 +2054,7 @@ fn clipped_line(width: usize, ascii: bool, color: bool) -> Line<'static> {
     Line::styled(cell_text(marker, width, ascii), dim(color))
 }
 
-/// The rows the static frame must keep when the forest is taller than the body.
-///
-/// The display order is bottom-up, so the roots and the goal sit at the end.
-/// Keeping the tail preserves them and drops the deep children first; the
-/// count of what was dropped is printed, so a clipped frame never looks whole.
-fn static_window(display: &[&TreeRow], budget: usize) -> Option<(usize, Vec<RowId>)> {
-    if display.len() <= budget {
-        return None;
-    }
-    // One row pays for the count marker itself.
-    let keep = budget.saturating_sub(1);
-    let hidden = display.len() - keep;
-    let rows = display[display.len() - keep..]
-        .iter()
-        .map(|row| row.id)
-        .collect();
-    Some((hidden, rows))
-}
-
+/// The counted overflow row: how many rows this frame dropped.
 fn hidden_line(hidden: usize, width: usize, ascii: bool, color: bool) -> Line<'static> {
     let marker = if ascii { "  :" } else { "  ⋮" };
     let text = format!("{marker} {hidden} more");
@@ -2343,6 +2353,63 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn the_live_path_keeps_the_collection_notes() {
+        // An independent review found this: the live path reserved the summary
+        // but not the notes, so enough rows clipped every note away, exactly
+        // when a collection failure matters most. The static path already kept
+        // them, so the two disagreed.
+        let mut snapshot = prefetch_snapshot_with(
+            (0..40)
+                .map(|index| {
+                    live_package(
+                        &format!("app-{index:03}"),
+                        Repo::Extra,
+                        ArtifactState::Missing,
+                        &[],
+                    )
+                })
+                .collect(),
+        );
+        if let Some(report) = snapshot.prefetch.data() {
+            let mut report = report.clone();
+            report.notes = vec![
+                "aur updates unavailable: yay missing".to_string(),
+                "package details unavailable".to_string(),
+            ];
+            snapshot.prefetch = Section::ready(report, at());
+        }
+        let tree = tree_of(&snapshot);
+        let run = LiveRun::plan(&tree, live_at()).expect("plan seeds");
+        for (width, height) in [(120u16, 40u16), (80, 24)] {
+            let frame = render_live_frame_status(
+                &snapshot,
+                &run,
+                Footer::default(),
+                width,
+                height,
+                false,
+                false,
+                false,
+                false,
+                None,
+                Selection::none(),
+            );
+            assert!(
+                frame.contains("aur updates unavailable"),
+                "the live note survives at {width}x{height}:\n{frame}"
+            );
+            assert!(
+                frame.contains("package details unavailable"),
+                "every note survives at {width}x{height}:\n{frame}"
+            );
+            assert!(
+                frame.contains("done"),
+                "the summary survives too at {width}x{height}:\n{frame}"
+            );
+        }
     }
 
     #[test]

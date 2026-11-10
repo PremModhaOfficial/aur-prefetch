@@ -354,19 +354,22 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                         // renderer uses when there is no window.
                         if let Some(report) = snapshot.prefetch.data() {
                             if let Ok(tree) = Tree::build(&report.packages) {
-                                // header(2) + footer(2); the split the renderer uses.
+                                // Ask the renderer's own split, so the cursor
+                                // can only ever name a row that is drawn.
                                 let (_, height) = terminal::size().unwrap_or((80, 24));
-                                let budget = usize::from(height.saturating_sub(4)).max(1);
+                                let body = height.saturating_sub(4).max(1);
+                                let gates = session.as_ref().map_or(0, |live| live.gates().len());
+                                let split = live::BodySplit::of(body, gates);
                                 let slots: Vec<live::WindowSlot> = match session.as_ref() {
                                     Some(live) => {
                                         let view = live::LiveView::build(&tree, live.live());
-                                        view.window(&tree, budget).slots
+                                        view.window(&tree, split.tree_rows).slots
                                     }
-                                    None => tree
-                                        .display_rows()
-                                        .iter()
-                                        .map(|row| live::WindowSlot::Row(row.id))
-                                        .collect(),
+                                    None => {
+                                        // The static frame keeps the tail of the
+                                        // display order, exactly as it draws.
+                                        live::static_slots(&tree, split.tree_rows)
+                                    }
                                 };
                                 let delta = if key.code == KeyCode::Char('j') {
                                     1

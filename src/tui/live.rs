@@ -615,11 +615,9 @@ impl LiveView {
             }
         }
 
-        // A `⋮` marker is a slot too. Capping the selected rows at `budget`
-        // and then adding markers made the block always larger than its
-        // budget, which pushed the summary off the bottom of short frames.
-        // Removing a selected row can only merge two hidden runs, so the slot
-        // count strictly falls and this terminates.
+        // A `⋮` marker is a slot too, so the block must fit `budget` with its
+        // markers. Removing a selected row can only merge two hidden runs, so
+        // the slot count strictly falls and this terminates.
         let mut slots = Self::slots_for(&display, &selected);
         while slots.len() > budget {
             let Some(victim) = selected
@@ -630,6 +628,27 @@ impl LiveView {
                 break;
             };
             selected.remove(&victim);
+            slots = Self::slots_for(&display, &selected);
+        }
+
+        // `budget` is a ROW budget: it bounds the rows this window may keep.
+        // Clipped markers are the frame's way of admitting what it hid, and
+        // they are the caller's to pay for, not the rows'. The caller reserves
+        // one line for the marker (`BodySplit::tree_rows` already does), so a
+        // window never has to choose between a failed row and an admission.
+        //
+        // Only if the mandatory rows alone exceed the budget does anything
+        // real go, and then the least urgent goes first.
+        if mandatory.len() > budget {
+            let mut ranked: Vec<usize> = mandatory.iter().copied().collect();
+            ranked.sort_by_key(
+                |index| match self.row(display[*index].id).map(|row| row.state) {
+                    Some(LiveState::Failed) => 0,
+                    Some(LiveState::Running) => 1,
+                    _ => 2,
+                },
+            );
+            selected = ranked.into_iter().take(budget).collect();
             slots = Self::slots_for(&display, &selected);
         }
 
@@ -709,7 +728,11 @@ impl Selection {
             .and_then(|row| rows.iter().position(|id| *id == row));
         let next = match current {
             Some(index) => {
-                let moved = index as isize + delta;
+                // `moved` is public and its contract admits any `isize`, so the
+                // addition must not be able to overflow.
+                let moved = isize::try_from(index)
+                    .unwrap_or(isize::MAX)
+                    .saturating_add(delta);
                 moved.clamp(0, rows.len() as isize - 1) as usize
             }
             None if delta < 0 => rows.len() - 1,
@@ -727,6 +750,55 @@ impl Selection {
 pub enum WindowSlot {
     Row(RowId),
     Clipped,
+}
+
+/// The slots a static frame draws when it has no live window.
+///
+/// The bottom-up order puts the roots and the goal at the tail, so a clipped
+/// static frame keeps that tail and reports the count it dropped. The key
+/// handler uses this too, which is why it lives beside `Window` rather than in
+/// the renderer: both sides must name the same rows.
+pub fn static_slots(tree: &Tree, budget: usize) -> Vec<WindowSlot> {
+    let display = tree.display_rows();
+    if display.len() <= budget {
+        return display.iter().map(|row| WindowSlot::Row(row.id)).collect();
+    }
+    let keep = budget.saturating_sub(1);
+    let mut slots = vec![WindowSlot::Clipped];
+    slots.extend(
+        display[display.len() - keep..]
+            .iter()
+            .map(|row| WindowSlot::Row(row.id)),
+    );
+    slots
+}
+
+/// How a body of `height` rows is shared out.
+///
+/// One function owns the arithmetic so the renderer and the key handler cannot
+/// disagree about which rows are on screen. They did: `j`/`k` assumed
+/// `height - 4` while the renderer subtracted the footer, the summary row and
+/// the gate block, so the cursor could move to a row that was never drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BodySplit {
+    /// Rows the gate block may draw, title and overflow row included.
+    pub gate_rows: usize,
+    /// Rows the tree may draw, clipped markers included.
+    pub tree_rows: usize,
+}
+
+impl BodySplit {
+    /// `height` is the body chunk. `gate_count` is how many gates want to run;
+    /// zero means there is no gate block at all.
+    pub fn of(height: u16, gate_count: usize) -> Self {
+        let after_summary = usize::from(height).saturating_sub(1);
+        let wanted = if gate_count == 0 { 0 } else { gate_count + 1 };
+        let gate_rows = (after_summary / 2).min(wanted);
+        Self {
+            gate_rows,
+            tree_rows: after_summary.saturating_sub(gate_rows).max(1),
+        }
+    }
 }
 
 /// The relevant live window plus the root counts the header needs.
@@ -1587,6 +1659,56 @@ mod tests {
             4,
             "no row appears twice"
         );
+    }
+
+    #[test]
+    fn a_frame_with_more_mandatory_rows_than_slots_still_fits_its_budget() {
+        // An independent review found this: one library fails, its dependents
+        // become Blocked, and Blocked is mandatory. With more of them than the
+        // frame holds, the reclaim loop used to give up and return a window
+        // larger than its budget, which pushed the summary off the frame.
+        let mut packages = vec![package(
+            "libglibc",
+            Repo::Extra,
+            ArtifactState::Missing,
+            &[],
+        )];
+        for index in 0..40 {
+            packages.push(package(
+                &format!("app-{index:03}"),
+                Repo::Extra,
+                ArtifactState::Missing,
+                &["libglibc"],
+            ));
+        }
+        let tree = Tree::build(&packages).expect("forest");
+        let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
+        run.observe(
+            "libglibc",
+            Observed::Started,
+            at(),
+            Some(Activity::Build),
+            "started",
+        )
+        .expect("starts");
+        run.observe(
+            "libglibc",
+            Observed::Failed,
+            at() + Duration::from_secs(2),
+            None,
+            "exit 2",
+        )
+        .expect("freezes");
+
+        let view = LiveView::build(&tree, &run);
+        for budget in 1..=30usize {
+            let window = view.window(&tree, budget);
+            assert!(
+                window.rows().count() <= budget,
+                "budget {budget} returned {} rows",
+                window.rows().count()
+            );
+        }
     }
 
     #[test]
