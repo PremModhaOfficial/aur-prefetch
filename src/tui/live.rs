@@ -688,22 +688,27 @@ impl LiveView {
 /// frame's slot list, so it can never point at a clipped marker or at a row
 /// that is not on screen. An offset of `None` means nothing is selected, and
 /// the frame draws no cursor at all.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Selection {
-    row: Option<RowId>,
+    /// The package name, not a `RowId`. A refresh rebuilds `Tree::rows` and
+    /// every positional id can name a different package, so a cursor keyed by
+    /// id silently jumps to whatever now occupies that index. A name survives
+    /// the rebuild, and a name that is no longer pending simply clears.
+    node: Option<String>,
 }
 
 impl Selection {
     pub fn none() -> Self {
-        Self { row: None }
+        Self { node: None }
     }
 
-    pub fn row(&self) -> Option<RowId> {
-        self.row
+    /// The selected package's name, when there is one.
+    pub fn node(&self) -> Option<&str> {
+        self.node.as_deref()
     }
 
-    pub fn is_selected(&self, row: RowId) -> bool {
-        self.row == Some(row)
+    pub fn is_selected(&self, name: &str) -> bool {
+        self.node.as_deref() == Some(name)
     }
 
     /// Move the cursor by `delta` rows through the slots on screen.
@@ -712,20 +717,21 @@ impl Selection {
     /// selection, a downward move starts at the first row and an upward move
     /// at the last, so the first `j` always shows a cursor. The cursor is
     /// bounded by the frame, never by the whole forest.
-    pub fn moved(self, slots: &[WindowSlot], delta: isize) -> Self {
-        let rows: Vec<RowId> = slots
+    pub fn moved(self, tree: &Tree, slots: &[WindowSlot], delta: isize) -> Self {
+        let names: Vec<&str> = slots
             .iter()
             .filter_map(|slot| match slot {
-                WindowSlot::Row(id) => Some(*id),
+                WindowSlot::Row(id) => tree.rows.get(*id).map(|row| row.name.as_str()),
                 WindowSlot::Clipped => None,
             })
             .collect();
-        if rows.is_empty() {
+        if names.is_empty() {
             return Self::none();
         }
         let current = self
-            .row
-            .and_then(|row| rows.iter().position(|id| *id == row));
+            .node
+            .as_deref()
+            .and_then(|node| names.iter().position(|name| *name == node));
         let next = match current {
             Some(index) => {
                 // `moved` is public and its contract admits any `isize`, so the
@@ -733,13 +739,13 @@ impl Selection {
                 let moved = isize::try_from(index)
                     .unwrap_or(isize::MAX)
                     .saturating_add(delta);
-                moved.clamp(0, rows.len() as isize - 1) as usize
+                moved.clamp(0, names.len() as isize - 1) as usize
             }
-            None if delta < 0 => rows.len() - 1,
+            None if delta < 0 => names.len() - 1,
             None => 0,
         };
         Self {
-            row: Some(rows[next]),
+            node: Some(names[next].to_string()),
         }
     }
 }
@@ -1037,43 +1043,122 @@ mod tests {
 
     #[test]
     fn the_cursor_moves_over_rows_and_skips_clipped_markers() {
+        // Names, not ids: a refresh can renumber every row, so identity must
+        // survive a rebuild. The tree here gives ids 0..3 the names below.
+        let tree = Tree::build(&[
+            package("alpha", Repo::Extra, ArtifactState::Missing, &[]),
+            package("beta", Repo::Extra, ArtifactState::Missing, &[]),
+            package("gamma", Repo::Extra, ArtifactState::Missing, &[]),
+            package("delta", Repo::Extra, ArtifactState::Missing, &[]),
+        ])
+        .expect("forest");
+        // The forest sorts by name, so read the real mapping rather than
+        // assuming the declaration order.
+        let id_of = |name: &str| {
+            tree.rows
+                .iter()
+                .find(|row| row.name == name)
+                .expect("row")
+                .id
+        };
+        let (alpha, gamma, delta) = (id_of("alpha"), id_of("gamma"), id_of("delta"));
         let slots = [
-            WindowSlot::Row(4),
+            WindowSlot::Row(alpha),
             WindowSlot::Clipped,
-            WindowSlot::Row(7),
-            WindowSlot::Row(9),
+            WindowSlot::Row(gamma),
+            WindowSlot::Row(delta),
         ];
+        let at = |selection: &Selection| selection.node().map(str::to_string);
+
         // Nothing selected: down starts at the top, up starts at the bottom.
-        assert_eq!(Selection::none().moved(&slots, 1).row(), Some(4));
-        assert_eq!(Selection::none().moved(&slots, -1).row(), Some(9));
+        assert_eq!(
+            at(&Selection::none().moved(&tree, &slots, 1)),
+            Some("alpha".to_string())
+        );
+        assert_eq!(
+            at(&Selection::none().moved(&tree, &slots, -1)),
+            Some("delta".to_string())
+        );
 
         // Movement follows the slots, so a marker is never landed on.
-        let at_four = Selection::none().moved(&slots, 1);
-        assert_eq!(at_four.moved(&slots, 1).row(), Some(7), "skips the marker");
+        let first = Selection::none().moved(&tree, &slots, 1);
         assert_eq!(
-            at_four.moved(&slots, -1).row(),
-            Some(4),
+            at(&first.clone().moved(&tree, &slots, 1)),
+            Some("gamma".to_string()),
+            "skips"
+        );
+        assert_eq!(
+            at(&first.clone().moved(&tree, &slots, -1)),
+            Some("alpha".to_string()),
             "clamped at the top"
         );
 
         // The ends clamp instead of wrapping or emptying the selection.
-        let last = Selection::none().moved(&slots, -1);
+        let last = Selection::none().moved(&tree, &slots, -1);
         assert_eq!(
-            last.moved(&slots, 1).row(),
-            Some(9),
+            at(&last.moved(&tree, &slots, 1)),
+            Some("delta".to_string()),
             "clamped at the bottom"
         );
 
         // A frame with nothing selectable clears the cursor.
         assert_eq!(
-            Selection::none().moved(&[WindowSlot::Clipped], 1).row(),
+            at(&Selection::none().moved(&tree, &[WindowSlot::Clipped], 1)),
             None
         );
 
-        // A cursor whose row fell out of the window restarts at the edge
+        // A cursor whose node is no longer on screen restarts at the edge
         // rather than pointing at nothing.
-        let stale = Selection { row: Some(99) };
-        assert_eq!(stale.moved(&slots, 1).row(), Some(4));
+        let stale = Selection {
+            node: Some("gone".to_string()),
+        };
+        assert_eq!(
+            at(&stale.moved(&tree, &slots, 1)),
+            Some("alpha".to_string())
+        );
+    }
+
+    #[test]
+    fn the_cursor_keeps_its_package_when_a_refresh_renumbers_rows() {
+        // The bug an independent review found: a cursor stored as a RowId
+        // names a different package after a refresh, because ids are insertion
+        // order. A name survives, and the cursor still points at the same
+        // package when the list shifts underneath it.
+        let before = Tree::build(&[
+            package("a", Repo::Extra, ArtifactState::Missing, &[]),
+            package("b", Repo::Extra, ArtifactState::Missing, &[]),
+            package("c", Repo::Extra, ArtifactState::Missing, &[]),
+        ])
+        .expect("forest");
+        let slots_before: Vec<WindowSlot> = (0..3).map(WindowSlot::Row).collect();
+        let mut selection = Selection::none();
+        for _ in 0..3 {
+            selection = selection.moved(&before, &slots_before, 1);
+        }
+        assert_eq!(selection.node(), Some("c"));
+
+        // `a` is gone; the ids of b and c shift down by one.
+        let after = Tree::build(&[
+            package("b", Repo::Extra, ArtifactState::Missing, &[]),
+            package("c", Repo::Extra, ArtifactState::Missing, &[]),
+        ])
+        .expect("forest");
+        let slots_after: Vec<WindowSlot> = (0..2).map(WindowSlot::Row).collect();
+
+        // The cursor still names `c`, which is now id 1, not id 2.
+        assert_eq!(selection.node(), Some("c"));
+        assert!(
+            selection.is_selected(&after.rows[1].name),
+            "the cursor follows the package, not the index"
+        );
+        assert!(
+            !selection.is_selected(&after.rows[0].name),
+            "it does not slide onto whatever now holds its old index"
+        );
+
+        // And it still moves from the right place.
+        let up = selection.clone().moved(&after, &slots_after, -1);
+        assert_eq!(up.node(), Some("b"), "one step up from c is b");
     }
 
     #[test]

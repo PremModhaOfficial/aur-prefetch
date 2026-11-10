@@ -146,7 +146,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             help,
                             ledger,
                             Some(live.gates()),
-                            selection,
+                            selection.clone(),
                         ),
                         (None, Some(notice)) => render::draw_status(
                             frame,
@@ -162,7 +162,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             help,
                             ledger,
                             Some(&notice.gates),
-                            selection,
+                            selection.clone(),
                         ),
                         (None, None) => {
                             let keys = static_keys(ascii, ledger);
@@ -180,7 +180,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 help,
                                 ledger,
                                 None,
-                                selection,
+                                selection.clone(),
                             )
                         }
                     }
@@ -376,7 +376,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 } else {
                                     -1
                                 };
-                                selection = selection.moved(&slots, delta);
+                                selection = selection.moved(&tree, &slots, delta);
                                 dirty = true;
                             }
                         }

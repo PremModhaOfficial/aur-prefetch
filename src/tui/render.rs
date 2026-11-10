@@ -1265,7 +1265,7 @@ fn prefetch_lines(
                                                     color,
                                                     geometry,
                                                     spinner,
-                                                    selection.is_selected(id),
+                                                    selection.is_selected(&row.name),
                                                 ));
                                             }
                                             _ => {
@@ -1278,7 +1278,7 @@ fn prefetch_lines(
                                                     color,
                                                     lead,
                                                     spinner,
-                                                    selection.is_selected(id),
+                                                    selection.is_selected(&row.name),
                                                 ));
                                             }
                                         }
@@ -1294,7 +1294,7 @@ fn prefetch_lines(
                                 width,
                                 color,
                                 lead,
-                                selection.is_selected(id),
+                                selection.is_selected(&row.name),
                             ));
                         }
                     }
@@ -3103,8 +3103,11 @@ mod tests {
             false,
             false,
             None,
-            super::super::live::Selection::none()
-                .moved(&[super::super::live::WindowSlot::Row(target)], 1),
+            super::super::live::Selection::none().moved(
+                &tree,
+                &[super::super::live::WindowSlot::Row(target)],
+                1,
+            ),
         );
         // The mark is visible in a plain text dump, which is how this project
         // reviews frames.
