@@ -2685,6 +2685,49 @@ mod tests {
             "the full-feature frame is stable"
         );
 
+        // The same fixture at 80x24. This is the size that decides what a
+        // narrow frame may drop: the markers, the state words and the repair
+        // card must survive, and nothing may be truncated silently.
+        let narrow = render_live_frame_status(
+            &snapshot,
+            &run,
+            showcase_footer(&card, false),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+        );
+        assert_eq!(
+            narrow,
+            include_str!("../../tests/golden/tui-showcase-80x24.txt"),
+            "the narrow full-feature frame is stable"
+        );
+        for needle in ["[|]", "[√]", "[×]", "repair: ", "no state written"] {
+            assert!(
+                narrow.contains(needle),
+                "{needle:?} must survive at 80x24:\n{narrow}"
+            );
+        }
+        // The viewport contract is explicit: running, failed and blocked rows
+        // are always kept; planned rows are not guaranteed at this size, so a
+        // `[ ]` is not asserted. The clipped marker and the root count are what
+        // prove the frame is honest about what it hid.
+        assert!(
+            narrow.contains('⋮'),
+            "hidden runs are marked, never silent:\n{narrow}"
+        );
+        assert!(
+            narrow.contains("showing 3 of 5 roots"),
+            "the header reports the roots it kept:\n{narrow}"
+        );
+        assert!(
+            !narrow.contains('\u{fffd}'),
+            "no replacement character at 80x24:\n{narrow}"
+        );
+
         // Every state the view can draw, in one frame.
         for needle in [
             "[ ]",         // planned
@@ -4499,6 +4542,38 @@ mod tests {
             ),
         )
         .expect("write showcase 120x40");
+        std::fs::write(
+            dir.join("tui-showcase-80x24.txt"),
+            render_live_frame_status(
+                &showcase_snapshot(),
+                &showcase_run(),
+                showcase_footer(&showcase_card(), false),
+                80,
+                24,
+                false,
+                false,
+                false,
+                false,
+                Some(&fetch_gates()),
+            ),
+        )
+        .expect("write showcase 80x24");
+        std::fs::write(
+            dir.join("tui-showcase-ascii-80x24.txt"),
+            render_live_frame_status(
+                &showcase_snapshot(),
+                &showcase_run(),
+                showcase_footer(&showcase_card(), true),
+                80,
+                24,
+                true,
+                false,
+                false,
+                false,
+                Some(&fetch_gates()),
+            ),
+        )
+        .expect("write showcase ascii 80x24");
         std::fs::write(
             dir.join("tui-showcase-ascii-120x40.txt"),
             render_live_frame_status(
