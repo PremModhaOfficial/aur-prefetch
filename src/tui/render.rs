@@ -26,6 +26,12 @@ use super::live::{
 use super::sanitize::{cell_text, display_width};
 use super::tree::{RowId, Tree, TreeError, TreeRow, TreeRowKind};
 
+/// Below this the frame is a size notice, not a body. `plan_frame` returns no
+/// slots there so the key handler cannot move a cursor over a frame that is
+/// not on screen.
+const MIN_WIDTH: u16 = 40;
+const MIN_HEIGHT: u16 = 12;
+
 /// The ANSI-16 semantic palette. Color is an accent on top of a glyph and a
 /// word; it is never the only signal.
 const PLANNED: Color = Color::Blue;
@@ -738,6 +744,19 @@ pub fn plan_frame(
     color: bool,
     gates: Option<&[Gate]>,
 ) -> FramePlan {
+    if width < MIN_WIDTH || height < MIN_HEIGHT {
+        return FramePlan {
+            split: super::live::BodySplit {
+                gate_rows: 0,
+                tree_rows: 0,
+            },
+            slots: Vec::new(),
+            window: None,
+            body_height: 0,
+            footer: Vec::new(),
+        };
+    }
+
     let footer = footer_lines(footer, width as usize, ascii, color);
     let footer_height = (footer.len() as u16).max(2);
     // header(2) + body + footer, exactly as `draw_with` lays it out.
@@ -800,7 +819,7 @@ fn draw_with(
     selection: Selection,
 ) {
     let area = frame.area();
-    if area.width < 40 || area.height < 12 {
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         let message = if ascii {
             "terminal too small (40x12 minimum)"
         } else {
@@ -2598,6 +2617,32 @@ mod tests {
         );
         assert!(frame.contains("done"), "the summary survives:\n{frame}");
         assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
+    }
+
+    #[test]
+    fn below_the_size_floor_the_plan_has_no_rows() {
+        // `draw_with` draws a size notice below 40x12. Planning slots there
+        // let the key handler walk a cursor over a frame that is not drawn.
+        let snapshot = showcase_snapshot();
+        let run = showcase_run();
+        for (width, height) in [(39u16, 24u16), (80, 11)] {
+            let plan = super::plan_frame(
+                &snapshot,
+                Some(&run),
+                Footer::default(),
+                width,
+                height,
+                false,
+                false,
+                None,
+            );
+            assert!(
+                plan.slots.is_empty(),
+                "{width}x{height} planned {:?}",
+                plan.slots
+            );
+            assert!(plan.window.is_none(), "{width}x{height} built a window");
+        }
     }
 
     #[test]
