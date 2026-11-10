@@ -1,9 +1,8 @@
 aur-prefetch · Fetch · 200 packages · live
-Dependency Graph showing 31 of 197 roots:                                                    install 200 packages · live
+Dependency Graph showing 30 of 197 roots:                                                    install 200 packages · live
   ⋮
 ┌─ [|] z-mid 2.0.0-1                        downloading · ⏱ 2s                                                   1.1 MiB
   ⋮
-[ ] pkg-029 2.0.0-1                         planned                                                              1.1 MiB
 [ ] pkg-028 2.0.0-1                         planned                                                              1.1 MiB
 [ ] pkg-027 2.0.0-1                         planned                                                              1.1 MiB
 [ ] pkg-026 2.0.0-1                         planned                                                              1.1 MiB
@@ -36,5 +35,6 @@ Dependency Graph showing 31 of 197 roots:                                       
 ┌─ [×] a-base 2.0.0-1                       failed · exit 2 · ⏱ 2s                                               1.1 MiB
 [×] a-top 2.0.0-1                           blocked                                                              1.1 MiB
 1 done · 1 running · 196 waiting · 1 failed · frozen · ⏱ 2s · mirror.example.org
+
 q quit · ? help · r refresh
 

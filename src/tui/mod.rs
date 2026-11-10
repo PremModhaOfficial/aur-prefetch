@@ -359,10 +359,24 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 // gates. Anything computed here independently
                                 // has been wrong twice.
                                 let (width, height) = terminal::size().unwrap_or((80, 24));
+                                // Mirror what `draw_with` actually draws: a
+                                // notice frame shows `notice.gates` and its
+                                // status/keys, not an empty footer. Passing
+                                // `&[]` here planned 9 rows while the frame
+                                // drew 3.
                                 let (footer, gates): (render::Footer<'_>, &[Gate]) =
-                                    match session.as_ref() {
-                                        Some(live) => (live.footer(ascii), live.gates()),
-                                        None => (render::Footer::default(), &[]),
+                                    match (session.as_ref(), notice.as_ref()) {
+                                        (Some(live), _) => (live.footer(ascii), live.gates()),
+                                        (None, Some(notice)) => (
+                                            render::Footer {
+                                                status: Some(&notice.status),
+                                                keys: Some(notice.keys(ascii)),
+                                                failure: notice.failure,
+                                                repair: None,
+                                            },
+                                            notice.gates.as_slice(),
+                                        ),
+                                        (None, None) => (render::Footer::default(), &[]),
                                     };
                                 let plan = render::plan_frame(
                                     &snapshot,

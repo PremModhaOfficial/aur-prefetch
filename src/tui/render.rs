@@ -749,12 +749,16 @@ pub fn plan_frame(
         (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
         _ => None,
     };
-    // The notes are rows in the same block and are reserved here, once.
+    // The summary and the notes are rows in the same block and are reserved
+    // here, once. Reserving only the notes left the plan one row longer than
+    // the frame on the static path, so the cursor could still land on a row
+    // that was never drawn.
     let notes = snapshot
         .prefetch
         .data()
         .map_or(0, |report| report.notes.len());
-    let tree_rows = split.tree_rows.saturating_sub(notes).max(1);
+    let tail = 1 + notes;
+    let tree_rows = split.tree_rows.saturating_sub(tail).max(1);
 
     let (window, slots) = match (&live, &tree) {
         (Some(live), Some(Ok(tree))) => {
@@ -885,7 +889,13 @@ fn draw_with(
             .filter(|(_, line)| {
                 let text = line.to_string();
                 let trimmed = text.trim_start();
-                trimmed.starts_with('⋮') || trimmed.starts_with(':')
+                // Only a bare clip marker is droppable. The gate block's own
+                // `⋮ N more gate(s)` row is content: dropping it made a frame
+                // show three gates and claim it had shown them all.
+                if trimmed.contains("gate") {
+                    return false;
+                }
+                trimmed == "⋮" || trimmed == ":" || trimmed == "  ⋮" || trimmed == "  :"
             })
             .map(|(index, _)| index)
             .collect();
@@ -2405,6 +2415,73 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn the_static_plan_also_matches_its_frame() {
+        // The live path passed while the static path still planned one row too
+        // many: `plan_frame` reserved the notes but not the summary that
+        // `prefetch_lines` also subtracts. Before a fetch — the first screen a
+        // user sees — the first `j` selected a row that was never drawn.
+        for (count, width, height, notes) in [
+            (8usize, 40u16, 15u16, 0usize),
+            (8, 40, 15, 3),
+            (19, 80, 24, 0),
+            (19, 80, 24, 1),
+            (22, 80, 24, 0),
+            (40, 80, 24, 2),
+            (40, 120, 40, 0),
+        ] {
+            let mut snapshot = prefetch_snapshot_with(
+                (0..count)
+                    .map(|index| {
+                        live_package(
+                            &format!("pkg-{index:04}"),
+                            Repo::Extra,
+                            ArtifactState::Missing,
+                            &[],
+                        )
+                    })
+                    .collect(),
+            );
+            if notes > 0 {
+                if let Some(report) = snapshot.prefetch.data() {
+                    let mut report = report.clone();
+                    report.notes = (0..notes).map(|i| format!("note {i}")).collect();
+                    snapshot.prefetch = Section::ready(report, at());
+                }
+            }
+            let footer = Footer::default();
+            let plan =
+                super::plan_frame(&snapshot, None, footer, width, height, false, false, None);
+            let frame = super::render_frame_status(
+                &snapshot,
+                footer,
+                width,
+                height,
+                false,
+                false,
+                false,
+                false,
+                None,
+                Selection::none(),
+            );
+            let tree = tree_of(&snapshot);
+            for slot in &plan.slots {
+                if let super::super::live::WindowSlot::Row(id) = slot {
+                    let name = &tree.rows[*id].name;
+                    assert!(
+                        frame.contains(name.as_str()),
+                        "{count} packages, {width}x{height}, {notes} notes: \
+                         planned row {name} is not drawn:\n{frame}"
+                    );
+                }
+            }
+            assert!(
+                frame.lines().count() <= usize::from(height),
+                "{count} packages at {width}x{height} overflowed"
+            );
+        }
     }
 
     #[test]
@@ -4419,7 +4496,7 @@ mod tests {
 
         let wide = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
         assert!(
-            wide.contains("Dependency Graph showing 31 of 197 roots:"),
+            wide.contains("Dependency Graph showing 30 of 197 roots:"),
             "the header names the clipped root count\n{wide}"
         );
         assert!(wide.contains("⋮"), "the clipped marker is shown\n{wide}");
@@ -4444,7 +4521,7 @@ mod tests {
 
         let compact = render_live_frame(&snapshot, &run, 80, 24, false, false, false);
         assert!(
-            compact.contains("Dependency Graph showing 15 of 197 roots:"),
+            compact.contains("Dependency Graph showing 14 of 197 roots:"),
             "the compact header names the clipped root count\n{compact}"
         );
         assert!(
