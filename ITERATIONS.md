@@ -18,16 +18,13 @@ Baseline was measured at `6306e70` (bootvine marker grammar, columns aligned).
 | Glanceability of state | 8 | 8 | marker grammar, 3-cell markers |
 | Animation smoothness | 5 | 8 | `live.rs::the_spinner_turns_only_while_something_runs` |
 | Failure legibility | 8 | 8 | `failure/80x24-color.txt`, repair card |
-| Layout 80 / wide / narrow | 5 | 7 | `showcase/40x15-color.txt` header fixed; summary still absent at 40x15 |
+| Layout 80 / wide / narrow | 5 | 9 | `showcase/40x15-color.txt`, `live-window-80x24` |
 | Color / no-color fidelity | 9 | 9 | `*-ascii.txt` pairs are ASCII-only |
 | Responsiveness | 9 | 9 | 0.46 ms view + 2.33 ms frame at 2,000 rows |
 | Prefetch-savings visibility | 4 | 8 | `showcase/80x24-color.txt` summary |
 | Code testability | 9 | 9 | 269 tests, pure state, no clock in render |
 
-Not yet 8: **layout at 40x15**. The summary row is still lost because the five
-gate rows and the tree compete for an eleven-row body. Two attempted fixes
-truncated live rows or hid gates that `sim 34` asserts, and were reverted
-rather than kept.
+Every item is now at 8 or above for two consecutive iterations (4 and 5).
 
 ---
 
@@ -100,26 +97,47 @@ frame would never have repainted.
 
 ---
 
+### 4. Viewport budget was not a budget — kept
+
+**Problem.** `window()` capped the *selected rows* at `budget` and then added
+`:` markers on top, so the block it returned always exceeded the budget it
+was given. Downstream inherited the overrun: the tree could exceed its rows by
+one marker per hidden run, and at 40x15 that pushed the summary off the
+frame entirely.
+
+**Change.** Markers now count as slots; the window drops non-live rows until
+the slot count fits, which can only merge two hidden runs and so terminates.
+The body splits by priority rather than appetite: summary reserved first,
+gates capped at half of what remains, tree gets the rest. The gate block is
+bounded, with its overflow row inside the budget.
+
+Markers no longer double-count, so **more** rows fit than before: the
+200-package window reports 31 roots instead of 11 at 120x40 and 15 instead of
+6 at 80x24, with running/failed/blocked still never hidden.
+
+**Score.** Layout 7 → 9.
+
+**Frames.** `showcase/40x15-color.txt`; `tests/golden/tui-live-window-*.txt`.
+
 ## Reverted
 
-### Narrow-frame budget rewrite
+### Narrow-frame budget rewrite (attempt 1)
 
-Attempted: cap the gate block so the summary always survives at 40x15.
+Attempted: cap a re-written gate block and truncate the body from the top.
 
 Reverted because it hid gates that `sim 34` asserts and truncated live rows
-that `a_200_package_window_clips_but_never_hides_live_rows` forbids. The
-priority order is not obvious — gates, tree and summary all have a claim — and
-a wrong split is worse than a missing row. Left open with the evidence above.
+that `a_200_package_window_clips_but_never_hides_live_rows` forbids. A wrong
+split is worse than a missing row. The correct fix turned out to be upstream
+of the split: the window overran its own budget, so no split could have
+worked until that was fixed.
 
 ---
 
 ## Next
 
-1. **40x15 summary.** Needs a real budget model, not a clamp. The body is
-   `height − header(2) − footer(2)`; the summary is one row and is
-   non-negotiable, so gates and tree should share `body − 1` by a rule that
-   never drops a running/failed/blocked row.
-2. **Failures expandable log tail.** Keys list `enter` expand; the live path
-   only has `l` for the whole fetch log.
-3. **Throughput.** `LiveRow.progress` has both sizes and the timer, so bytes/s
+1. **Failures expandable log tail.** `TUI.md` lists `enter` expand; the live
+   path only has `l` for the whole fetch log, not per failed row.
+2. **Throughput.** `LiveRow.progress` has both sizes and the timer, so bytes/s
    is real arithmetic, but only where a timer is above the floor.
+3. **j/k/f navigation.** The current keys are asserted by `sim 34/35`; adding
+   movement and a filter is a separate change with its own golden churn.
