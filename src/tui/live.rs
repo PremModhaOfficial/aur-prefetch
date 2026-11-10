@@ -111,6 +111,41 @@ impl Waiting {
         self.builds == 0 && self.downloads == 0 && self.planned == 0
     }
 
+    /// One prerequisite's contribution. A running node with no observed
+    /// activity contributes nothing, matching the closure scan this replaces.
+    fn from_state(state: NodeState, activity: Option<Activity>) -> Self {
+        match state {
+            NodeState::Pending | NodeState::Ready => Self {
+                planned: 1,
+                ..Self::default()
+            },
+            NodeState::Running => match activity {
+                Some(Activity::Build) => Self {
+                    builds: 1,
+                    ..Self::default()
+                },
+                Some(Activity::Download) => Self {
+                    downloads: 1,
+                    ..Self::default()
+                },
+                None => Self::default(),
+            },
+            _ => Self::default(),
+        }
+    }
+
+    fn add(&mut self, other: Self) {
+        self.builds += other.builds;
+        self.downloads += other.downloads;
+        self.planned += other.planned;
+    }
+
+    fn remove(&mut self, other: Self) {
+        self.builds -= other.builds;
+        self.downloads -= other.downloads;
+        self.planned -= other.planned;
+    }
+
     /// Nom's annotation. Zero groups are omitted, never printed as `0 ⏵`.
     pub fn label(&self, ascii: bool) -> Option<String> {
         if self.is_empty() {
@@ -195,6 +230,13 @@ pub struct LiveRun {
     /// is planned. The topology is static; rebuilding it every tick was the
     /// per-view quadratic cost.
     closures: BTreeMap<NodeId, Vec<NodeId>>,
+    /// The reverse of `closures`: the nodes that contain each node in their
+    /// prerequisite closure. A transition updates the waiting counts of these
+    /// rows only.
+    dependents: BTreeMap<NodeId, Vec<NodeId>>,
+    /// Unfinished work in each node's closure. Seeded once, then adjusted by
+    /// transitions so a view build never rescans the closures.
+    waiting: BTreeMap<NodeId, Waiting>,
     first_at: SystemTime,
     clock: SystemTime,
 }
@@ -227,6 +269,8 @@ impl LiveRun {
             .collect();
         let graph = GraphState::seed_with_mode(nodes, tree.edges.clone(), mode)?;
         let closures = prerequisite_closures(&graph.nodes, &graph.edges);
+        let dependents = dependent_closures(&closures);
+        let waiting = waiting_counts(&graph, &closures);
         let mut run = Self {
             graph,
             started: BTreeMap::new(),
@@ -235,6 +279,8 @@ impl LiveRun {
             evidence: BTreeMap::new(),
             progress: BTreeMap::new(),
             closures,
+            dependents,
+            waiting,
             first_at: at,
             clock: at,
         };
@@ -292,6 +338,7 @@ impl LiveRun {
             self.clock = self.clock.max(at);
         }
 
+        let previous_activity = self.activities.get(&observation.node).copied();
         if let Some(transition) = transitions
             .iter()
             .find(|transition| transition.node == observation.node)
@@ -314,7 +361,37 @@ impl LiveRun {
                 _ => {}
             }
         }
+
+        let current_activity = self.activities.get(&observation.node).copied();
+        for transition in &transitions {
+            let (before, after) = if transition.node == observation.node {
+                (previous_activity, current_activity)
+            } else {
+                let activity = self.activities.get(&transition.node).copied();
+                (activity, activity)
+            };
+            self.settle_waiting(
+                &transition.node,
+                Waiting::from_state(transition.from, before),
+                Waiting::from_state(transition.to, after),
+            );
+        }
         Ok(transitions)
+    }
+
+    /// Move one prerequisite's contribution to every dependent's counts.
+    fn settle_waiting(&mut self, node: &str, before: Waiting, after: Waiting) {
+        if before == after {
+            return;
+        }
+        let Some(dependents) = self.dependents.get(node) else {
+            return;
+        };
+        for dependent in dependents {
+            let waiting = self.waiting.entry(dependent.clone()).or_default();
+            waiting.remove(before);
+            waiting.add(after);
+        }
     }
 
     /// Fold one byte observation without changing the node's state.
@@ -410,7 +487,7 @@ impl LiveView {
             let activity = run.activities.get(&row.name).copied();
             let elapsed = elapsed_for(run, &row.name, node_state, at);
             let waiting = if matches!(state, LiveState::Planned) {
-                waiting_for(run, &row.name)
+                run.waiting.get(&row.name).copied().unwrap_or_default()
             } else {
                 Waiting::default()
             };
@@ -579,25 +656,39 @@ fn elapsed_for(run: &LiveRun, node: &str, state: NodeState, at: SystemTime) -> O
     end.duration_since(started).ok()
 }
 
-/// Every required prerequisite, transitively. An unknown display-only
-/// dependency has no edge and therefore never appears here.
-fn waiting_for(run: &LiveRun, node: &str) -> Waiting {
-    let mut waiting = Waiting::default();
-    let Some(prerequisites) = run.closures.get(node) else {
-        return waiting;
-    };
-    for dependency in prerequisites {
-        match run.graph.nodes.get(dependency) {
-            Some(NodeState::Running) => match run.activities.get(dependency) {
-                Some(Activity::Build) => waiting.builds += 1,
-                Some(Activity::Download) => waiting.downloads += 1,
-                None => {}
-            },
-            Some(NodeState::Pending | NodeState::Ready) => waiting.planned += 1,
-            _ => {}
+/// The reverse of the prerequisite closures: for each node, every row that
+/// waits for it, directly or transitively.
+fn dependent_closures(closures: &BTreeMap<NodeId, Vec<NodeId>>) -> BTreeMap<NodeId, Vec<NodeId>> {
+    let mut dependents: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for (node, prerequisites) in closures {
+        for prerequisite in prerequisites {
+            dependents
+                .entry(prerequisite.clone())
+                .or_default()
+                .push(node.clone());
         }
     }
-    waiting
+    dependents
+}
+
+/// The initial waiting counts. The seed has no running node, so every
+/// prerequisite is pending or ready.
+fn waiting_counts(
+    graph: &GraphState,
+    closures: &BTreeMap<NodeId, Vec<NodeId>>,
+) -> BTreeMap<NodeId, Waiting> {
+    closures
+        .iter()
+        .map(|(node, prerequisites)| {
+            let mut waiting = Waiting::default();
+            for prerequisite in prerequisites {
+                if let Some(state) = graph.nodes.get(prerequisite) {
+                    waiting.add(Waiting::from_state(*state, None));
+                }
+            }
+            (node.clone(), waiting)
+        })
+        .collect()
 }
 
 /// One closure per node, dependency to dependent, computed with an iterative
