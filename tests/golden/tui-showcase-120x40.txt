@@ -14,7 +14,7 @@ PRE-FLIGHT
    ┌─ [√] glibc 2.0.0-1                        skipped · cached                                                  1.1 MiB
 ┌─ [×] nvidia 2.0.0-1                          failed · exit 2: error: target not found: go                      1.1 MiB
 [×] simapp 2.0.0-1                             blocked                                                           1.1 MiB
-0 done · 2 running · 2 waiting · 1 failed · ⏱ 7s · mirror.example.org · frozen
+0 done · 2 running · 2 waiting · 1 failed · frozen · 2 prefetched 2.3 MiB · ⏱ 7s · mirror.example.org
 
 
 

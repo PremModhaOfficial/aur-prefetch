@@ -1198,6 +1198,39 @@ fn static_summary_lines(
     vec![Line::styled(cell_text(&text, width, ascii), dim(color))]
 }
 
+/// What the prefetch already saved, from the package list alone.
+///
+/// A cached or built artifact is a package this run will not download. Bytes
+/// are summed only over sizes that were actually observed; when some ready
+/// package has no known size the total is a floor and says so, rather than
+/// reporting a partial sum as a whole.
+fn prefetch_saving(report: &PrefetchReport) -> Option<String> {
+    let mut ready = 0usize;
+    let mut known = 0u64;
+    let mut unknown = 0usize;
+    for package in &report.packages {
+        if !matches!(
+            package.artifact,
+            ArtifactState::Cached | ArtifactState::Built
+        ) {
+            continue;
+        }
+        ready += 1;
+        match package.download_bytes {
+            Some(bytes) => known = known.saturating_add(bytes),
+            None => unknown += 1,
+        }
+    }
+    if ready == 0 {
+        return None;
+    }
+    if known == 0 {
+        return Some(format!("{ready} prefetched"));
+    }
+    let floor = if unknown > 0 { "\u{2265}" } else { "" };
+    Some(format!("{ready} prefetched {floor}{}", human_bytes(known)))
+}
+
 fn live_summary_lines(
     report: &PrefetchReport,
     live: &LiveView,
@@ -1214,12 +1247,25 @@ fn live_summary_lines(
         "{} done {separator} {running} running {separator} {waiting} waiting {separator} {} failed",
         done, live.summary.failed
     );
-    if let Some(timer) = super::live::timer_label(live.summary.elapsed, ascii) {
-        text.push_str(&format!(" {separator} {timer}"));
-    }
-    text.push_str(&format!(" {separator} {host}"));
+    // Frozen is state, not decoration, so it is placed before anything that
+    // may be dropped, and the summary is assembled only from segments that fit
+    // whole. A truncated `froze…` would be worse than no savings at all.
     if live.summary.frozen {
         text.push_str(&format!(" {separator} frozen"));
+    }
+    let mut optional: Vec<String> = Vec::new();
+    if let Some(saving) = prefetch_saving(report) {
+        optional.push(saving);
+    }
+    if let Some(timer) = super::live::timer_label(live.summary.elapsed, ascii) {
+        optional.push(timer);
+    }
+    optional.push(host.to_string());
+    for segment in optional {
+        let candidate = format!("{text} {separator} {segment}");
+        if display_width(&candidate) <= width {
+            text = candidate;
+        }
     }
     let style = if live.summary.failed > 0 || live.summary.frozen {
         accent_bold(color, FAILURE)
