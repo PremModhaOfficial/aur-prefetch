@@ -775,6 +775,7 @@ fn draw_with(
         color,
         ledger,
         gates,
+        usize::from(chunks[1].height.saturating_sub(gate_rows)),
     );
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
@@ -963,6 +964,7 @@ fn body_lines(
     color: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    body_budget: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -989,6 +991,9 @@ fn body_lines(
 
     if let Some(report) = snapshot.prefetch.data() {
         let tree = tree.expect("the prefetch tree is built with the report");
+        // The summary and the notes come after the rows and must survive the
+        // clip, so they are paid for before the rows are given their budget.
+        let tail = 1 + report.notes.len();
         lines.extend(prefetch_lines(
             report,
             tree,
@@ -1001,6 +1006,7 @@ fn body_lines(
                 color,
             },
             ledger,
+            body_budget.saturating_sub(tail),
         ));
         return lines;
     }
@@ -1067,6 +1073,7 @@ fn prefetch_lines(
     at: Option<SystemTime>,
     style: FrameStyle,
     ledger: bool,
+    body_budget: usize,
 ) -> Vec<Line<'static>> {
     let FrameStyle {
         ascii,
@@ -1083,11 +1090,22 @@ fn prefetch_lines(
         match tree {
             Ok(tree) => {
                 let display = tree.display_rows();
-                let slots: Vec<WindowSlot> = match window {
-                    Some(window) => window.slots.clone(),
-                    None => display.iter().map(|row| WindowSlot::Row(row.id)).collect(),
+                // The live path already windowed itself and carries its own
+                // clipped markers. The static path has no window, so it keeps
+                // the roots and prints how many rows it dropped.
+                let static_window = (live.is_none() && window.is_none())
+                    .then(|| static_window(&display, body_budget))
+                    .flatten();
+                let slots: Vec<WindowSlot> = match (window, &static_window) {
+                    (Some(window), _) => window.slots.clone(),
+                    (None, Some((_, rows))) => rows.iter().copied().map(WindowSlot::Row).collect(),
+                    (None, None) => display.iter().map(|row| WindowSlot::Row(row.id)).collect(),
                 };
                 let geometry = progress_geometry(tree, live, &slots, ascii, width);
+
+                if let Some((hidden, _)) = &static_window {
+                    lines.push(hidden_line(*hidden, width, ascii, color));
+                }
 
                 for slot in slots {
                     match slot {
@@ -1720,6 +1738,31 @@ fn clipped_line(width: usize, ascii: bool, color: bool) -> Line<'static> {
     Line::styled(cell_text(marker, width, ascii), dim(color))
 }
 
+/// The rows the static frame must keep when the forest is taller than the body.
+///
+/// The display order is bottom-up, so the roots and the goal sit at the end.
+/// Keeping the tail preserves them and drops the deep children first; the
+/// count of what was dropped is printed, so a clipped frame never looks whole.
+fn static_window(display: &[&TreeRow], budget: usize) -> Option<(usize, Vec<RowId>)> {
+    if display.len() <= budget {
+        return None;
+    }
+    // One row pays for the count marker itself.
+    let keep = budget.saturating_sub(1);
+    let hidden = display.len() - keep;
+    let rows = display[display.len() - keep..]
+        .iter()
+        .map(|row| row.id)
+        .collect();
+    Some((hidden, rows))
+}
+
+fn hidden_line(hidden: usize, width: usize, ascii: bool, color: bool) -> Line<'static> {
+    let marker = if ascii { "  :" } else { "  ⋮" };
+    let text = format!("{marker} {hidden} more");
+    Line::styled(cell_text(&text, width, ascii), dim(color))
+}
+
 fn artifact_color(state: ArtifactState) -> Color {
     match state {
         ArtifactState::Cached | ArtifactState::Built => DONE,
@@ -1982,6 +2025,84 @@ mod tests {
     fn tree_of(snapshot: &Snapshot) -> Tree {
         Tree::build(&snapshot.prefetch.data().expect("prefetch section").packages)
             .expect("forest builds")
+    }
+
+    /// A forest taller than the body must keep its summary and say how many
+    /// rows it dropped. Before this, 20 packages silently clipped the summary
+    /// line and printed no overflow marker at all.
+    fn wide_snapshot(count: usize) -> Snapshot {
+        let now = at();
+        prefetch_snapshot_with(
+            (0..count)
+                .map(|index| {
+                    let depends: Vec<String> = if index % 5 == 0 {
+                        Vec::new()
+                    } else {
+                        vec![format!("pkg-{:04}", index - 1)]
+                    };
+                    PackageView {
+                        name: format!("pkg-{index:04}"),
+                        repo: Repo::Extra,
+                        installed: "1.0.0-1".to_string(),
+                        available: "2.0.0-1".to_string(),
+                        download_bytes: Some(1_100_000),
+                        artifact: ArtifactState::Missing,
+                        artifact_at: Some(now),
+                        detail: None,
+                        depends,
+                    }
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_tall_forest_keeps_its_summary_and_counts_what_it_hides() {
+        let short = render_frame(&wide_snapshot(18), 80, 24, false, false, false);
+        assert!(
+            short.contains("mirror.example.org"),
+            "a short forest keeps the summary"
+        );
+        assert!(
+            !short.lines().any(|line| line.contains(" more")),
+            "a forest that fits needs no overflow row:\n{short}"
+        );
+
+        for (count, width, height) in [(20, 80, 24), (500, 80, 24), (2_000, 120, 40)] {
+            let frame = render_frame(&wide_snapshot(count), width, height, false, false, false);
+            assert!(
+                frame.contains("mirror.example.org"),
+                "{count} packages at {width}x{height} lost the summary:\n{frame}"
+            );
+            let overflow = frame
+                .lines()
+                .find(|line| line.contains(" more"))
+                .unwrap_or_else(|| panic!("{count} packages hid rows without saying so:\n{frame}"));
+            let rows = frame.lines().filter(|line| line.contains("pkg-")).count();
+            let hidden: usize = overflow
+                .split_whitespace()
+                .find_map(|word| word.parse().ok())
+                .expect("the overflow row carries a count");
+            assert_eq!(
+                rows + hidden,
+                count,
+                "every package is either printed or counted:\n{frame}"
+            );
+        }
+
+        // The tail of the bottom-up order is the roots and the goal.
+        let frame = render_frame(&wide_snapshot(500), 80, 24, false, false, false);
+        assert!(
+            frame.contains("pkg-0000") || frame.contains("pkg-0004"),
+            "a root survives the clip:\n{frame}"
+        );
+
+        let ascii = render_frame(&wide_snapshot(500), 80, 24, true, false, false);
+        assert!(
+            ascii.lines().all(|line| line.is_ascii()),
+            "ASCII stays ASCII"
+        );
+        assert!(ascii.contains(" more"), "ASCII keeps the meaning:\n{ascii}");
     }
 
     fn diamond_snapshot() -> Snapshot {
