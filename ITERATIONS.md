@@ -6,7 +6,8 @@ if the scorecard improves and no test regresses.
 ## How the scorecard is judged
 
 Every claim below cites a file under `target/frames/`, a frame under
-`tests/golden/`, or a named test. The dumps are written by
+`tests/golden/`, a named test, or the commit that made the change. The dumps
+are written by
 `cargo test dump_frames -- --ignored`; they are plain text, so the score does
 not depend on seeing an image. The committed answer is the goldens under
 `tests/golden/`; the dumps are the working view.
@@ -22,11 +23,11 @@ they are setup for that baseline, not iterations.
 | Glanceability of state | 8 | 8 | marker grammar, 3-cell markers |
 | Animation smoothness | 5 | 8 | `live.rs::the_spinner_turns_only_while_something_runs` |
 | Failure legibility | 8 | 8 | `failure/80x24-color.txt`, repair card |
-| Layout 80 / wide / narrow | 5 | 7 | `showcase/40x15-color.txt`, `live-window-80x24` |
+| Layout 80 / wide / narrow | 5 | 7 (rescore) | `showcase/40x15-color.txt`, `live-window-80x24` |
 | Color / no-color fidelity | 9 | 9 | `*-ascii.txt` pairs are ASCII-only |
-| Responsiveness | 9 | 8 | no timing artifact is committed; the 200-package window is the largest exercised state |
+| Responsiveness | 9 | 8 (rescore) | no timing artifact is committed; the 200-package window is the largest exercised state |
 | Prefetch-savings visibility | 4 | 8 | `showcase/80x24-color.txt` summary |
-| Code testability | 9 | 9 | 281 tests pass + 2 ignored, pure state, no clock in render |
+| Code testability | 9 | 9 | 285 tests pass + 2 ignored, pure state, no clock in render |
 
 Every row is at 7 or above; eight of nine are at 8 or above. Two rows were
 corrected downward by the independent review below, and the table carries
@@ -208,24 +209,47 @@ still triggers one wasted repaint per second. Neither affects correctness of
 what is drawn. `static_slots` returning a marker-only list for budget 0 was
 fixed in `5261622`.
 
-**Fourth review, the branch as a unit (three clean-context jurors).** One
-reviewer per persona — correctness; security and edge cases; simplicity and
-honesty — all read-only. Accepted and fixed in the last five commits:
+**Fourth review, the branch as a unit (two rounds, three clean-context jurors
+each).** One reviewer per persona — correctness; security and edge cases;
+simplicity and honesty — all read-only. A second round of three fresh jurors
+checked the fixes. Accepted and fixed:
 
 | Defect | Severity | Fixed in |
 |---|---|---|
 | a budget-1 window kept the `⋮` and dropped the failed row | blocker | `2a4c22e` |
+| a window at `mandatory == budget` returned rows plus a marker | blocker | `0f5d3a9` |
 | the static path drew a second slot list; plan and frame could name different rows | blocker | `5261622` |
 | `.max(1)` planned a tree row after the summary and notes had spent the block | should | `5261622` |
+| the summary row was subtracted twice, leaving one body row unused | should | `db22d49` |
 | `plan_frame` had no 40x12 floor, so `j`/`k` walked a notice frame | should | `92efc8b` |
-| a narrow summary cut `failed` and `frozen` | should | `efd657e` |
+| a narrow live summary cut `failed` and `frozen` | should | `efd657e` |
+| a narrow static summary was cut and lost `stale` and the host | should | `ad436e2` |
+| the static header claimed every root while drawing none | should | `0234f56` |
 | the ASCII savings floor rendered as `?` | should | `289479a` |
+| a fatal snapshot planned rows the error frame never drew | nit | `bc60093` |
+
+The regression tests are `a_one_row_window_shows_the_failed_row_not_a_marker`,
+`a_block_with_no_tree_room_plans_no_row`,
+`a_single_tree_row_is_planned_and_drawn_at_40x12`,
+`below_the_size_floor_the_plan_has_no_rows`,
+`a_narrow_summary_drops_waiting_before_it_cuts_the_state`,
+`the_savings_floor_is_ascii_in_ascii_mode`,
+`a_static_block_with_no_room_says_no_root_is_shown`,
+`a_narrow_static_summary_keeps_ready_and_missing`, and
+`a_fatal_snapshot_plans_no_rows`. `db22d49` moves the two 200-package window
+goldens by exactly one row; no other golden changed.
 
 Declined with evidence: the frozen summary timer (it reads `run.clock()`,
 which stops), the percentage width (fixed at 6 cells), the log-drain loop (the
 channel is bounded at 4096 and each line at 512 chars), `buffer_text` at width
-0 (guarded by `render_with`), duplicate footer/tree builds (deterministic, no
-divergence), and savings in the static summary (outside this change's scope).
+0 (guarded by `render_with`), duplicate `Tree`/`LiveView` builds (deterministic;
+the footer and body height are plan-owned since `5261622`), clearing the
+cursor when a plan has no rows (there is no cursor on that frame to preserve),
+the marker-only static frame at a one-slot budget (the header now reports
+`showing 0 of N roots` and the marker counts every hidden row), the
+extreme-count summary fallback (real package counts never reach the width
+where the last core plus `frozen` overflows), and savings in the static
+summary (outside this change's scope).
 
 Pre-existing and outside this branch's diff, recorded as follow-ups: an
 unterminated line is materialized by `BufReader::lines()` before
