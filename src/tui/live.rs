@@ -640,14 +640,9 @@ impl LiveView {
             slots = Self::slots_for(&display, &selected);
         }
 
-        // `budget` is a ROW budget: it bounds the rows this window may keep.
-        // Clipped markers are the frame's way of admitting what it hid, and
-        // they are the caller's to pay for, not the rows'. The caller reserves
-        // one line for the marker (`BodySplit::tree_rows` already does), so a
-        // window never has to choose between a failed row and an admission.
-        //
-        // Only if the mandatory rows alone exceed the budget does anything
-        // real go, and then the least urgent goes first.
+        // `budget` is a SLOT budget: rows and `⋮` markers together may never
+        // exceed it. Only if the mandatory rows alone exceed the budget does
+        // anything real go, and then the least urgent goes first.
         if mandatory.len() > budget {
             let mut ranked: Vec<usize> = mandatory.iter().copied().collect();
             ranked.sort_by_key(
@@ -662,22 +657,27 @@ impl LiveView {
             let keep = budget.saturating_sub(1).max(1).min(budget);
             selected = ranked.into_iter().take(keep).collect();
             slots = Self::slots_for(&display, &selected);
-            // A marker is an admission that something is hidden; a mandatory
-            // row is why the frame exists. When the budget cannot hold both,
-            // drop the admission, never the row. Truncating the slot list did
-            // the opposite at budget 1: it kept the leading `⋮` and threw away
-            // the failed row.
-            while slots.len() > budget {
-                let Some(marker) = slots
-                    .iter()
-                    .rposition(|slot| matches!(slot, WindowSlot::Clipped))
-                else {
-                    break;
-                };
-                slots.remove(marker);
-            }
-            slots.truncate(budget);
         }
+
+        // A marker is an admission that something is hidden; a mandatory row
+        // is why the frame exists. When the budget cannot hold both, drop the
+        // admission, never the row. This runs after BOTH branches: at
+        // `mandatory.len() == budget` the de-selection loop has no victim, so
+        // leaving the pruning inside the branch returned rows plus a marker.
+        while slots.len() > budget {
+            let Some(marker) = slots
+                .iter()
+                .rposition(|slot| matches!(slot, WindowSlot::Clipped))
+            else {
+                break;
+            };
+            slots.remove(marker);
+        }
+        debug_assert!(
+            slots.len() <= budget,
+            "window returned {} slots for budget {budget}",
+            slots.len()
+        );
 
         let selected_ids: BTreeSet<RowId> =
             selected.iter().map(|index| display[*index].id).collect();
@@ -1822,6 +1822,11 @@ mod tests {
         for budget in 1..=30usize {
             let window = view.window(&tree, budget);
             assert!(
+                window.slots.len() <= budget,
+                "budget {budget} returned {} slots",
+                window.slots.len()
+            );
+            assert!(
                 window.rows().count() <= budget,
                 "budget {budget} returned {} rows",
                 window.rows().count()
@@ -1876,7 +1881,12 @@ mod tests {
                 "budget {budget} hid the failed row: {:?}",
                 window.slots
             );
-            assert!(window.rows().count() <= budget);
+            assert!(
+                window.slots.len() <= budget,
+                "budget {budget} returned {} slots: {:?}",
+                window.slots.len(),
+                window.slots
+            );
         }
     }
 
@@ -1954,7 +1964,15 @@ mod tests {
             .map(|id| tree.rows[id].name.as_str())
             .collect();
 
-        assert!(window.clipped());
+        // The mandatory rows exactly fill the budget, so there is no slot left
+        // for a marker. A marker here would make the window overrun the frame;
+        // the root count in the header is the admission that remains.
+        assert!(
+            !window.clipped(),
+            "a marker here would exceed the slot budget: {:?}",
+            window.slots
+        );
+        assert_eq!(window.slots.len(), 3);
         for name in ["z-mid", "a-base", "a-top"] {
             assert!(names.contains(&name), "{name} is never hidden: {names:?}");
         }
