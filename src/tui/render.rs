@@ -2939,6 +2939,44 @@ mod tests {
     }
 
     #[test]
+    fn a_clipped_static_frame_reports_the_roots_it_shows() {
+        let snapshot = wide_snapshot(40);
+        let footer = Footer::default();
+        let plan = super::plan_frame(&snapshot, None, footer, 40, 15, false, false, None);
+        let window = plan
+            .window
+            .as_ref()
+            .expect("the static plan carries its window");
+        assert!(window.hidden);
+        let frame = super::render_frame_status(
+            &snapshot,
+            footer,
+            40,
+            15,
+            false,
+            false,
+            false,
+            false,
+            None,
+            Selection::none(),
+        );
+        if window.shown_roots < window.total_roots {
+            assert!(
+                frame.contains(&format!(
+                    "Dependency Graph showing {} of {} roots:",
+                    window.shown_roots, window.total_roots
+                )),
+                "{frame}"
+            );
+        } else {
+            assert!(
+                frame.contains("(clipped):"),
+                "all roots shown but rows hidden:\n{frame}"
+            );
+        }
+    }
+
+    #[test]
     fn below_the_size_floor_the_plan_has_no_rows() {
         // `draw_with` draws a size notice below 40x12. Planning slots there
         // let the key handler walk a cursor over a frame that is not drawn.
@@ -3046,6 +3084,14 @@ mod tests {
         let frame = render_frame(&snapshot, 40, 15, false, false, false);
         assert!(frame.contains("ready"), "ready survives:\n{frame}");
         assert!(frame.contains("missing"), "missing survives:\n{frame}");
+        assert!(
+            frame.contains("1 ready · 1 missing · 1 stale"),
+            "the whole ranked core is drawn:\n{frame}"
+        );
+        assert!(
+            !frame.contains("packages"),
+            "the redundant total is the second to go:\n{frame}"
+        );
         assert!(
             !frame.contains("mirror.example.org"),
             "the host is the first to go:\n{frame}"

@@ -807,7 +807,12 @@ pub fn static_slots(tree: &Tree, budget: usize) -> Vec<WindowSlot> {
     if display.len() <= budget {
         return display.iter().map(|row| WindowSlot::Row(row.id)).collect();
     }
-    let keep = budget.saturating_sub(1);
+    if budget == 1 {
+        // One slot cannot hold both a row and an admission. A row is what the
+        // screen is for; the header reports how many roots it shows.
+        return vec![WindowSlot::Row(display[display.len() - 1].id)];
+    }
+    let keep = budget - 1;
     let mut slots = vec![WindowSlot::Clipped];
     slots.extend(
         display[display.len() - keep..]
@@ -1902,6 +1907,16 @@ mod tests {
             );
             assert!(window.hidden, "budget {budget} hid rows without saying so");
         }
+    }
+
+    #[test]
+    fn a_one_slot_static_frame_keeps_the_last_row() {
+        let tree = mixed_diamond();
+        let display = tree.display_rows();
+        let slots = super::static_slots(&tree, 1);
+        assert_eq!(slots.len(), 1);
+        assert_eq!(slots[0], WindowSlot::Row(display[display.len() - 1].id));
+        assert!(super::static_slots(&tree, 0).is_empty());
     }
 
     #[test]
