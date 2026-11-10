@@ -27,7 +27,7 @@ they are setup for that baseline, not iterations.
 | Color / no-color fidelity | 9 | 9 | `*-ascii.txt` pairs are ASCII-only |
 | Responsiveness | 9 | 8 (rescore) | no timing artifact is committed; the 200-package window is the largest exercised state |
 | Prefetch-savings visibility | 4 | 8 | `showcase/80x24-color.txt` summary |
-| Code testability | 9 | 9 | 285 tests pass + 2 ignored, pure state, no clock in render |
+| Code testability | 9 | 9 | 289 tests pass + 2 ignored, pure state, no clock in render |
 
 Every row is at 7 or above; eight of nine are at 8 or above. Two rows were
 corrected downward by the independent review below, and the table carries
@@ -123,7 +123,7 @@ Markers no longer double-count, so **more** rows fit than before: the
 200-package window reports 31 roots instead of 11 at 120x40 and 15 instead of
 6 at 80x24, with running/failed/blocked still never hidden.
 
-**Score.** Layout 7 → 9.
+**Score.** Layout 7 → 9, rescored to 7 by the fourth review.
 
 **Frames.** `showcase/40x15-color.txt`; `tests/golden/tui-live-window-*.txt`.
 
@@ -147,7 +147,7 @@ worked until that was fixed.
    path only has `l` for the whole fetch log, not per failed row.
 2. **Throughput.** `LiveRow.progress` has both sizes and the timer, so bytes/s
    is real arithmetic, but only where a timer is above the floor.
-3. **`f` filter.** `j`/`k` movement shipped in `5c081f`; the keys are asserted
+3. **`f` filter.** `j`/`k` movement shipped in `5c0818f`; the keys are asserted
    by `sim 34/35`, so a filter is a separate change with its own golden churn.
 
 ---
@@ -209,10 +209,10 @@ still triggers one wasted repaint per second. Neither affects correctness of
 what is drawn. `static_slots` returning a marker-only list for budget 0 was
 fixed in `5261622`.
 
-**Fourth review, the branch as a unit (two rounds, three clean-context jurors
-each).** One reviewer per persona — correctness; security and edge cases;
-simplicity and honesty — all read-only. A second round of three fresh jurors
-checked the fixes. Accepted and fixed:
+**Fourth review, the branch as a unit (three rounds, three clean-context
+jurors each).** One reviewer per persona — correctness; security and edge
+cases; simplicity and honesty — all read-only. Each later round of three
+fresh jurors checked the previous round's fixes. Accepted and fixed:
 
 | Defect | Severity | Fixed in |
 |---|---|---|
@@ -227,6 +227,11 @@ checked the fixes. Accepted and fixed:
 | the static header claimed every root while drawing none | should | `0234f56` |
 | the ASCII savings floor rendered as `?` | should | `289479a` |
 | a fatal snapshot planned rows the error frame never drew | nit | `bc60093` |
+| the mandatory branch reserved a slot for a marker it then pruned | should | `3d4ce99` |
+| hidden children with every root shown printed a bare title | should | `3d4ce99` |
+| `system current` and notes could cut the gate overflow row | should | `dd8dbf9` |
+| a fatal header still claimed the graph | should | `2205a8f` |
+| a one-slot static frame drew a marker and no row | should | `6f13084` |
 
 The regression tests are `a_one_row_window_shows_the_failed_row_not_a_marker`,
 `a_block_with_no_tree_room_plans_no_row`,
@@ -235,9 +240,15 @@ The regression tests are `a_one_row_window_shows_the_failed_row_not_a_marker`,
 `a_narrow_summary_drops_waiting_before_it_cuts_the_state`,
 `the_savings_floor_is_ascii_in_ascii_mode`,
 `a_static_block_with_no_room_says_no_root_is_shown`,
-`a_narrow_static_summary_keeps_ready_and_missing`, and
-`a_fatal_snapshot_plans_no_rows`. `db22d49` moves the two 200-package window
-goldens by exactly one row; no other golden changed.
+`a_narrow_static_summary_keeps_ready_and_missing`,
+`a_fatal_snapshot_plans_no_rows`,
+`a_one_slot_static_frame_keeps_the_last_row`,
+`an_empty_package_list_reserves_its_current_row`,
+`too_many_notes_are_counted_not_cut`, and
+`a_clipped_static_frame_reports_the_roots_it_shows`.
+`db22d49` adds one tree row to the two 200-package goldens and consumes the
+blank row above the footer; no other golden changed. The `target/frames/`
+dumps cited above were regenerated at this commit.
 
 Declined with evidence: the frozen summary timer (it reads `run.clock()`,
 which stops), the percentage width (fixed at 6 cells), the log-drain loop (the
@@ -245,9 +256,7 @@ channel is bounded at 4096 and each line at 512 chars), `buffer_text` at width
 0 (guarded by `render_with`), duplicate `Tree`/`LiveView` builds (deterministic;
 the footer and body height are plan-owned since `5261622`), clearing the
 cursor when a plan has no rows (there is no cursor on that frame to preserve),
-the marker-only static frame at a one-slot budget (the header now reports
-`showing 0 of N roots` and the marker counts every hidden row), the
-extreme-count summary fallback (real package counts never reach the width
+the extreme-count summary fallback (real package counts never reach the width
 where the last core plus `frozen` overflows), and savings in the static
 summary (outside this change's scope).
 
