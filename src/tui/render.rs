@@ -1463,16 +1463,38 @@ fn live_summary_lines(
     let done = live.summary.builds.done + live.summary.downloads.done;
     let waiting = live.summary.builds.planned + live.summary.downloads.planned;
     let host = report.host.as_deref().unwrap_or("unknown");
-    let mut text = format!(
-        "{} done {separator} {running} running {separator} {waiting} waiting {separator} {} failed",
-        done, live.summary.failed
-    );
-    // Frozen is state, not decoration, so it is placed before anything that
-    // may be dropped, and the summary is assembled only from segments that fit
-    // whole. A truncated `froze…` would be worse than no savings at all.
-    if live.summary.frozen {
-        text.push_str(&format!(" {separator} frozen"));
-    }
+    // The core is ranked too, not fixed: `waiting` is the first count to go,
+    // then `done`. Ranking only the optional segments let the fixed core be
+    // cut at 40 columns, which dropped both `failed` and `frozen` — the two
+    // words the line exists for.
+    let cores = [
+        format!(
+            "{done} done {separator} {running} running {separator} {waiting} waiting {separator} {} failed",
+            live.summary.failed
+        ),
+        format!(
+            "{done} done {separator} {running} running {separator} {} failed",
+            live.summary.failed
+        ),
+        format!(
+            "{running} running {separator} {} failed",
+            live.summary.failed
+        ),
+    ];
+    // Frozen is state, not decoration. It is paid for before the optional
+    // segments and before the lower-ranked counts. A truncated `froze…` would
+    // be worse than no savings at all.
+    let frozen = if live.summary.frozen {
+        format!(" {separator} frozen")
+    } else {
+        String::new()
+    };
+    let mut text = cores
+        .iter()
+        .find(|core| display_width(core) + display_width(&frozen) <= width)
+        .cloned()
+        .unwrap_or_else(|| cores[2].clone());
+    text.push_str(&frozen);
     let mut optional: Vec<String> = Vec::new();
     if let Some(saving) = prefetch_saving(report) {
         optional.push(saving);
@@ -2642,6 +2664,41 @@ mod tests {
                 plan.slots
             );
             assert!(plan.window.is_none(), "{width}x{height} built a window");
+        }
+    }
+
+    #[test]
+    fn a_narrow_summary_drops_waiting_before_it_cuts_the_state() {
+        // At 40 columns the fixed core `0 done · 2 running · 2 waiting ·
+        // 1 failed` is 41 cells. `cell_text` then cut the line and took
+        // `failed` and `frozen` with it. Waiting is the count the screen can
+        // spare.
+        let snapshot = showcase_snapshot();
+        let run = showcase_run();
+        let frame = render_live_frame_status(
+            &snapshot,
+            &run,
+            Footer::default(),
+            40,
+            15,
+            false,
+            false,
+            false,
+            false,
+            None,
+            Selection::none(),
+        );
+        assert!(frame.contains("failed"), "the failure survives:\n{frame}");
+        assert!(frame.contains("frozen"), "frozen survives:\n{frame}");
+        assert!(
+            !frame.contains("waiting"),
+            "waiting is the first count to go:\n{frame}"
+        );
+        for line in frame.lines() {
+            assert!(
+                super::display_width(line) <= 40,
+                "line over 40 cells: {line:?}"
+            );
         }
     }
 
