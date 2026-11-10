@@ -5,12 +5,16 @@ if the scorecard improves and no test regresses.
 
 ## How the scorecard is judged
 
-Every claim below cites a file under `target/frames/`, written by
-`cargo test dump_frames -- --ignored`. Those are plain text, so the score does
+Every claim below cites a file under `target/frames/`, a frame under
+`tests/golden/`, or a named test. The dumps are written by
+`cargo test dump_frames -- --ignored`; they are plain text, so the score does
 not depend on seeing an image. The committed answer is the goldens under
 `tests/golden/`; the dumps are the working view.
 
 Baseline was measured at `6306e70` (bootvine marker grammar, columns aligned).
+The three commits before it on this branch (`15aad9c`, `b653a83`, `dafe850`)
+built the static summary, the showcase fixture and its 80x24/120x40 frames;
+they are setup for that baseline, not iterations.
 
 | Item | Baseline | Now | Evidence |
 |---|---|---|---|
@@ -18,13 +22,15 @@ Baseline was measured at `6306e70` (bootvine marker grammar, columns aligned).
 | Glanceability of state | 8 | 8 | marker grammar, 3-cell markers |
 | Animation smoothness | 5 | 8 | `live.rs::the_spinner_turns_only_while_something_runs` |
 | Failure legibility | 8 | 8 | `failure/80x24-color.txt`, repair card |
-| Layout 80 / wide / narrow | 5 | 9 | `showcase/40x15-color.txt`, `live-window-80x24` |
+| Layout 80 / wide / narrow | 5 | 7 | `showcase/40x15-color.txt`, `live-window-80x24` |
 | Color / no-color fidelity | 9 | 9 | `*-ascii.txt` pairs are ASCII-only |
-| Responsiveness | 9 | 9 | 0.46 ms view + 2.33 ms frame at 2,000 rows |
+| Responsiveness | 9 | 8 | no timing artifact is committed; the 200-package window is the largest exercised state |
 | Prefetch-savings visibility | 4 | 8 | `showcase/80x24-color.txt` summary |
-| Code testability | 9 | 9 | 269 tests, pure state, no clock in render |
+| Code testability | 9 | 9 | 281 tests pass + 2 ignored, pure state, no clock in render |
 
-Every item is now at 8 or above for two consecutive iterations (4 and 5).
+Every row is at 7 or above; eight of nine are at 8 or above. Two rows were
+corrected downward by the independent review below, and the table carries
+those numbers.
 
 ---
 
@@ -35,13 +41,14 @@ Every item is now at 8 or above for two consecutive iterations (4 and 5).
 **Problem.** The summary never said what the prefetch saved, which is the
 whole reason the daemon exists. Worst item on the board at 4/10.
 
-**Change.** `prefetch_saving(report)` counts cached/built packages and sums
-`download_bytes` over observed sizes only. When a ready package has no known
-size the total is prefixed `≥`, so a partial sum is never printed as a whole.
-With nothing cached the segment is absent, not "0 prefetched".
+**Change.** `prefetch_saving(report, ascii)` counts cached/built packages and
+sums `download_bytes` over observed sizes only. When a ready package has no
+known size the total is prefixed `≥` (`>=` in `--ascii`), so a partial sum is
+never printed as a whole. With nothing cached the segment is absent, not
+"0 prefetched".
 
-The summary is now assembled by priority — counts, `frozen`, savings, timer,
-host — and each segment is included only if it fits whole. Before this, the
+The summary is assembled by priority — counts (ranked), `frozen`, savings,
+timer, host — and each segment is included only if it fits whole. Before this, the
 host could truncate to `mirro…` and `frozen` could be pushed off the end at 80
 columns.
 
@@ -139,8 +146,8 @@ worked until that was fixed.
    path only has `l` for the whole fetch log, not per failed row.
 2. **Throughput.** `LiveRow.progress` has both sizes and the timer, so bytes/s
    is real arithmetic, but only where a timer is above the floor.
-3. **j/k/f navigation.** The current keys are asserted by `sim 34/35`; adding
-   movement and a filter is a separate change with its own golden churn.
+3. **`f` filter.** `j`/`k` movement shipped in `5c081f`; the keys are asserted
+   by `sim 34/35`, so a filter is a separate change with its own golden churn.
 
 ---
 
@@ -152,7 +159,7 @@ the honesty reviewer hit its turn limit and its partial findings are not
 counted as evidence either way.
 
 **What they proved, and what it says about the scores above.** The suite was
-green at 271 tests through four real faults. Every one lived in a state no
+green throughout through four real faults. Every one lived in a state no
 golden covers: more mandatory rows than slots, enough rows to clip the notes,
 a delta larger than the row count, a window computed twice.
 
@@ -168,7 +175,8 @@ reproductions. No golden changed, which is the point: the goldens never
 covered these states.
 
 **Corrected scorecard.** The earlier rows were scored from frames that could
-not show these faults, so two of them were too generous:
+not show these faults, so two of them were too generous. The headline table
+now carries these numbers:
 
 | Item | Claimed | Honest | Why |
 |---|---|---|---|
@@ -193,8 +201,37 @@ row more than it drew (the summary row was not reserved), the handler passed
 empty gates while a notice frame draws `notice.gates`, and the clip loop ate
 the gate block's own `N more gate(s)` row.
 
-**Still open.** Two low-severity items are known and not fixed. The redraw key
-uses non-ASCII timer strings, so in `--ascii` mode the key names a string the
-frame does not draw, and a timer truncated off a narrow summary still triggers
-one wasted repaint per second. `static_slots` returns a marker-only list for
-budget 0. Neither affects correctness of what is drawn.
+**Still open.** Two low-severity redraw items are known and not fixed: the
+redraw key uses non-ASCII timer strings, so in `--ascii` mode the key names a
+string the frame does not draw, and a timer truncated off a narrow summary
+still triggers one wasted repaint per second. Neither affects correctness of
+what is drawn. `static_slots` returning a marker-only list for budget 0 was
+fixed in `5261622`.
+
+**Fourth review, the branch as a unit (three clean-context jurors).** One
+reviewer per persona — correctness; security and edge cases; simplicity and
+honesty — all read-only. Accepted and fixed in the last five commits:
+
+| Defect | Severity | Fixed in |
+|---|---|---|
+| a budget-1 window kept the `⋮` and dropped the failed row | blocker | `2a4c22e` |
+| the static path drew a second slot list; plan and frame could name different rows | blocker | `5261622` |
+| `.max(1)` planned a tree row after the summary and notes had spent the block | should | `5261622` |
+| `plan_frame` had no 40x12 floor, so `j`/`k` walked a notice frame | should | `92efc8b` |
+| a narrow summary cut `failed` and `frozen` | should | `efd657e` |
+| the ASCII savings floor rendered as `?` | should | `289479a` |
+
+Declined with evidence: the frozen summary timer (it reads `run.clock()`,
+which stops), the percentage width (fixed at 6 cells), the log-drain loop (the
+channel is bounded at 4096 and each line at 512 chars), `buffer_text` at width
+0 (guarded by `render_with`), duplicate footer/tree builds (deterministic, no
+divergence), and savings in the static summary (outside this change's scope).
+
+Pre-existing and outside this branch's diff, recorded as follow-ups: an
+unterminated line is materialized by `BufReader::lines()` before
+`bounded_line` caps it (`src/runner.rs`); `is_bidi` misses U+061C and
+U+206A..206F and admits U+2028/U+2029 (`src/tui/sanitize.rs`);
+`truncate_width` and `display_width` measure combining sequences differently;
+the cache scan stats with `fs::metadata`, which follows a symlink swapped in
+after the listing (`src/fetch_source.rs`); and a spawn failure is reported as
+`exit -1` (`src/tui/fetch_session.rs`).
