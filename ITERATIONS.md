@@ -178,7 +178,23 @@ not show these faults, so two of them were too generous:
 The other rows stand. The lesson recorded for the next iteration: a score
 justified by goldens is a score about the states those goldens contain.
 
-**Also found and not yet fixed.** `Selection` stores a positional `RowId` and
-is never reset when a refresh replaces the tree, so after `r` the cursor can
-name a different package. It is cosmetic today (the cursor only underlines),
-but it is wrong and should be cleared on every snapshot replacement.
+**Fixed after this review, in `6abef43`.** `Selection` stored a positional
+`RowId` and was never reset when a refresh replaced the tree, so the cursor
+could name a different package after `r`. It is keyed by package name now and
+`the_cursor_keeps_its_package_when_a_refresh_renumbers_rows` covers it.
+
+**Found by the second review, fixed in `15a14f7`.** `j`/`k` shared a split
+formula with the renderer but fed it different inputs (footer height, notes,
+gate cap), and a transient cache-read error latched and froze observation for
+the rest of the run.
+
+**Found by the third review, fixed in `551255f`.** The static path planned one
+row more than it drew (the summary row was not reserved), the handler passed
+empty gates while a notice frame draws `notice.gates`, and the clip loop ate
+the gate block's own `N more gate(s)` row.
+
+**Still open.** Two low-severity items are known and not fixed. The redraw key
+uses non-ASCII timer strings, so in `--ascii` mode the key names a string the
+frame does not draw, and a timer truncated off a narrow summary still triggers
+one wasted repaint per second. `static_slots` returns a marker-only list for
+budget 0. Neither affects correctness of what is drawn.
