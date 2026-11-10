@@ -2559,6 +2559,204 @@ mod tests {
         run
     }
 
+    /// One frame carrying every feature the live screen has.
+    ///
+    /// The topology is chosen so each state is reachable, not just present in
+    /// the snapshot: the cached roots seed `NoWork`, which makes their
+    /// dependents Ready, which is the only way a start and a failure apply.
+    /// `nvidia` is Ready (its only prerequisite is cached), so it can fail;
+    /// `simapp` depends on it, so the freeze blocks it.
+    fn showcase_snapshot() -> Snapshot {
+        let mut packages = vec![
+            live_package("glibc", Repo::Extra, ArtifactState::Cached, &[]),
+            live_package("lib32-glibc", Repo::Multilib, ArtifactState::Cached, &[]),
+            live_package("linux", Repo::Extra, ArtifactState::Missing, &["glibc"]),
+            live_package("yay-bin", Repo::Aur, ArtifactState::BuildPending, &[]),
+            live_package("paru", Repo::Aur, ArtifactState::Missing, &["yay-bin"]),
+            live_package("ollama", Repo::Aur, ArtifactState::Missing, &["yay-bin"]),
+            live_package("nvidia", Repo::Extra, ArtifactState::Missing, &["glibc"]),
+            live_package("simapp", Repo::Local, ArtifactState::Stale, &["nvidia"]),
+        ];
+        // The download size the bar divides against, from the progress fixture.
+        for package in &mut packages {
+            if package.name == "linux" {
+                package.download_bytes = Some(59_800_000);
+            }
+        }
+        prefetch_snapshot_with(packages)
+    }
+
+    fn showcase_run() -> LiveRun {
+        let tree = tree_of(&showcase_snapshot());
+        let mut run = LiveRun::plan(&tree, live_at()).expect("plan seeds");
+        run.observe(
+            "linux",
+            Observed::Started,
+            live_at(),
+            Some(Activity::Download),
+            "started",
+        )
+        .expect("starts");
+        run.observe(
+            "yay-bin",
+            Observed::Started,
+            live_at() + Duration::from_secs(1),
+            Some(Activity::Build),
+            "started",
+        )
+        .expect("starts");
+        // The bytes are observed while the run can still accept them. A freeze
+        // stops byte polling, so this must come before the failure.
+        run.observe_progress(
+            "linux",
+            49_000_000,
+            59_800_000,
+            live_at() + Duration::from_secs(6),
+        )
+        .expect("real bytes");
+        let sequence: [(&str, Observed, Option<Activity>, &str); 3] = [
+            (
+                "nvidia",
+                Observed::Started,
+                Some(Activity::Build),
+                "started",
+            ),
+            (
+                "nvidia",
+                Observed::Failed,
+                None,
+                "exit 2: error: target not found: go",
+            ),
+            ("lib32-glibc", Observed::Finished, None, "exit 0"),
+        ];
+        for (index, (node, kind, activity, evidence)) in sequence.into_iter().enumerate() {
+            let at = live_at() + Duration::from_secs(6 + index as u64);
+            run.observe(node, kind, at, activity, evidence)
+                .expect("observation applies");
+        }
+        run
+    }
+
+    fn showcase_footer(card: &RepairCard, ascii: bool) -> Footer<'_> {
+        let keys = if ascii {
+            "esc dismiss | F fetch again | g ledger | l log | ? help | q quit"
+        } else {
+            "esc dismiss · F fetch again · g ledger · l log · ? help · q quit"
+        };
+        Footer {
+            status: Some("fetch: exit 2 after 6s"),
+            keys: Some(keys),
+            failure: true,
+            repair: Some(card),
+        }
+    }
+
+    fn showcase_card() -> RepairCard {
+        RepairCard {
+            node: Some("nvidia 2.0.0-1".to_string()),
+            evidence: "exit 2: error: target not found: go".to_string(),
+            repair: repair_hint("exit 2: error: target not found: go").to_string(),
+            blocked: 1,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn every_feature_is_visible_at_once() {
+        let snapshot = showcase_snapshot();
+        let run = showcase_run();
+        let card = showcase_card();
+        let gates = fetch_gates();
+        let frame = render_live_frame_status(
+            &snapshot,
+            &run,
+            showcase_footer(&card, false),
+            120,
+            40,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+        );
+        assert_eq!(
+            frame,
+            include_str!("../../tests/golden/tui-showcase-120x40.txt"),
+            "the full-feature frame is stable"
+        );
+
+        // Every state the view can draw, in one frame.
+        for needle in [
+            "[ ]",         // planned
+            "[|]",         // running
+            "[√]",         // done
+            "[×]",         // failed
+            "downloading", // activity kind
+            "building",    // activity kind
+            "waiting for", // prerequisite counts
+            "⏱",           // a timer above the floor
+            "MiB/",        // both observed sizes
+            "81.9%",       // the only percent either size can produce
+            "PRE-FLIGHT",  // the gate checklist
+            "cached",      // a satisfied artifact
+            "frozen",      // the frontier stopped
+        ] {
+            assert!(frame.contains(needle), "{needle:?} missing:\n{frame}");
+        }
+        // The blocker is dim and says so; the dependents are blocked, not failed.
+        assert!(
+            frame
+                .lines()
+                .any(|line| line.contains("[×]") && line.contains("blocked")),
+            "a blocked dependent is drawn:\n{frame}"
+        );
+        // The card names the failure, the hint and what it blocked.
+        assert!(
+            frame.contains("nvidia"),
+            "the card names the node:\n{frame}"
+        );
+        assert!(frame.contains("repair: "), "the hint is shown:\n{frame}");
+        assert!(
+            frame.contains("1 blocked downstream"),
+            "the blocked count is real:\n{frame}"
+        );
+        assert!(frame.contains("no state written"), "the write is stated");
+        assert!(frame.contains("✓"), "the gates passed with a mark");
+
+        // ASCII carries the same meaning with a different glyph set.
+        let ascii = render_live_frame_status(
+            &snapshot,
+            &run,
+            showcase_footer(&card, true),
+            120,
+            40,
+            true,
+            false,
+            false,
+            false,
+            Some(&gates),
+        );
+        assert!(
+            ascii.lines().all(|line| line.is_ascii()),
+            "ASCII stays ASCII"
+        );
+        // ASCII swaps the whole marker set, not just the bars.
+        for needle in ["[v]", "[|]", "[x]", "[ ]", "81.9%", "repair: ", "+  lock"] {
+            assert!(
+                ascii.contains(needle),
+                "{needle:?} missing from ASCII:\n{ascii}"
+            );
+        }
+        assert!(
+            !ascii.contains("[√]") && !ascii.contains("✓"),
+            "ASCII does not borrow the Unicode marks:\n{ascii}"
+        );
+        assert!(
+            !ascii.contains("█") && !ascii.contains("■"),
+            "ASCII bars use ASCII cells:\n{ascii}"
+        );
+    }
+
     fn buffer_of(
         snapshot: &Snapshot,
         run: Option<&LiveRun>,
@@ -4284,6 +4482,39 @@ mod tests {
             render_install_gate(&install_preflight(), false, 120, 40, false, false),
         )
         .expect("write install gate 120x40");
+
+        std::fs::write(
+            dir.join("tui-showcase-120x40.txt"),
+            render_live_frame_status(
+                &showcase_snapshot(),
+                &showcase_run(),
+                showcase_footer(&showcase_card(), false),
+                120,
+                40,
+                false,
+                false,
+                false,
+                false,
+                Some(&fetch_gates()),
+            ),
+        )
+        .expect("write showcase 120x40");
+        std::fs::write(
+            dir.join("tui-showcase-ascii-120x40.txt"),
+            render_live_frame_status(
+                &showcase_snapshot(),
+                &showcase_run(),
+                showcase_footer(&showcase_card(), true),
+                120,
+                40,
+                true,
+                false,
+                false,
+                false,
+                Some(&fetch_gates()),
+            ),
+        )
+        .expect("write showcase ascii 120x40");
 
         std::fs::write(
             dir.join("tui-post-install-120x40.txt"),
