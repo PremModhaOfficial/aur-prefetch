@@ -780,12 +780,12 @@ pub fn plan_frame(
         .prefetch
         .data()
         .map_or(0, |report| report.notes.len());
-    let tail = 1 + notes;
-    // The summary and the notes are paid for before any row is planned. When
-    // they consume the whole block there is no row to draw; forcing one with
-    // `.max(1)` planned a row the frame then had to clip, which is how the
-    // cursor came to rest on a row that was never drawn.
-    let tree_rows = split.tree_rows.saturating_sub(tail);
+    // `BodySplit` already set the summary row aside (`after_summary`), and the
+    // prefetch block draws that summary itself; only the notes come out of the
+    // tree rows. Reserving the summary here as well cost one row on every
+    // frame, and forcing a minimum of one row when the notes had spent the
+    // block planned a row the frame then had to clip.
+    let tree_rows = split.tree_rows.saturating_sub(notes);
 
     let (window, slots) = match (&live, &tree) {
         (Some(live), Some(Ok(tree))) => {
@@ -2608,7 +2608,7 @@ mod tests {
         );
         if let Some(report) = snapshot.prefetch.data() {
             let mut report = report.clone();
-            report.notes = (0..3).map(|index| format!("note {index}")).collect();
+            report.notes = (0..4).map(|index| format!("note {index}")).collect();
             snapshot.prefetch = Section::ready(report, at());
         }
         let tree = tree_of(&snapshot);
@@ -2642,6 +2642,71 @@ mod tests {
             false,
             Some(&gates),
             Selection::none(),
+        );
+        assert!(frame.contains("done"), "the summary survives:\n{frame}");
+        assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
+    }
+
+    #[test]
+    fn a_single_tree_row_is_planned_and_drawn_at_40x12() {
+        // 40x12 with five gates and three notes leaves exactly one tree slot.
+        // Reserving the summary a second time planned zero, and the truncation
+        // loop could then cut the row the plan named.
+        let mut snapshot = showcase_snapshot();
+        if let Some(report) = snapshot.prefetch.data() {
+            let mut report = report.clone();
+            report.notes = (0..3).map(|index| format!("note {index}")).collect();
+            snapshot.prefetch = Section::ready(report, at());
+        }
+        let tree = tree_of(&snapshot);
+        let run = showcase_run();
+        let gates = fetch_gates();
+        let footer = Footer::default();
+        let plan = super::plan_frame(
+            &snapshot,
+            Some(&run),
+            footer,
+            40,
+            12,
+            false,
+            false,
+            Some(&gates),
+        );
+        assert_eq!(
+            plan.split.tree_rows, 4,
+            "body 8: summary 1, gates 3, tree 4"
+        );
+        assert_eq!(
+            plan.slots.len(),
+            1,
+            "three notes leave one tree row: {:?}",
+            plan.slots
+        );
+        let id = plan
+            .slots
+            .iter()
+            .find_map(|slot| match slot {
+                super::super::live::WindowSlot::Row(id) => Some(*id),
+                _ => None,
+            })
+            .expect("the one slot is a row");
+        let name = &tree.rows[id].name;
+        let frame = render_live_frame_status(
+            &snapshot,
+            &run,
+            footer,
+            40,
+            12,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+            Selection::none(),
+        );
+        assert!(
+            frame.contains(name.as_str()),
+            "the planned row {name} is drawn:\n{frame}"
         );
         assert!(frame.contains("done"), "the summary survives:\n{frame}");
         assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
@@ -4717,7 +4782,7 @@ mod tests {
 
         let wide = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
         assert!(
-            wide.contains("Dependency Graph showing 30 of 197 roots:"),
+            wide.contains("Dependency Graph showing 31 of 197 roots:"),
             "the header names the clipped root count\n{wide}"
         );
         assert!(wide.contains("⋮"), "the clipped marker is shown\n{wide}");
@@ -4742,7 +4807,7 @@ mod tests {
 
         let compact = render_live_frame(&snapshot, &run, 80, 24, false, false, false);
         assert!(
-            compact.contains("Dependency Graph showing 14 of 197 roots:"),
+            compact.contains("Dependency Graph showing 15 of 197 roots:"),
             "the compact header names the clipped root count\n{compact}"
         );
         assert!(

@@ -835,7 +835,10 @@ impl BodySplit {
         let gate_rows = (after_summary / 2).min(wanted);
         Self {
             gate_rows,
-            tree_rows: after_summary.saturating_sub(gate_rows).max(1),
+            // No `.max(1)`: this type may not describe a row the body cannot
+            // hold. `plan_frame` owns the floor and asks for zero when the
+            // summary and the notes have spent the block.
+            tree_rows: after_summary.saturating_sub(gate_rows),
         }
     }
 }
