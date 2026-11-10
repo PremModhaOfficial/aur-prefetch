@@ -762,7 +762,7 @@ pub fn plan_frame(
     // header(2) + body + footer, exactly as `draw_with` lays it out.
     let body_height = height.saturating_sub(2).saturating_sub(footer_height);
     let gate_count = gates.map_or(0, <[Gate]>::len);
-    let split = super::live::BodySplit::of(body_height, gate_count);
+    let mut split = super::live::BodySplit::of(body_height, gate_count);
 
     if snapshot.fatal.is_some() {
         // `body_lines` returns only the error line on a fatal snapshot, so a
@@ -788,12 +788,29 @@ pub fn plan_frame(
         .prefetch
         .data()
         .map_or(0, |report| report.notes.len());
+    // An empty package list still draws one `system current` row.
+    let empty_row = usize::from(
+        snapshot
+            .prefetch
+            .data()
+            .is_some_and(|report| report.packages.is_empty()),
+    );
     // `BodySplit` already set the summary row aside (`after_summary`), and the
-    // prefetch block draws that summary itself; only the notes come out of the
-    // tree rows. Reserving the summary here as well cost one row on every
-    // frame, and forcing a minimum of one row when the notes had spent the
-    // block planned a row the frame then had to clip.
-    let tree_rows = split.tree_rows.saturating_sub(notes);
+    // prefetch block draws that summary itself; only the notes and the
+    // `system current` row come out of the tree rows. Reserving the summary
+    // here as well cost one row on every frame, and forcing a minimum of one
+    // row when they had spent the block planned a row the frame had to clip.
+    let reserved = notes + empty_row;
+    if reserved > split.tree_rows {
+        // The summary, notes and `system current` are not optional. When they
+        // need more than the tree share, the gate block gives up rows; a body
+        // that overruns is what cut the gate block's own overflow row and let
+        // the frame claim every gate had run.
+        let after = usize::from(body_height).saturating_sub(1);
+        split.gate_rows = split.gate_rows.min(after.saturating_sub(reserved));
+        split.tree_rows = after.saturating_sub(split.gate_rows);
+    }
+    let tree_rows = split.tree_rows.saturating_sub(reserved);
 
     let (window, slots) = match (&live, &tree) {
         (Some(live), Some(Ok(tree))) => {
@@ -918,6 +935,7 @@ fn draw_with(
         gates,
         selection,
         plan.split.gate_rows,
+        plan.split.tree_rows,
         &plan.slots,
     );
     // Last line of defence: the body block may never exceed its chunk. Only
@@ -1162,6 +1180,7 @@ fn body_lines(
     gates: Option<&[Gate]>,
     selection: Selection,
     gate_room: usize,
+    block_room: usize,
     slots: &[WindowSlot],
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -1196,6 +1215,7 @@ fn body_lines(
             tree,
             live,
             slots,
+            block_room,
             snapshot.prefetch.at(),
             FrameStyle {
                 ascii,
@@ -1294,6 +1314,7 @@ fn prefetch_lines(
     tree: &Result<Tree, TreeError>,
     live: Option<&LiveView>,
     slots: &[WindowSlot],
+    block_room: usize,
     at: Option<SystemTime>,
     style: FrameStyle,
     ledger: bool,
@@ -1423,9 +1444,29 @@ fn prefetch_lines(
         None => lines.extend(static_summary_lines(report, separator, ascii, width, color)),
     }
 
-    for note in &report.notes {
+    // The notes are the last rows and share the block with the slots, the
+    // summary and a possible `system current`. When there are more notes than
+    // the plan can hold, the last row counts the ones that were left out
+    // rather than letting the body overrun and cut the gate overflow row.
+    let empty_row = usize::from(report.packages.is_empty());
+    let note_room = block_room
+        .saturating_sub(slots.len())
+        .saturating_sub(empty_row);
+    let drawn = if report.notes.len() > note_room {
+        note_room.saturating_sub(1)
+    } else {
+        report.notes.len()
+    };
+    for note in report.notes.iter().take(drawn) {
         lines.push(Line::from(cell_text(
             &format!("note: {note}"),
+            width,
+            ascii,
+        )));
+    }
+    if report.notes.len() > note_room && note_room > 0 {
+        lines.push(Line::from(cell_text(
+            &format!("{} more note(s)", report.notes.len() - drawn),
             width,
             ascii,
         )));
@@ -2772,6 +2813,73 @@ mod tests {
         );
         assert!(frame.contains("done"), "the summary survives:\n{frame}");
         assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
+    }
+
+    #[test]
+    fn an_empty_package_list_reserves_its_current_row() {
+        // `system current` is a row the plan did not know about, so the body
+        // could overrun and cut the gate block's own overflow row.
+        let mut snapshot = prefetch_snapshot_with(Vec::new());
+        if let Some(report) = snapshot.prefetch.data() {
+            let mut report = report.clone();
+            report.notes = (0..4).map(|index| format!("note {index}")).collect();
+            snapshot.prefetch = Section::ready(report, at());
+        }
+        let gates = fetch_gates();
+        let footer = Footer::default();
+        let plan = super::plan_frame(&snapshot, None, footer, 40, 12, false, false, Some(&gates));
+        assert!(plan.slots.is_empty());
+        let frame = super::render_frame_status(
+            &snapshot,
+            footer,
+            40,
+            12,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+            Selection::none(),
+        );
+        assert!(frame.contains("system current"), "{frame}");
+        assert!(frame.contains("note 3"), "every note fits:\n{frame}");
+        assert!(
+            frame.contains("more gate(s)"),
+            "the gate overflow row survives:\n{frame}"
+        );
+        assert!(frame.lines().count() <= 12, "{frame}");
+    }
+
+    #[test]
+    fn too_many_notes_are_counted_not_cut() {
+        // More notes than the block holds: the last row says how many were
+        // left out instead of letting the body overrun.
+        let mut snapshot = showcase_snapshot();
+        if let Some(report) = snapshot.prefetch.data() {
+            let mut report = report.clone();
+            report.notes = (0..8).map(|index| format!("note {index}")).collect();
+            snapshot.prefetch = Section::ready(report, at());
+        }
+        let gates = fetch_gates();
+        let footer = Footer::default();
+        let run = showcase_run();
+        let frame = render_live_frame_status(
+            &snapshot,
+            &run,
+            footer,
+            40,
+            12,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+            Selection::none(),
+        );
+        assert!(frame.contains("2 more note(s)"), "{frame}");
+        assert!(frame.contains("note 0"), "{frame}");
+        assert!(frame.contains("done"), "the summary survives:\n{frame}");
+        assert!(frame.lines().count() <= 12, "{frame}");
     }
 
     #[test]
