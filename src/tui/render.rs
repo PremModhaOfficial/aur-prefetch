@@ -764,6 +764,18 @@ pub fn plan_frame(
     let gate_count = gates.map_or(0, <[Gate]>::len);
     let split = super::live::BodySplit::of(body_height, gate_count);
 
+    if snapshot.fatal.is_some() {
+        // `body_lines` returns only the error line on a fatal snapshot, so a
+        // planned tree would name rows the error frame never draws.
+        return FramePlan {
+            split,
+            slots: Vec::new(),
+            window: None,
+            body_height,
+            footer,
+        };
+    }
+
     let tree = snapshot
         .prefetch
         .data()
@@ -2822,6 +2834,43 @@ mod tests {
             );
             assert!(plan.window.is_none(), "{width}x{height} built a window");
         }
+    }
+
+    #[test]
+    fn a_fatal_snapshot_plans_no_rows() {
+        let mut snapshot = showcase_snapshot();
+        snapshot.fatal = Some(crate::error::Error::failed("collector failed"));
+        let plan = super::plan_frame(
+            &snapshot,
+            None,
+            Footer::default(),
+            80,
+            24,
+            false,
+            false,
+            None,
+        );
+        assert!(
+            plan.slots.is_empty(),
+            "a fatal frame planned {:?}",
+            plan.slots
+        );
+        let frame = super::render_frame_status(
+            &snapshot,
+            Footer::default(),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+            None,
+            Selection::none(),
+        );
+        assert!(
+            frame.contains("error: collector failed"),
+            "the error is drawn:\n{frame}"
+        );
     }
 
     #[test]
