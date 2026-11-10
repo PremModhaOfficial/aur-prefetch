@@ -1423,13 +1423,41 @@ fn static_summary_lines(
 ) -> Vec<Line<'static>> {
     let counts = &report.counts;
     let host = report.host.as_deref().unwrap_or("unknown");
-    let text = format!(
-        "{} packages {separator} {} ready {separator} {} missing {separator} {} stale {separator} {host}",
-        counts.total(),
-        counts.ready(),
-        counts.missing,
-        counts.stale
-    );
+    // The same rule as the live summary: only whole segments are printed.
+    // At 40 columns the old fixed string was cut and lost `stale` and the
+    // host; the host is the first to go, then the redundant package total.
+    let cores = [
+        format!(
+            "{} packages {separator} {} ready {separator} {} missing {separator} {} stale {separator} {host}",
+            counts.total(),
+            counts.ready(),
+            counts.missing,
+            counts.stale
+        ),
+        format!(
+            "{} packages {separator} {} ready {separator} {} missing {separator} {} stale",
+            counts.total(),
+            counts.ready(),
+            counts.missing,
+            counts.stale
+        ),
+        format!(
+            "{} ready {separator} {} missing {separator} {} stale",
+            counts.ready(),
+            counts.missing,
+            counts.stale
+        ),
+        format!(
+            "{} ready {separator} {} missing",
+            counts.ready(),
+            counts.missing
+        ),
+    ];
+    let text = cores
+        .iter()
+        .find(|core| display_width(core) <= width)
+        .cloned()
+        .unwrap_or_else(|| cores[3].clone());
     vec![Line::styled(cell_text(&text, width, ascii), dim(color))]
 }
 
@@ -2766,7 +2794,7 @@ mod tests {
             frame.contains(&format!("showing 0 of {} roots", tree.roots.len())),
             "the header admits nothing is shown:\n{frame}"
         );
-        assert!(frame.contains("packages"), "the summary survives:\n{frame}");
+        assert!(frame.contains("ready"), "the summary survives:\n{frame}");
         assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
     }
 
@@ -2822,6 +2850,24 @@ mod tests {
         assert!(
             !frame.contains("waiting"),
             "waiting is the first count to go:\n{frame}"
+        );
+        for line in frame.lines() {
+            assert!(
+                super::display_width(line) <= 40,
+                "line over 40 cells: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_narrow_static_summary_keeps_ready_and_missing() {
+        let snapshot = prefetch_snapshot();
+        let frame = render_frame(&snapshot, 40, 15, false, false, false);
+        assert!(frame.contains("ready"), "ready survives:\n{frame}");
+        assert!(frame.contains("missing"), "missing survives:\n{frame}");
+        assert!(
+            !frame.contains("mirror.example.org"),
+            "the host is the first to go:\n{frame}"
         );
         for line in frame.lines() {
             assert!(
