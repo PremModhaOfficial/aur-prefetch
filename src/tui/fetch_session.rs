@@ -399,6 +399,10 @@ impl FetchSession {
             total: view.summary.total,
             failed: view.summary.failed,
             summary_timer: timer_label(view.summary.elapsed, false),
+            // Without this cell the spinner changes every 100 ms while the key
+            // stays byte-identical, so `tick` reports "unchanged" and the frame
+            // is never repainted.
+            spinner: view.spinner,
             frozen: view.frozen,
             status: self.status.clone(),
             failure: self.failure,
@@ -434,6 +438,7 @@ struct FrameKey {
     total: usize,
     failed: usize,
     summary_timer: Option<String>,
+    spinner: usize,
     frozen: bool,
     status: String,
     failure: bool,

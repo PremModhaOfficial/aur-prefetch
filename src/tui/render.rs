@@ -1092,6 +1092,7 @@ fn prefetch_lines(
     let mut lines = Vec::new();
     let now = at.unwrap_or(UNIX_EPOCH);
     let separator = if ascii { "|" } else { "·" };
+    let spinner = live.map_or(0, |live| live.spinner);
 
     if report.packages.is_empty() {
         lines.push(Line::from("system current"));
@@ -1144,13 +1145,13 @@ fn prefetch_lines(
                                             Some(geometry) if geometry.rows.contains(&id) => {
                                                 lines.push(progress_row_line(
                                                     row, live_row, &prefix, ascii, width, color,
-                                                    geometry,
+                                                    geometry, spinner,
                                                 ));
                                             }
                                             _ => {
                                                 lines.push(live_row_line(
                                                     row, live_row, &prefix, ascii, width, color,
-                                                    lead,
+                                                    lead, spinner,
                                                 ));
                                             }
                                         }
@@ -1501,6 +1502,7 @@ fn static_row_line(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn live_row_line(
     row: &TreeRow,
     live: &super::live::LiveRow,
@@ -1509,9 +1511,10 @@ fn live_row_line(
     width: usize,
     color: bool,
     lead: usize,
+    spinner: usize,
 ) -> Line<'static> {
     let separator = if ascii { "|" } else { "·" };
-    let glyph = live_glyph(live, ascii);
+    let glyph = live_glyph_at(live, ascii, spinner);
     let state_label = live_state_label(live);
     let hue = live_color(live.state);
     let name_style = if matches!(live.state, LiveState::Running | LiveState::Failed) {
@@ -1556,6 +1559,20 @@ fn live_row_line(
         ascii,
         width,
     )
+}
+
+/// One live row's marker. A running row spins; everything else is still, so a
+/// frame with nothing running never changes on the clock alone.
+fn live_glyph_at(live: &super::live::LiveRow, ascii: bool, spinner: usize) -> &'static str {
+    match live.state {
+        LiveState::Running => match spinner % 4 {
+            0 => "[|]",
+            1 => "[/]",
+            2 => "[-]",
+            _ => "[\\]",
+        },
+        _ => live_glyph(live, ascii),
+    }
 }
 
 fn live_glyph(live: &super::live::LiveRow, ascii: bool) -> &'static str {
@@ -1705,6 +1722,7 @@ fn progress_left_text(
 /// Nom's transfer row: the readable tree row and bytes on the left, then a
 /// fixed right edge with the bar and `%5.1f%%`. The percent is bold; color mode
 /// adds the accent. The text is identical with `NO_COLOR`.
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn progress_row_line(
     row: &TreeRow,
     live: &super::live::LiveRow,
@@ -1713,9 +1731,10 @@ fn progress_row_line(
     width: usize,
     color: bool,
     geometry: &ProgressGeometry,
+    spinner: usize,
 ) -> Line<'static> {
     let separator = if ascii { " | " } else { " · " };
-    let glyph = live_glyph(live, ascii);
+    let glyph = live_glyph_at(live, ascii, spinner);
     let hue = live_color(live.state);
     let name_style = accent_bold(color, hue);
     let progress = live.progress.expect("progress rows have bytes");

@@ -462,6 +462,30 @@ pub struct LiveView {
     pub rows: BTreeMap<RowId, LiveRow>,
     pub summary: LiveSummary,
     pub frozen: bool,
+    /// The spinner cell for this frame, `0..4`. Derived from the observation
+    /// clock, never the wall clock, and frozen with the run: a stopped
+    /// frontier must not animate.
+    pub spinner: usize,
+}
+
+/// Four steps of 100 ms. `crate::tui::render` maps this to `| / - \\`.
+pub const SPINNER_STEPS: usize = 4;
+pub const SPINNER_STEP: Duration = Duration::from_millis(100);
+
+/// The spinner cell, or 0 when nothing is running.
+///
+/// A frame with no running row must not change on the clock alone: a quiet
+/// tick stays byte-identical and asks for no redraw. A frozen run is the same
+/// case one step further, because a stopped frontier must not animate.
+fn spinner_at(elapsed: Option<Duration>, frozen: bool, running: usize) -> usize {
+    if frozen || running == 0 {
+        return 0;
+    }
+    let Some(elapsed) = elapsed else {
+        return 0;
+    };
+    let steps = elapsed.as_millis() / SPINNER_STEP.as_millis();
+    usize::try_from(steps % SPINNER_STEPS as u128).unwrap_or(0)
 }
 
 impl LiveView {
@@ -538,6 +562,11 @@ impl LiveView {
                 elapsed,
                 frozen: run.graph.frozen,
             },
+            spinner: spinner_at(
+                elapsed,
+                run.graph.frozen,
+                builds.running + downloads.running,
+            ),
             frozen: run.graph.frozen,
             rows,
         }
@@ -848,6 +877,59 @@ mod tests {
                 planned: 2
             }
         );
+    }
+
+    #[test]
+    fn the_spinner_turns_only_while_something_runs() {
+        // A running node turns the cell four times a second, whatever the
+        // frame rate. The base must be cached so `left` is Ready and a start
+        // can apply; a start on a Pending node is correctly ignored.
+        let tree = mixed_diamond_cached_base();
+        let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
+        run.observe(
+            "left",
+            Observed::Started,
+            at(),
+            Some(Activity::Build),
+            "started",
+        )
+        .expect("starts");
+        assert_eq!(
+            LiveView::build(&tree, &run)
+                .rows
+                .values()
+                .filter(|row| row.state == LiveState::Running)
+                .count(),
+            1,
+            "the fixture really has one running row"
+        );
+        let phase = |ms: u64| {
+            let mut probe = run.clone();
+            probe.advance(at() + Duration::from_millis(ms));
+            LiveView::build(&tree, &probe).spinner
+        };
+        assert_eq!(
+            [0, 100, 200, 300, 400].map(phase),
+            [0, 1, 2, 3, 0],
+            "four steps per 400 ms"
+        );
+
+        // Idle: nothing running, so the frame cannot change on the clock.
+        let idle = LiveRun::plan(&tree, at()).expect("plan seeds");
+        let mut idle = idle;
+        idle.advance(at() + Duration::from_millis(1_700));
+        assert_eq!(LiveView::build(&tree, &idle).spinner, 0);
+
+        // Frozen: a stopped frontier does not animate.
+        let mut frozen = LiveRun::plan(&tree, at()).expect("plan seeds");
+        frozen
+            .observe("left", Observed::Started, at(), Some(Activity::Build), "s")
+            .expect("starts");
+        frozen
+            .observe("left", Observed::Failed, at(), None, "exit 2")
+            .expect("fails");
+        frozen.advance(at() + Duration::from_millis(900));
+        assert_eq!(LiveView::build(&tree, &frozen).spinner, 0);
     }
 
     #[test]
