@@ -289,17 +289,29 @@ impl FetchSession {
             }
         }
 
-        if self.running() && self.observation_error.is_none() {
+        // A cache read can fail transiently: the directory is swapped, a
+        // permission flips, the device is busy. Latching the first error
+        // stopped observation for the rest of the run, so the view froze while
+        // the child kept working and the footer still claimed it was running.
+        // Keep polling, keep the newest error for the footer, and clear it as
+        // soon as a poll succeeds.
+        if self.running() {
             match self.monitor.poll(at) {
                 Ok(transitions) => {
+                    if self.observation_error.take().is_some() {
+                        tick.changed = true;
+                    }
                     if !transitions.is_empty() {
                         tick.changed = true;
                         tick.transitions.extend(transitions);
                     }
                 }
                 Err(error) => {
-                    self.observation_error = Some(error.to_string());
-                    tick.changed = true;
+                    let message = error.to_string();
+                    if self.observation_error.as_deref() != Some(message.as_str()) {
+                        self.observation_error = Some(message);
+                        tick.changed = true;
+                    }
                 }
             }
         }

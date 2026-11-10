@@ -648,8 +648,14 @@ impl LiveView {
                     _ => 2,
                 },
             );
-            selected = ranked.into_iter().take(budget).collect();
+            // One row pays for the marker, so the caller still gets a frame
+            // within its budget rather than rows plus markers on top.
+            let keep = budget.saturating_sub(1).max(1).min(budget);
+            selected = ranked.into_iter().take(keep).collect();
             slots = Self::slots_for(&display, &selected);
+            if slots.len() > budget {
+                slots.truncate(budget);
+            }
         }
 
         let selected_ids: BTreeSet<RowId> =
@@ -692,8 +698,11 @@ impl LiveView {
 pub struct Selection {
     /// The package name, not a `RowId`. A refresh rebuilds `Tree::rows` and
     /// every positional id can name a different package, so a cursor keyed by
-    /// id silently jumps to whatever now occupies that index. A name survives
-    /// the rebuild, and a name that is no longer pending simply clears.
+    /// id silently jumps to whatever now occupies that index.
+    ///
+    /// A name outlives the rebuild. When the named package is no longer on
+    /// screen the cursor draws nothing and the next `moved` restarts from the
+    /// edge it was moving towards; it does not silently re-point.
     node: Option<String>,
 }
 

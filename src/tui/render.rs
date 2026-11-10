@@ -708,6 +708,70 @@ pub fn draw_status(
     );
 }
 
+/// Everything the frame needs to know about its own layout, computed once.
+///
+/// `draw_with` and the `j`/`k` handler both call this. They used to compute the
+/// body split separately — the handler assumed `height - 4`, ignoring the
+/// footer height, the notes and the gate cap — so the cursor could name a row
+/// the frame never drew. One call site, one answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramePlan {
+    pub split: super::live::BodySplit,
+    /// The slots the tree block draws, markers included.
+    pub slots: Vec<WindowSlot>,
+    /// The live window, when there is a live view. Carries the root counts.
+    pub window: Option<Window>,
+}
+
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
+pub fn plan_frame(
+    snapshot: &Snapshot,
+    run: Option<&LiveRun>,
+    footer: Footer<'_>,
+    width: u16,
+    height: u16,
+    ascii: bool,
+    color: bool,
+    gates: Option<&[Gate]>,
+) -> FramePlan {
+    let footer_lines = footer_lines(footer, width as usize, ascii, color);
+    let footer_height = (footer_lines.len() as u16).max(2);
+    // header(2) + body + footer, exactly as `draw_with` lays it out.
+    let body_height = height.saturating_sub(2).saturating_sub(footer_height);
+    let gate_count = gates.map_or(0, <[Gate]>::len);
+    let split = super::live::BodySplit::of(body_height, gate_count);
+
+    let tree = snapshot
+        .prefetch
+        .data()
+        .map(|report| Tree::build(&report.packages));
+    let live = match (run, tree.as_ref()) {
+        (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
+        _ => None,
+    };
+    // The notes are rows in the same block and are reserved here, once.
+    let notes = snapshot
+        .prefetch
+        .data()
+        .map_or(0, |report| report.notes.len());
+    let tree_rows = split.tree_rows.saturating_sub(notes).max(1);
+
+    let (window, slots) = match (&live, &tree) {
+        (Some(live), Some(Ok(tree))) => {
+            let window = live.window(tree, tree_rows);
+            let slots = window.slots.clone();
+            (Some(window), slots)
+        }
+        (None, Some(Ok(tree))) => (None, super::live::static_slots(tree, tree_rows)),
+        _ => (None, Vec::new()),
+    };
+    FramePlan {
+        split,
+        slots,
+        window,
+    }
+}
+
 #[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn draw_with(
     frame: &mut Frame,
@@ -732,6 +796,19 @@ fn draw_with(
         return;
     }
 
+    // One owner for the layout. `plan_frame` is also what the `j`/`k` handler
+    // calls, so the cursor walks exactly the slots this frame draws. It has to
+    // run before `footer` is shadowed by the rendered lines.
+    let plan = plan_frame(
+        snapshot,
+        run,
+        footer,
+        area.width,
+        area.height,
+        ascii,
+        color,
+        gates,
+    );
     let footer = footer_lines(footer, area.width as usize, ascii, color);
     // Static and running footers keep the original two rows; the repair card
     // takes only the rows it needs.
@@ -753,34 +830,9 @@ fn draw_with(
         (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
         _ => None,
     };
-    // The body is shared by three blocks: the gates, the tree and the summary.
-    // `window` now returns at most the budget it is given, markers included,
-    // so the tallies here are exact rather than estimates.
-    let gate_rows = gates.map_or(0, |gates| {
-        if gates.is_empty() {
-            0
-        } else {
-            gates.len() as u16 + 1
-        }
-    });
-    // One owner for the split, shared with the key handler in `tui::mod`, so
-    // `j`/`k` walks exactly the rows this frame draws.
-    let gate_count = gates.map_or(0, <[Gate]>::len);
-    let split = super::live::BodySplit::of(chunks[1].height, gate_count);
-    let gate_rows = u16::try_from(split.gate_rows.min(usize::from(gate_rows))).unwrap_or(0);
-    // The notes are rows too, and the window must not spend their space. This
-    // was the bug: the summary was reserved but the notes were not, so with
-    // enough rows the live path clipped every note away while the static path
-    // kept them.
-    let notes = snapshot
-        .prefetch
-        .data()
-        .map_or(0, |report| report.notes.len());
-    let tree_rows = u16::try_from(split.tree_rows.saturating_sub(notes).max(1)).unwrap_or(u16::MAX);
-    let window = match (live.as_ref(), tree.as_ref()) {
-        (Some(live), Some(Ok(tree))) => Some(live.window(tree, usize::from(tree_rows))),
-        _ => None,
-    };
+    let gate_rows = u16::try_from(plan.split.gate_rows).unwrap_or(u16::MAX);
+    let tree_rows = u16::try_from(plan.split.tree_rows).unwrap_or(u16::MAX);
+    let window = plan.window;
 
     let header = header_lines(
         snapshot,
@@ -2353,6 +2405,69 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn the_plan_names_exactly_the_rows_the_frame_draws() {
+        // A review found this twice: the key handler computed its own window
+        // and drifted from the renderer, so the cursor could land on a row
+        // that was never drawn. Both now call `plan_frame`, and this asserts
+        // that the plan's slots match the rows that appear in the frame.
+        let snapshot = showcase_snapshot();
+        let run = showcase_run();
+        let card = showcase_card();
+        let gates = fetch_gates();
+        for (width, height) in [(40u16, 15u16), (80, 24), (120, 40)] {
+            for ascii in [false, true] {
+                // The repair footer is the tall case: up to five rows.
+                let footer = showcase_footer(&card, ascii);
+                let plan = super::plan_frame(
+                    &snapshot,
+                    Some(&run),
+                    footer,
+                    width,
+                    height,
+                    ascii,
+                    false,
+                    Some(&gates),
+                );
+                let frame = render_live_frame_status(
+                    &snapshot,
+                    &run,
+                    footer,
+                    width,
+                    height,
+                    ascii,
+                    false,
+                    false,
+                    false,
+                    Some(&gates),
+                    Selection::none(),
+                );
+                let tree = tree_of(&snapshot);
+                // Every planned row must be visible, by name, in the frame.
+                for slot in &plan.slots {
+                    if let super::super::live::WindowSlot::Row(id) = slot {
+                        let name = &tree.rows[*id].name;
+                        assert!(
+                            frame.contains(name.as_str()),
+                            "planned row {name} is not drawn at {width}x{height}:\n{frame}"
+                        );
+                    }
+                }
+                // And the body must fit its own chunk: no overflow past the
+                // footer, which is what pushed the summary off in the past.
+                assert!(
+                    frame.lines().count() <= usize::from(height),
+                    "frame is {} lines at {width}x{height}",
+                    frame.lines().count()
+                );
+                assert!(
+                    frame.contains("done"),
+                    "the summary survives at {width}x{height}:\n{frame}"
+                );
+            }
+        }
     }
 
     #[test]

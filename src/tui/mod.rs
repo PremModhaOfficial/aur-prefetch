@@ -354,29 +354,32 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                         // renderer uses when there is no window.
                         if let Some(report) = snapshot.prefetch.data() {
                             if let Ok(tree) = Tree::build(&report.packages) {
-                                // Ask the renderer's own split, so the cursor
-                                // can only ever name a row that is drawn.
-                                let (_, height) = terminal::size().unwrap_or((80, 24));
-                                let body = height.saturating_sub(4).max(1);
-                                let gates = session.as_ref().map_or(0, |live| live.gates().len());
-                                let split = live::BodySplit::of(body, gates);
-                                let slots: Vec<live::WindowSlot> = match session.as_ref() {
-                                    Some(live) => {
-                                        let view = live::LiveView::build(&tree, live.live());
-                                        view.window(&tree, split.tree_rows).slots
-                                    }
-                                    None => {
-                                        // The static frame keeps the tail of the
-                                        // display order, exactly as it draws.
-                                        live::static_slots(&tree, split.tree_rows)
-                                    }
-                                };
+                                // Ask the renderer to plan the frame it will
+                                // draw, with the same footer and the same
+                                // gates. Anything computed here independently
+                                // has been wrong twice.
+                                let (width, height) = terminal::size().unwrap_or((80, 24));
+                                let (footer, gates): (render::Footer<'_>, &[Gate]) =
+                                    match session.as_ref() {
+                                        Some(live) => (live.footer(ascii), live.gates()),
+                                        None => (render::Footer::default(), &[]),
+                                    };
+                                let plan = render::plan_frame(
+                                    &snapshot,
+                                    session.as_ref().map(FetchSession::live),
+                                    footer,
+                                    width,
+                                    height,
+                                    ascii,
+                                    color,
+                                    Some(gates),
+                                );
                                 let delta = if key.code == KeyCode::Char('j') {
                                     1
                                 } else {
                                     -1
                                 };
-                                selection = selection.moved(&tree, &slots, delta);
+                                selection = selection.moved(&tree, &plan.slots, delta);
                                 dirty = true;
                             }
                         }
