@@ -128,6 +128,36 @@ effects. `sim/` can: it boots an Arch container with a local package repo,
 runs the binary, and asserts on `/usr`, the download cache, and the fake AUR
 helper's log. The development machine is never a test machine.
 
+### Reviewing the TUI without a terminal
+
+The frames are text, so they can be reviewed from files. Two layers exist:
+
+- `tests/golden/*.txt` are the **contract**. `cargo test` fails if a frame
+  changes. `cargo test regenerate_golden -- --ignored` rewrites them after an
+  intentional change, and the diff is the review.
+- `target/frames/<case>/<size>-<tint>.txt` are the **working view**, written by
+  `cargo test dump_frames -- --ignored`. Every case is dumped at 80x24, 120x40
+  and 40x15, in colour and in ASCII, so a layout question is answered by
+  reading a file rather than by running the TUI.
+
+```bash
+cargo test dump_frames -- --ignored          # write target/frames
+sed -n '1,20p' target/frames/showcase/80x24-color.txt
+cargo test                                   # the goldens must still match
+```
+
+The cases are `showcase` (every state at once, with gates and the repair
+card), `diamond`, `failure` and `progress`. Adding a case means adding it to
+`dump_frames` and, if it is worth freezing, to `regenerate_golden_frames`.
+
+Animation is tested as state, not as pixels: `LiveView.spinner` is derived from
+the observation clock, and `the_spinner_turns_only_while_something_runs`
+asserts the four phases plus the idle and frozen cases. That is why no test
+needs to sleep.
+
+`ITERATIONS.md` records the UI hillclimb: the scorecard, what was kept, and
+what was reverted with the evidence for doing so.
+
 ## Code review
 
 Every PR gets an automated review from a self-hosted
