@@ -663,6 +663,64 @@ impl LiveView {
     }
 }
 
+/// The user's cursor in the live forest.
+///
+/// Pure and testable: it holds a row id and resolves movement against the
+/// frame's slot list, so it can never point at a clipped marker or at a row
+/// that is not on screen. An offset of `None` means nothing is selected, and
+/// the frame draws no cursor at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Selection {
+    row: Option<RowId>,
+}
+
+impl Selection {
+    pub fn none() -> Self {
+        Self { row: None }
+    }
+
+    pub fn row(&self) -> Option<RowId> {
+        self.row
+    }
+
+    pub fn is_selected(&self, row: RowId) -> bool {
+        self.row == Some(row)
+    }
+
+    /// Move the cursor by `delta` rows through the slots on screen.
+    ///
+    /// Clipped markers are skipped, not landed on: they are not rows. From no
+    /// selection, a downward move starts at the first row and an upward move
+    /// at the last, so the first `j` always shows a cursor. The cursor is
+    /// bounded by the frame, never by the whole forest.
+    pub fn moved(self, slots: &[WindowSlot], delta: isize) -> Self {
+        let rows: Vec<RowId> = slots
+            .iter()
+            .filter_map(|slot| match slot {
+                WindowSlot::Row(id) => Some(*id),
+                WindowSlot::Clipped => None,
+            })
+            .collect();
+        if rows.is_empty() {
+            return Self::none();
+        }
+        let current = self
+            .row
+            .and_then(|row| rows.iter().position(|id| *id == row));
+        let next = match current {
+            Some(index) => {
+                let moved = index as isize + delta;
+                moved.clamp(0, rows.len() as isize - 1) as usize
+            }
+            None if delta < 0 => rows.len() - 1,
+            None => 0,
+        };
+        Self {
+            row: Some(rows[next]),
+        }
+    }
+}
+
 /// One rendered slot in the live forest. A hidden run is a single marker, not
 /// one marker per hidden row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -800,8 +858,8 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::{
-        Activity, GroupCounts, LiveRun, LiveState, LiveView, Progress, Waiting, timer_label,
-        tree_row_budget,
+        Activity, GroupCounts, LiveRun, LiveState, LiveView, Progress, Selection, Waiting,
+        WindowSlot, timer_label, tree_row_budget,
     };
     use crate::frontier::{NodeState, Observed};
     use crate::report::{ArtifactState, PackageView, Repo};
@@ -903,6 +961,47 @@ mod tests {
                 planned: 2
             }
         );
+    }
+
+    #[test]
+    fn the_cursor_moves_over_rows_and_skips_clipped_markers() {
+        let slots = [
+            WindowSlot::Row(4),
+            WindowSlot::Clipped,
+            WindowSlot::Row(7),
+            WindowSlot::Row(9),
+        ];
+        // Nothing selected: down starts at the top, up starts at the bottom.
+        assert_eq!(Selection::none().moved(&slots, 1).row(), Some(4));
+        assert_eq!(Selection::none().moved(&slots, -1).row(), Some(9));
+
+        // Movement follows the slots, so a marker is never landed on.
+        let at_four = Selection::none().moved(&slots, 1);
+        assert_eq!(at_four.moved(&slots, 1).row(), Some(7), "skips the marker");
+        assert_eq!(
+            at_four.moved(&slots, -1).row(),
+            Some(4),
+            "clamped at the top"
+        );
+
+        // The ends clamp instead of wrapping or emptying the selection.
+        let last = Selection::none().moved(&slots, -1);
+        assert_eq!(
+            last.moved(&slots, 1).row(),
+            Some(9),
+            "clamped at the bottom"
+        );
+
+        // A frame with nothing selectable clears the cursor.
+        assert_eq!(
+            Selection::none().moved(&[WindowSlot::Clipped], 1).row(),
+            None
+        );
+
+        // A cursor whose row fell out of the window restarts at the edge
+        // rather than pointing at nothing.
+        let stale = Selection { row: Some(99) };
+        assert_eq!(stale.moved(&slots, 1).row(), Some(4));
     }
 
     #[test]

@@ -109,6 +109,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
     // of the gate, and is never written to disk.
     let mut news_attested = false;
     let mut dirty = true;
+    let mut selection = live::Selection::none();
 
     let interrupted = Arc::new(AtomicBool::new(false));
     for signal in [SIGINT, SIGTERM, SIGHUP] {
@@ -145,6 +146,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             help,
                             ledger,
                             Some(live.gates()),
+                            selection,
                         ),
                         (None, Some(notice)) => render::draw_status(
                             frame,
@@ -160,6 +162,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             help,
                             ledger,
                             Some(&notice.gates),
+                            selection,
                         ),
                         (None, None) => {
                             let keys = static_keys(ascii, ledger);
@@ -177,6 +180,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 help,
                                 ledger,
                                 None,
+                                selection,
                             )
                         }
                     }
@@ -338,6 +342,41 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                         // A view toggle only; it never touches the fetch or a file.
                         ledger = !ledger;
                         dirty = true;
+                    }
+                    KeyCode::Char('j') | KeyCode::Char('k') => {
+                        // Move the cursor over the rows actually on screen. The
+                        // frame is recomputed here because the window depends on
+                        // the current snapshot and run, and a cursor must never
+                        // point at a row that is not drawn.
+                        // The cursor walks the rows that are actually drawn.
+                        // During a fetch that is the live window; otherwise it
+                        // is the static forest, whose display order the
+                        // renderer uses when there is no window.
+                        if let Some(report) = snapshot.prefetch.data() {
+                            if let Ok(tree) = Tree::build(&report.packages) {
+                                // header(2) + footer(2); the split the renderer uses.
+                                let (_, height) = terminal::size().unwrap_or((80, 24));
+                                let budget = usize::from(height.saturating_sub(4)).max(1);
+                                let slots: Vec<live::WindowSlot> = match session.as_ref() {
+                                    Some(live) => {
+                                        let view = live::LiveView::build(&tree, live.live());
+                                        view.window(&tree, budget).slots
+                                    }
+                                    None => tree
+                                        .display_rows()
+                                        .iter()
+                                        .map(|row| live::WindowSlot::Row(row.id))
+                                        .collect(),
+                                };
+                                let delta = if key.code == KeyCode::Char('j') {
+                                    1
+                                } else {
+                                    -1
+                                };
+                                selection = selection.moved(&slots, delta);
+                                dirty = true;
+                            }
+                        }
                     }
                     KeyCode::Char('l') => {
                         // The log exists only after a fetch session starts.

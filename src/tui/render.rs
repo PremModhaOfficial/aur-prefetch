@@ -20,7 +20,9 @@ use crate::report::{ArtifactState, PrefetchReport, Snapshot, Update};
 use crate::runner::{StreamKind, StreamLine};
 use crate::util::human_bytes;
 
-use super::live::{Activity, LiveRun, LiveState, LiveView, Progress, Window, WindowSlot};
+use super::live::{
+    Activity, LiveRun, LiveState, LiveView, Progress, Selection, Window, WindowSlot,
+};
 use super::sanitize::{cell_text, display_width};
 use super::tree::{RowId, Tree, TreeError, TreeRow, TreeRowKind};
 
@@ -134,6 +136,7 @@ pub fn render_frame(
         help,
         false,
         None,
+        Selection::none(),
     )
 }
 
@@ -159,6 +162,7 @@ pub fn render_live_frame(
         help,
         false,
         None,
+        Selection::none(),
     )
 }
 
@@ -176,6 +180,7 @@ pub fn render_live_frame_status(
     help: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    selection: Selection,
 ) -> String {
     render_with(
         snapshot,
@@ -188,12 +193,14 @@ pub fn render_live_frame_status(
         help,
         ledger,
         gates,
+        selection,
     )
 }
 
 /// Render the static frame with a status line, for a refused action that has
 /// no live run to show.
 #[allow(clippy::too_many_arguments)] // the ledger goldens read the flat frame inputs
+#[allow(clippy::too_many_arguments)] // one call site per renderer entry point
 pub fn render_frame_status(
     snapshot: &Snapshot,
     footer: Footer<'_>,
@@ -204,9 +211,10 @@ pub fn render_frame_status(
     help: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    selection: Selection,
 ) -> String {
     render_with(
-        snapshot, None, footer, width, height, ascii, color, help, ledger, gates,
+        snapshot, None, footer, width, height, ascii, color, help, ledger, gates, selection,
     )
 }
 
@@ -222,6 +230,7 @@ fn render_with(
     help: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    selection: Selection,
 ) -> String {
     if width == 0 || height == 0 {
         return String::new();
@@ -232,7 +241,7 @@ fn render_with(
     terminal
         .draw(|frame| {
             draw_with(
-                frame, snapshot, run, footer, ascii, color, help, ledger, gates,
+                frame, snapshot, run, footer, ascii, color, help, ledger, gates, selection,
             )
         })
         .expect("draw frame");
@@ -629,6 +638,7 @@ pub fn draw(frame: &mut Frame, snapshot: &Snapshot, ascii: bool, color: bool, he
         help,
         false,
         None,
+        Selection::none(),
     );
 }
 
@@ -650,6 +660,7 @@ pub fn draw_live(
         help,
         false,
         None,
+        Selection::none(),
     );
 }
 
@@ -664,6 +675,7 @@ pub fn draw_live_status(
     help: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    selection: Selection,
 ) {
     draw_with(
         frame,
@@ -675,6 +687,7 @@ pub fn draw_live_status(
         help,
         ledger,
         gates,
+        selection,
     );
 }
 
@@ -688,9 +701,10 @@ pub fn draw_status(
     help: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    selection: Selection,
 ) {
     draw_with(
-        frame, snapshot, None, footer, ascii, color, help, ledger, gates,
+        frame, snapshot, None, footer, ascii, color, help, ledger, gates, selection,
     );
 }
 
@@ -705,6 +719,7 @@ fn draw_with(
     help: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    selection: Selection,
 ) {
     let area = frame.area();
     if area.width < 40 || area.height < 12 {
@@ -787,6 +802,7 @@ fn draw_with(
         color,
         ledger,
         gates,
+        selection,
         usize::from(gate_rows),
         usize::from(tree_rows),
     );
@@ -1011,6 +1027,7 @@ fn body_lines(
     color: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    selection: Selection,
     gate_room: usize,
     body_budget: usize,
 ) -> Vec<Line<'static>> {
@@ -1054,6 +1071,7 @@ fn body_lines(
                 color,
             },
             ledger,
+            selection,
             body_budget.saturating_sub(tail),
         ));
         return lines;
@@ -1148,6 +1166,7 @@ fn prefetch_lines(
     at: Option<SystemTime>,
     style: FrameStyle,
     ledger: bool,
+    selection: Selection,
     body_budget: usize,
 ) -> Vec<Line<'static>> {
     let FrameStyle {
@@ -1210,14 +1229,28 @@ fn prefetch_lines(
                                         match &geometry {
                                             Some(geometry) if geometry.rows.contains(&id) => {
                                                 lines.push(progress_row_line(
-                                                    row, live_row, &prefix, ascii, width, color,
-                                                    geometry, spinner,
+                                                    row,
+                                                    live_row,
+                                                    &prefix,
+                                                    ascii,
+                                                    width,
+                                                    color,
+                                                    geometry,
+                                                    spinner,
+                                                    selection.is_selected(id),
                                                 ));
                                             }
                                             _ => {
                                                 lines.push(live_row_line(
-                                                    row, live_row, &prefix, ascii, width, color,
-                                                    lead, spinner,
+                                                    row,
+                                                    live_row,
+                                                    &prefix,
+                                                    ascii,
+                                                    width,
+                                                    color,
+                                                    lead,
+                                                    spinner,
+                                                    selection.is_selected(id),
                                                 ));
                                             }
                                         }
@@ -1226,7 +1259,14 @@ fn prefetch_lines(
                                 }
                             }
                             lines.push(static_row_line(
-                                row, &prefix, now, ascii, width, color, lead,
+                                row,
+                                &prefix,
+                                now,
+                                ascii,
+                                width,
+                                color,
+                                lead,
+                                selection.is_selected(id),
                             ));
                         }
                     }
@@ -1421,6 +1461,9 @@ struct RowPaint<'a> {
     /// The widest `prefix + marker` in this frame. Every row pads to it, so the
     /// state and size columns land on the same screen column at every depth.
     lead: usize,
+    /// True when the cursor is on this row. It takes the marker's leading
+    /// cell, which is a space on every other row, so no column moves.
+    cursor: bool,
 }
 
 /// Solve the shared column widths once per frame.
@@ -1486,16 +1529,45 @@ fn row_line(row: &TreeRow, paint: RowPaint<'_>, ascii: bool, width: usize) -> Li
         &mut remaining,
         ascii,
     );
+    // The separator stays a space on every row. The cursor is drawn by
+    // underlining the label below, which costs no cell at all and cannot be
+    // mistaken for part of the name.
     push_span(&mut spans, " ", Style::default(), &mut remaining, ascii);
     // `fit` pads to `name_width`, so this cell always ends on the same column.
+    // The cursor is a mark inside that padding: the label keeps its own width,
+    // the cell keeps its own width, and a text dump can still show it.
+    let name_style = if paint.cursor {
+        paint.name_style.add_modifier(Modifier::UNDERLINED)
+    } else {
+        paint.name_style
+    };
     push_span(
         &mut spans,
         &fit(&row.label, name_width, ascii),
-        paint.name_style,
+        name_style,
         &mut remaining,
         ascii,
     );
-    push_span(&mut spans, " ", Style::default(), &mut remaining, ascii);
+    // The separator after the label is one space on every row; on the cursor
+    // row it is the mark. Same cell, same width, visible in a text dump.
+    let cursor_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    push_span(
+        &mut spans,
+        match (paint.cursor, ascii) {
+            (true, false) => "▸",
+            (true, true) => ">",
+            (false, _) => " ",
+        },
+        if paint.cursor {
+            cursor_style
+        } else {
+            Style::default()
+        },
+        &mut remaining,
+        ascii,
+    );
 
     let mut suffix_remaining = state_width.min(remaining);
     for (text, style) in paint.suffix {
@@ -1526,6 +1598,7 @@ fn row_line(row: &TreeRow, paint: RowPaint<'_>, ascii: bool, width: usize) -> Li
     Line::from(spans)
 }
 
+#[allow(clippy::too_many_arguments)] // the frame carries the full view state
 fn static_row_line(
     row: &TreeRow,
     prefix: &str,
@@ -1534,6 +1607,7 @@ fn static_row_line(
     width: usize,
     color: bool,
     lead: usize,
+    cursor: bool,
 ) -> Line<'static> {
     let separator = if ascii { "|" } else { "·" };
     let artifact = row.artifact.unwrap_or(ArtifactState::Unknown);
@@ -1562,6 +1636,7 @@ fn static_row_line(
             suffix,
             size_style: dim(color),
             lead,
+            cursor,
         },
         ascii,
         width,
@@ -1578,6 +1653,7 @@ fn live_row_line(
     color: bool,
     lead: usize,
     spinner: usize,
+    cursor: bool,
 ) -> Line<'static> {
     let separator = if ascii { "|" } else { "·" };
     let glyph = live_glyph_at(live, ascii, spinner);
@@ -1621,6 +1697,7 @@ fn live_row_line(
             suffix,
             size_style: dim(color),
             lead,
+            cursor,
         },
         ascii,
         width,
@@ -1798,6 +1875,7 @@ fn progress_row_line(
     color: bool,
     geometry: &ProgressGeometry,
     spinner: usize,
+    cursor: bool,
 ) -> Line<'static> {
     let separator = if ascii { " | " } else { " · " };
     let glyph = live_glyph_at(live, ascii, spinner);
@@ -1822,10 +1900,22 @@ fn progress_row_line(
         &mut left_remaining,
         ascii,
     );
+    // Same rule as a plain row: the separator is the cursor's cell.
+    let cursor_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
     push_span(
         &mut spans,
-        " ",
-        Style::default(),
+        match (cursor, ascii) {
+            (true, false) => "▸",
+            (true, true) => ">",
+            (false, _) => " ",
+        },
+        if cursor {
+            cursor_style
+        } else {
+            Style::default()
+        },
         &mut left_remaining,
         ascii,
     );
@@ -2078,8 +2168,9 @@ mod tests {
     use ratatui::style::{Color, Modifier};
 
     use super::{
-        Footer, RepairCard, display_width, render_frame, render_install_gate, render_live_frame,
-        render_live_frame_status, render_log_frame, render_post_install, repair_hint,
+        Footer, RepairCard, Selection, display_width, render_frame, render_install_gate,
+        render_live_frame, render_live_frame_status, render_log_frame, render_post_install,
+        repair_hint,
     };
     use crate::commands::install::Preflight;
     use crate::frontier::Observed;
@@ -2897,14 +2988,84 @@ mod tests {
                         false,
                         false,
                         Some(&gates),
+                        Selection::none(),
                     );
                     let tint = if ascii { "ascii" } else { "color" };
+                    let _ = &tint;
                     std::fs::write(case.join(format!("{width}x{height}-{tint}.txt")), &frame)
                         .expect("frame");
                 }
             }
         }
         println!("wrote {}", dir.display());
+    }
+
+    #[test]
+    fn the_cursor_marks_one_row_and_moves_no_column() {
+        let snapshot = diamond_snapshot();
+        let run = diamond_run();
+        // Draw the same frame with no cursor and with one row selected.
+        let plain = render_live_frame_status(
+            &snapshot,
+            &run,
+            Footer::default(),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+            None,
+            Selection::none(),
+        );
+        let tree = tree_of(&snapshot);
+        let target = tree
+            .rows
+            .iter()
+            .find(|row| row.name == "left")
+            .expect("left is in the tree")
+            .id;
+        let marked = render_live_frame_status(
+            &snapshot,
+            &run,
+            Footer::default(),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+            None,
+            super::super::live::Selection::none()
+                .moved(&[super::super::live::WindowSlot::Row(target)], 1),
+        );
+        // The mark is visible in a plain text dump, which is how this project
+        // reviews frames.
+        assert!(
+            marked.contains('▸'),
+            "the selected row carries a mark:\n{marked}"
+        );
+        assert!(
+            !plain.contains('▸'),
+            "an unselected frame carries none:\n{plain}"
+        );
+        // Exactly one row differs, and its width is unchanged: the cursor
+        // replaced a separator instead of adding a cell.
+        let plain_lines: Vec<&str> = plain.lines().collect();
+        let marked_lines: Vec<&str> = marked.lines().collect();
+        let diffs: Vec<usize> = plain_lines
+            .iter()
+            .zip(&marked_lines)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(diffs.len(), 1, "one line changes:\n{marked}");
+        assert_eq!(
+            plain_lines[diffs[0]].chars().count(),
+            marked_lines[diffs[0]].chars().count(),
+            "the cursor costs no column:\n{plain}\n---\n{marked}"
+        );
     }
 
     #[test]
@@ -2924,6 +3085,7 @@ mod tests {
             false,
             false,
             Some(&gates),
+            Selection::none(),
         );
         assert_eq!(
             frame,
@@ -2945,6 +3107,7 @@ mod tests {
             false,
             false,
             Some(&gates),
+            Selection::none(),
         );
         assert_eq!(
             narrow,
@@ -3033,6 +3196,7 @@ mod tests {
             false,
             false,
             Some(&gates),
+            Selection::none(),
         );
         assert!(
             ascii.lines().all(|line| line.is_ascii()),
@@ -3211,6 +3375,7 @@ mod tests {
             false,
             false,
             None,
+            Selection::none(),
         );
         assert!(
             frame.contains("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
@@ -3246,6 +3411,7 @@ mod tests {
             false,
             false,
             None,
+            Selection::none(),
         );
         assert!(frame.contains("fetch: running"));
         assert!(frame.contains('%'));
@@ -3272,6 +3438,7 @@ mod tests {
             false,
             false,
             None,
+            Selection::none(),
         );
         assert!(frame.contains("fetch blocked: pacman is running"));
         assert!(frame.contains("r refresh"));
@@ -3380,6 +3547,7 @@ mod tests {
             false,
             false,
             None,
+            Selection::none(),
         );
 
         assert!(
@@ -3419,6 +3587,7 @@ mod tests {
             false,
             false,
             None,
+            Selection::none(),
         );
         assert_eq!(
             frame,
@@ -3436,6 +3605,7 @@ mod tests {
             false,
             false,
             None,
+            Selection::none(),
         );
         assert!(ascii.contains("! base 2.0.0-1 | exit 2"), "{ascii}");
         assert!(ascii.contains("repair: "), "{ascii}");
@@ -3465,6 +3635,7 @@ mod tests {
             false,
             false,
             None,
+            Selection::none(),
         );
 
         assert!(
@@ -3491,6 +3662,7 @@ mod tests {
             false,
             true,
             None,
+            Selection::none(),
         );
         assert!(frame.contains("Ledger:"), "{frame}");
         assert!(!frame.contains("├─ "), "no tree connectors\n{frame}");
@@ -3517,6 +3689,7 @@ mod tests {
             false,
             true,
             None,
+            Selection::none(),
         );
         assert_eq!(
             frame,
@@ -3537,6 +3710,7 @@ mod tests {
             false,
             true,
             None,
+            Selection::none(),
         );
         assert_eq!(
             tree,
@@ -3559,6 +3733,7 @@ mod tests {
             false,
             false,
             Some(&gates),
+            Selection::none(),
         );
 
         assert!(frame.contains("PRE-FLIGHT"), "{frame}");
@@ -3593,6 +3768,7 @@ mod tests {
             false,
             false,
             Some(&gates),
+            Selection::none(),
         );
         assert_eq!(
             frame,
@@ -3628,6 +3804,7 @@ mod tests {
             false,
             false,
             Some(&gates),
+            Selection::none(),
         );
 
         assert!(frame.contains("PRE-FLIGHT"), "{frame}");
@@ -3664,6 +3841,7 @@ mod tests {
             false,
             true,
             Some(&gates),
+            Selection::none(),
         );
 
         assert!(frame.contains("▲  lists"), "{frame}");
@@ -4648,6 +4826,7 @@ mod tests {
                 false,
                 false,
                 None,
+                Selection::none(),
             ),
         )
         .expect("write live fetch 120x40");
@@ -4664,6 +4843,7 @@ mod tests {
                 false,
                 false,
                 None,
+                Selection::none(),
             ),
         )
         .expect("write live fetch 80x24");
@@ -4682,6 +4862,7 @@ mod tests {
                 false,
                 false,
                 None,
+                Selection::none(),
             ),
         )
         .expect("write repair 120x40");
@@ -4698,6 +4879,7 @@ mod tests {
                 false,
                 false,
                 None,
+                Selection::none(),
             ),
         )
         .expect("write repair 80x24");
@@ -4715,6 +4897,7 @@ mod tests {
                 false,
                 true,
                 None,
+                Selection::none(),
             ),
         )
         .expect("write ledger 120x40");
@@ -4731,6 +4914,7 @@ mod tests {
                 false,
                 true,
                 None,
+                Selection::none(),
             ),
         )
         .expect("write ledger 80x24");
@@ -4749,6 +4933,7 @@ mod tests {
                 false,
                 false,
                 Some(&gates),
+                Selection::none(),
             ),
         )
         .expect("write gates 120x40");
@@ -4765,6 +4950,7 @@ mod tests {
                 false,
                 false,
                 Some(&gates),
+                Selection::none(),
             ),
         )
         .expect("write gates 80x24");
@@ -4794,6 +4980,7 @@ mod tests {
                 false,
                 false,
                 Some(&fetch_gates()),
+                Selection::none(),
             ),
         )
         .expect("write showcase 120x40");
@@ -4810,6 +4997,7 @@ mod tests {
                 false,
                 false,
                 Some(&fetch_gates()),
+                Selection::none(),
             ),
         )
         .expect("write showcase 80x24");
@@ -4826,6 +5014,7 @@ mod tests {
                 false,
                 false,
                 Some(&fetch_gates()),
+                Selection::none(),
             ),
         )
         .expect("write showcase ascii 80x24");
@@ -4842,6 +5031,7 @@ mod tests {
                 false,
                 false,
                 Some(&fetch_gates()),
+                Selection::none(),
             ),
         )
         .expect("write showcase ascii 120x40");
