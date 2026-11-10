@@ -814,9 +814,14 @@ pub fn plan_frame(
                         .any(|slot| matches!(slot, WindowSlot::Row(id) if id == *root))
                 })
                 .count();
+            let rows = slots
+                .iter()
+                .filter(|slot| matches!(slot, WindowSlot::Row(_)))
+                .count();
             let window = Window {
                 shown_roots,
                 total_roots: tree.roots.len(),
+                hidden: rows < tree.display_rows().len(),
                 slots: slots.clone(),
             };
             (Some(window), slots)
@@ -1067,20 +1072,20 @@ fn header_lines(
         ),
     };
 
-    let (shown_roots, total_roots) = match window {
-        Some(window) => (window.shown_roots, window.total_roots),
+    let (shown_roots, total_roots, hidden) = match window {
+        Some(window) => (window.shown_roots, window.total_roots, window.hidden),
         None => {
             let roots = match tree {
                 Some(Ok(tree)) => tree.roots.len(),
                 _ => 0,
             };
-            (roots, roots)
+            (roots, roots, false)
         }
     };
     let left = if ledger {
         "Ledger:".to_string()
     } else {
-        graph_title(shown_roots, total_roots)
+        graph_title(shown_roots, total_roots, hidden)
     };
     let right = match live {
         Some(_) => format!("install {} {separator} live", package_count(packages)),
@@ -1107,11 +1112,13 @@ fn header_lines(
     ]
 }
 
-/// Nom's graph header. The live viewport reports how many roots it kept; the
-/// static frame always shows every root.
-fn graph_title(shown: usize, total: usize) -> String {
-    if shown >= total {
+/// Nom's graph header. The viewport reports how many roots it kept, and says
+/// so when rows are hidden even though every root is on screen.
+fn graph_title(shown: usize, total: usize, hidden: bool) -> String {
+    if !hidden && shown >= total {
         "Dependency Graph:".to_string()
+    } else if shown >= total {
+        format!("Dependency Graph: {total} roots (clipped):")
     } else {
         format!("Dependency Graph showing {shown} of {total} roots:")
     }
@@ -5298,9 +5305,13 @@ mod tests {
 
     #[test]
     fn the_graph_header_uses_nom_forms() {
-        assert_eq!(super::graph_title(3, 3), "Dependency Graph:");
+        assert_eq!(super::graph_title(3, 3, false), "Dependency Graph:");
         assert_eq!(
-            super::graph_title(2, 5),
+            super::graph_title(3, 3, true),
+            "Dependency Graph: 3 roots (clipped):"
+        );
+        assert_eq!(
+            super::graph_title(2, 5, true),
             "Dependency Graph showing 2 of 5 roots:"
         );
     }

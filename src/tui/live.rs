@@ -592,6 +592,7 @@ impl LiveView {
                 slots: Vec::new(),
                 shown_roots: 0,
                 total_roots: tree.roots.len(),
+                hidden: !display.is_empty(),
             };
         }
 
@@ -617,7 +618,7 @@ impl LiveView {
             // Fill from the end: the bottom-up order puts the roots and the
             // goal at the tail, and those are what a clipped frame must show.
             for index in (0..display.len()).rev() {
-                if selected.len() == budget {
+                if selected.len() >= budget {
                     break;
                 }
                 selected.insert(index);
@@ -652,9 +653,10 @@ impl LiveView {
                     _ => 2,
                 },
             );
-            // One row pays for the marker, so the caller still gets a frame
-            // within its budget rather than rows plus markers on top.
-            let keep = budget.saturating_sub(1).max(1).min(budget);
+            // Markers are pruned after this branch, so every slot can go to a
+            // row. Reserving one for the marker wasted it and hid another
+            // mandatory row for an admission that was then deleted.
+            let keep = budget.min(ranked.len());
             selected = ranked.into_iter().take(keep).collect();
             slots = Self::slots_for(&display, &selected);
         }
@@ -665,9 +667,11 @@ impl LiveView {
         // `mandatory.len() == budget` the de-selection loop has no victim, so
         // leaving the pruning inside the branch returned rows plus a marker.
         while slots.len() > budget {
+            // Keep the bottom admission: dropping it would make the frame
+            // claim it shows the tail when it does not.
             let Some(marker) = slots
                 .iter()
-                .rposition(|slot| matches!(slot, WindowSlot::Clipped))
+                .position(|slot| matches!(slot, WindowSlot::Clipped))
             else {
                 break;
             };
@@ -689,6 +693,7 @@ impl LiveView {
                 .filter(|root| selected_ids.contains(root))
                 .count(),
             total_roots: tree.roots.len(),
+            hidden: selected.len() < display.len(),
         }
     }
 
@@ -843,12 +848,16 @@ impl BodySplit {
     }
 }
 
-/// The relevant live window plus the root counts the header needs.
+/// The window whose rows and root counts the header reports, live or static.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Window {
     pub slots: Vec<WindowSlot>,
     pub shown_roots: usize,
     pub total_roots: usize,
+    /// True when rows are hidden even though every root is shown. Without
+    /// this, a budget filled by mandatory rows prints the bare title and the
+    /// frame silently claims the whole forest is on screen.
+    pub hidden: bool,
 }
 
 impl Window {
@@ -1772,6 +1781,7 @@ mod tests {
         let window = view.window(&tree, 4);
 
         assert!(!window.clipped());
+        assert!(!window.hidden);
         assert_eq!(window.rows().count(), 4);
         assert_eq!(window.shown_roots, 1);
         assert_eq!(window.total_roots, 1);
@@ -1890,6 +1900,7 @@ mod tests {
                 window.slots.len(),
                 window.slots
             );
+            assert!(window.hidden, "budget {budget} hid rows without saying so");
         }
     }
 
@@ -1976,6 +1987,10 @@ mod tests {
             window.slots
         );
         assert_eq!(window.slots.len(), 3);
+        assert!(
+            window.hidden,
+            "children are hidden even though every root is shown"
+        );
         for name in ["z-mid", "a-base", "a-top"] {
             assert!(names.contains(&name), "{name} is never hidden: {names:?}");
         }
