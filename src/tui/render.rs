@@ -1102,6 +1102,15 @@ fn prefetch_lines(
                     (None, None) => display.iter().map(|row| WindowSlot::Row(row.id)).collect(),
                 };
                 let geometry = progress_geometry(tree, live, &slots, ascii, width);
+                // Live rows draw a 3-cell marker, static rows a 1-cell glyph.
+                let lead = solve_lead(
+                    tree,
+                    &slots,
+                    ledger,
+                    ascii,
+                    if live.is_some() { 3 } else { 1 },
+                    width,
+                );
 
                 if let Some((hidden, _)) = &static_window {
                     lines.push(hidden_line(*hidden, width, ascii, color));
@@ -1132,6 +1141,7 @@ fn prefetch_lines(
                                             _ => {
                                                 lines.push(live_row_line(
                                                     row, live_row, &prefix, ascii, width, color,
+                                                    lead,
                                                 ));
                                             }
                                         }
@@ -1139,7 +1149,9 @@ fn prefetch_lines(
                                     }
                                 }
                             }
-                            lines.push(static_row_line(row, &prefix, now, ascii, width, color));
+                            lines.push(static_row_line(
+                                row, &prefix, now, ascii, width, color, lead,
+                            ));
                         }
                     }
                 }
@@ -1284,16 +1296,57 @@ struct RowPaint<'a> {
     name_style: Style,
     suffix: Vec<(String, Style)>,
     size_style: Style,
+    /// The widest `prefix + marker` in this frame. Every row pads to it, so the
+    /// state and size columns land on the same screen column at every depth.
+    lead: usize,
 }
 
-/// Lay out one tree row. Every column is measured in terminal cells, and the
-/// optional size column is right-aligned exactly as the static frame did.
+/// Solve the shared column widths once per frame.
+///
+/// Measuring the lead per row was the bug: a depth-2 row has a longer branch
+/// prefix, so its name column narrowed and its state and size moved right.
+/// bootvine solves its table once and every row shares the answer; this is the
+/// same rule with our own cells.
+///
+/// `marker_width` is what the frame draws between the branch and the label: 3
+/// for the live `[ ]` markers, 1 for the static artifact glyphs.
+fn solve_lead(
+    tree: &Tree,
+    slots: &[WindowSlot],
+    ledger: bool,
+    ascii: bool,
+    marker_width: usize,
+    width: usize,
+) -> usize {
+    let mut widest = 0;
+    for slot in slots {
+        let WindowSlot::Row(id) = *slot else {
+            continue;
+        };
+        let prefix = if ledger {
+            String::new()
+        } else {
+            branch_prefix(tree, &tree.rows[id], ascii)
+        };
+        widest = widest.max(display_width(&prefix));
+    }
+    let lead = widest + marker_width + 1;
+    lead + (width.saturating_sub(lead) / 3).clamp(12, 36)
+}
+
+/// Lay out one tree row against the frame's shared label cell. Every column is
+/// measured in terminal cells, and the optional size column is right-aligned
+/// exactly as the static frame did.
 fn row_line(row: &TreeRow, paint: RowPaint<'_>, ascii: bool, width: usize) -> Line<'static> {
-    let lead = display_width(paint.prefix) + display_width(paint.glyph) + 1;
-    let name_width = ((width.saturating_sub(lead)) / 3).clamp(12, 36);
+    let own_lead = display_width(paint.prefix) + display_width(paint.glyph) + 1;
+    // The label cell is the same width on every row, so the state column and
+    // the size column land on one screen column whatever the row's depth. A
+    // deeper row has less room for the name itself, and only the name.
+    let label_cell = paint.lead.max(own_lead);
+    let name_width = label_cell.saturating_sub(own_lead);
     let size_width = if width >= 60 { 8 } else { 0 };
-    let state_width = width
-        .saturating_sub(lead + name_width + 1 + if size_width > 0 { size_width + 1 } else { 0 });
+    let state_width =
+        width.saturating_sub(label_cell + 1 + if size_width > 0 { size_width + 1 } else { 0 });
 
     let mut remaining = width;
     let mut spans = Vec::new();
@@ -1312,6 +1365,7 @@ fn row_line(row: &TreeRow, paint: RowPaint<'_>, ascii: bool, width: usize) -> Li
         ascii,
     );
     push_span(&mut spans, " ", Style::default(), &mut remaining, ascii);
+    // `fit` pads to `name_width`, so this cell always ends on the same column.
     push_span(
         &mut spans,
         &fit(&row.label, name_width, ascii),
@@ -1357,6 +1411,7 @@ fn static_row_line(
     ascii: bool,
     width: usize,
     color: bool,
+    lead: usize,
 ) -> Line<'static> {
     let separator = if ascii { "|" } else { "·" };
     let artifact = row.artifact.unwrap_or(ArtifactState::Unknown);
@@ -1384,6 +1439,7 @@ fn static_row_line(
             name_style: Style::default(),
             suffix,
             size_style: dim(color),
+            lead,
         },
         ascii,
         width,
@@ -1397,6 +1453,7 @@ fn live_row_line(
     ascii: bool,
     width: usize,
     color: bool,
+    lead: usize,
 ) -> Line<'static> {
     let separator = if ascii { "|" } else { "·" };
     let glyph = live_glyph(live, ascii);
@@ -1439,6 +1496,7 @@ fn live_row_line(
             name_style,
             suffix,
             size_style: dim(color),
+            lead,
         },
         ascii,
         width,

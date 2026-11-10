@@ -3,18 +3,18 @@ Dependency Graph showing 11 of 197 roots:                                       
   ⋮
 ┌─ [|] z-mid 2.0.0-1                        downloading · ⏱ 2s                                                   1.1 MiB
   ⋮
-[ ] pkg-009 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-008 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-007 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-006 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-005 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-004 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-003 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-002 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-001 2.0.0-1                      planned                                                                 1.1 MiB
-[ ] pkg-000 2.0.0-1                      planned                                                                 1.1 MiB
+[ ] pkg-009 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-008 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-007 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-006 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-005 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-004 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-003 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-002 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-001 2.0.0-1                         planned                                                              1.1 MiB
+[ ] pkg-000 2.0.0-1                         planned                                                              1.1 MiB
 ┌─ [×] a-base 2.0.0-1                       failed · exit 2 · ⏱ 2s                                               1.1 MiB
-[×] a-top 2.0.0-1                        blocked                                                                 1.1 MiB
+[×] a-top 2.0.0-1                           blocked                                                              1.1 MiB
 1 done · 1 running · 196 waiting · 1 failed · ⏱ 2s · mirror.example.org · frozen
 
 
