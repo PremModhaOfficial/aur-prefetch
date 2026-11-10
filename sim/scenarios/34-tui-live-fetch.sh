@@ -77,6 +77,7 @@ assert_contains "$clean" "Synchronizing" "the log shows a real pacman line"
 # a time, and the lock may not exist for the first moments.
 assert_false "the install gate is refused during a fetch" \
     bash -c 'printf "%s" "$1" | grep -q "space attest"' _ "$clean"
+assert_contains "$clean" "blocked" "the refused install key names the reason"
 
 # 2. The row becomes done from the final artifact.
 assert_contains "$clean" "✔ simapp" "the final artifact finishes the row"

@@ -203,6 +203,13 @@ impl FetchSession {
         self.phase == Phase::Running
     }
 
+    /// Name the reason a key was refused while the fetch owns pacman's lock.
+    /// The exact argv stays in the line, and the reason replaces any earlier
+    /// one so repeated presses cannot grow it.
+    pub fn refuse(&mut self, reason: &str) {
+        self.status = format!("fetch: running {} · {reason}", self.argv.join(" "));
+    }
+
     /// The exact argv, for the status line and the tests.
     pub fn argv(&self) -> &[String] {
         &self.argv
@@ -647,6 +654,41 @@ mod tests {
         assert_eq!(footer.keys, Some("esc detach · g ledger · l log · ? help"));
         assert!(!footer.failure);
         assert!(session.running());
+    }
+
+    #[test]
+    fn a_refused_key_names_the_reason_and_keeps_the_argv() {
+        let fixture = Fixture::new();
+        let fake = Arc::new(FakeRunner::new());
+        fixture.queue_gates(&fake);
+        fake.push_stream(0, &[], &[]);
+
+        let mut session = FetchSession::start(
+            &fixture.config,
+            BlockingRunner::new(Arc::clone(&fake)),
+            fixture.tree(),
+            at(1),
+        )
+        .expect("session starts");
+
+        session.refuse("install blocked: the fetch owns pacman's lock");
+        assert_eq!(
+            session.footer(false).status,
+            Some(
+                "fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm · \
+                 install blocked: the fetch owns pacman's lock"
+            )
+        );
+
+        session.refuse("refresh deferred while the fetch runs");
+        assert_eq!(
+            session.footer(false).status,
+            Some(
+                "fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm · \
+                 refresh deferred while the fetch runs"
+            ),
+            "a later refusal replaces the earlier reason"
+        );
     }
 
     #[test]

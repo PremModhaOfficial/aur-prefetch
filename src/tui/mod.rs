@@ -349,6 +349,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     KeyCode::Char('i') => {
                         if session.as_ref().is_some_and(FetchSession::running) {
                             // One mutation at a time: the fetch owns pacman's lock.
+                            session
+                                .as_mut()
+                                .expect("a running session is present")
+                                .refuse("install blocked: the fetch owns pacman's lock");
+                            dirty = true;
                         } else {
                             install_gate = Some(InstallGate {
                                 preflight: install::preflight(config, &SystemRunner),
@@ -359,6 +364,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     KeyCode::Char('r') => {
                         if session.as_ref().is_some_and(FetchSession::running) {
                             // The live poll owns the refresh while the fetch runs.
+                            session
+                                .as_mut()
+                                .expect("a running session is present")
+                                .refuse("refresh deferred while the fetch runs");
+                            dirty = true;
                         } else {
                             session = None;
                             notice = None;
@@ -370,6 +380,11 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                     KeyCode::Char('F') => {
                         if session.as_ref().is_some_and(FetchSession::running) {
                             // One fetch at a time. No second child.
+                            session
+                                .as_mut()
+                                .expect("a running session is present")
+                                .refuse("one fetch at a time; esc detaches");
+                            dirty = true;
                         } else {
                             if session.is_some() || notice.is_some() {
                                 session = None;
