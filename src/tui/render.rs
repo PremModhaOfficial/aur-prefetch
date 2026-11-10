@@ -768,7 +768,10 @@ pub fn plan_frame(
         // `body_lines` returns only the error line on a fatal snapshot, so a
         // planned tree would name rows the error frame never draws.
         return FramePlan {
-            split,
+            split: super::live::BodySplit {
+                gate_rows: 0,
+                tree_rows: 0,
+            },
             slots: Vec::new(),
             window: None,
             body_height,
@@ -1062,6 +1065,16 @@ fn header_lines(
     ledger: bool,
 ) -> Vec<Line<'static>> {
     let separator = if ascii { "|" } else { "·" };
+    if snapshot.fatal.is_some() {
+        // The body is the error. A graph title here would name roots the
+        // error frame does not draw.
+        let pending = pending_count(snapshot);
+        let header = format!(
+            "aur-prefetch {separator} {pending} pending {separator} {} action(s)",
+            snapshot.actionable
+        );
+        return vec![Line::styled(cell_text(&header, width, ascii), bold())];
+    }
     let Some(report) = snapshot.prefetch.data() else {
         let pending = pending_count(snapshot);
         let header = format!(
@@ -2985,6 +2998,10 @@ mod tests {
         assert!(
             frame.contains("error: collector failed"),
             "the error is drawn:\n{frame}"
+        );
+        assert!(
+            !frame.contains("Dependency Graph"),
+            "a fatal frame claims no graph:\n{frame}"
         );
     }
 
