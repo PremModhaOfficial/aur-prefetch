@@ -772,10 +772,6 @@ pub fn plan_frame(
         (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
         _ => None,
     };
-    // The summary and the notes are rows in the same block and are reserved
-    // here, once. Reserving only the notes left the plan one row longer than
-    // the frame on the static path, so the cursor could still land on a row
-    // that was never drawn.
     let notes = snapshot
         .prefetch
         .data()
@@ -793,7 +789,26 @@ pub fn plan_frame(
             let slots = window.slots.clone();
             (Some(window), slots)
         }
-        (None, Some(Ok(tree))) => (None, super::live::static_slots(tree, tree_rows)),
+        (None, Some(Ok(tree))) => {
+            // The static forest is windowed as well, so the header must name
+            // the roots actually on screen rather than claiming all of them.
+            let slots = super::live::static_slots(tree, tree_rows);
+            let shown_roots = tree
+                .roots
+                .iter()
+                .filter(|root| {
+                    slots
+                        .iter()
+                        .any(|slot| matches!(slot, WindowSlot::Row(id) if id == *root))
+                })
+                .count();
+            let window = Window {
+                shown_roots,
+                total_roots: tree.roots.len(),
+                slots: slots.clone(),
+            };
+            (Some(window), slots)
+        }
         _ => (None, Vec::new()),
     };
     FramePlan {
@@ -2709,6 +2724,49 @@ mod tests {
             "the planned row {name} is drawn:\n{frame}"
         );
         assert!(frame.contains("done"), "the summary survives:\n{frame}");
+        assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
+    }
+
+    #[test]
+    fn a_static_block_with_no_room_says_no_root_is_shown() {
+        let mut snapshot = showcase_snapshot();
+        if let Some(report) = snapshot.prefetch.data() {
+            let mut report = report.clone();
+            report.notes = (0..4).map(|index| format!("note {index}")).collect();
+            snapshot.prefetch = Section::ready(report, at());
+        }
+        let tree = tree_of(&snapshot);
+        let gates = fetch_gates();
+        let footer = Footer::default();
+        let plan = super::plan_frame(&snapshot, None, footer, 40, 12, false, false, Some(&gates));
+        assert!(
+            plan.slots.is_empty(),
+            "no tree room, yet the plan names {:?}",
+            plan.slots
+        );
+        let window = plan
+            .window
+            .as_ref()
+            .expect("the static plan carries its root counts");
+        assert_eq!(window.shown_roots, 0);
+        assert_eq!(window.total_roots, tree.roots.len());
+        let frame = super::render_frame_status(
+            &snapshot,
+            footer,
+            40,
+            12,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+            Selection::none(),
+        );
+        assert!(
+            frame.contains(&format!("showing 0 of {} roots", tree.roots.len())),
+            "the header admits nothing is shown:\n{frame}"
+        );
+        assert!(frame.contains("packages"), "the summary survives:\n{frame}");
         assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
     }
 
