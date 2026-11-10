@@ -908,8 +908,17 @@ fn header_lines(
             package_count(packages)
         ),
     };
-    let padding = width.saturating_sub(display_width(&left) + display_width(&right));
-    let title = format!("{left}{}{right}", " ".repeat(padding));
+    // Two halves on one line. When they do not both fit, the left half wins:
+    // it names the screen and the root count, while the right half repeats the
+    // install total that the header line already carries. Joining them with no
+    // gap produced `Dependency Graph showing 2 of 5 roots:i…` at 40 columns.
+    let gap = 2;
+    let title = if display_width(&left) + gap + display_width(&right) <= width {
+        let padding = width - display_width(&left) - display_width(&right);
+        format!("{left}{}{right}", " ".repeat(padding))
+    } else {
+        left
+    };
 
     vec![
         Line::styled(cell_text(&header, width, ascii), bold()),
@@ -2763,6 +2772,54 @@ mod tests {
             blocked: 1,
             note: None,
         }
+    }
+
+    /// The frame-dump harness: every screen at every harness size, as plain
+    /// text, so layout can be judged from files instead of from images.
+    ///
+    /// `cargo test dump_frames -- --ignored` writes `target/frames/`. Those
+    /// files are a diagnostic; the goldens are the contract.
+    #[test]
+    #[ignore = "writes target/frames for visual review"]
+    fn dump_frames() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/frames");
+        let card = showcase_card();
+        let gates = fetch_gates();
+        let cases: [(&str, Snapshot, LiveRun, bool); 4] = [
+            ("showcase", showcase_snapshot(), showcase_run(), false),
+            ("diamond", diamond_snapshot(), diamond_run(), false),
+            ("failure", failure_snapshot(), failure_run(), true),
+            ("progress", progress_snapshot(), progress_run(), false),
+        ];
+        for (name, snapshot, run, failing) in &cases {
+            let case = dir.join(name);
+            std::fs::create_dir_all(&case).expect("case dir");
+            for (width, height) in [(80u16, 24u16), (120, 40), (40, 15)] {
+                for ascii in [false, true] {
+                    let footer = if *failing {
+                        showcase_footer(&card, ascii)
+                    } else {
+                        Footer::default()
+                    };
+                    let frame = render_live_frame_status(
+                        snapshot,
+                        run,
+                        footer,
+                        width,
+                        height,
+                        ascii,
+                        false,
+                        false,
+                        false,
+                        Some(&gates),
+                    );
+                    let tint = if ascii { "ascii" } else { "color" };
+                    std::fs::write(case.join(format!("{width}x{height}-{tint}.txt")), &frame)
+                        .expect("frame");
+                }
+            }
+        }
+        println!("wrote {}", dir.display());
     }
 
     #[test]
