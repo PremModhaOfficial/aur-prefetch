@@ -20,9 +20,7 @@ use crate::report::{ArtifactState, PrefetchReport, Snapshot, Update};
 use crate::runner::{StreamKind, StreamLine};
 use crate::util::human_bytes;
 
-use super::live::{
-    Activity, LiveRun, LiveState, LiveView, Progress, Window, WindowSlot, tree_row_budget,
-};
+use super::live::{Activity, LiveRun, LiveState, LiveView, Progress, Window, WindowSlot};
 use super::sanitize::{cell_text, display_width};
 use super::tree::{RowId, Tree, TreeError, TreeRow, TreeRowKind};
 
@@ -740,6 +738,9 @@ fn draw_with(
         (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
         _ => None,
     };
+    // The body is shared by three blocks: the gates, the tree and the summary.
+    // `window` now returns at most the budget it is given, markers included,
+    // so the tallies here are exact rather than estimates.
     let gate_rows = gates.map_or(0, |gates| {
         if gates.is_empty() {
             0
@@ -747,9 +748,20 @@ fn draw_with(
             gates.len() as u16 + 1
         }
     });
-    let tree_height = area.height.saturating_sub(gate_rows);
+    let body_height = chunks[1].height;
+    // Summary first: a frame without it cannot be read. Then the gates, capped
+    // so they never take more than half of what is left. The tree gets the
+    // remainder, and the bottom-up fill keeps the roots and the goal.
+    let after_summary = body_height.saturating_sub(1);
+    let gate_cap = if gates.is_some_and(|gates| !gates.is_empty()) {
+        (after_summary / 2).min(gate_rows)
+    } else {
+        0
+    };
+    let tree_rows = after_summary.saturating_sub(gate_cap).max(1);
+    let gate_rows = gate_rows.min(gate_cap);
     let window = match (live.as_ref(), tree.as_ref()) {
-        (Some(live), Some(Ok(tree))) => Some(live.window(tree, tree_row_budget(tree_height))),
+        (Some(live), Some(Ok(tree))) => Some(live.window(tree, usize::from(tree_rows))),
         _ => None,
     };
 
@@ -775,8 +787,34 @@ fn draw_with(
         color,
         ledger,
         gates,
-        usize::from(chunks[1].height.saturating_sub(gate_rows)),
+        usize::from(gate_rows),
+        usize::from(tree_rows),
     );
+    // Last line of defence: the body block may never exceed its chunk. Only
+    // clipped markers are dropped here; a marker says "something is hidden"
+    // and a summary says how the whole run is going, so the summary wins.
+    let mut body = body;
+    let budget = usize::from(chunks[1].height);
+    // Only a marker that belongs to a run still represented by another marker
+    // may go. Dropping the last `⋮` would make the frame claim it shows
+    // everything, which is the one thing a clipped frame must not do.
+    while body.len() > budget {
+        let markers: Vec<usize> = body
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| {
+                let text = line.to_string();
+                let trimmed = text.trim_start();
+                trimmed.starts_with('⋮') || trimmed.starts_with(':')
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if markers.len() < 2 {
+            break;
+        }
+        body.remove(markers[0]);
+    }
+    body.truncate(budget);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     frame.render_widget(Paragraph::new(footer), chunks[2]);
@@ -973,6 +1011,7 @@ fn body_lines(
     color: bool,
     ledger: bool,
     gates: Option<&[Gate]>,
+    gate_room: usize,
     body_budget: usize,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
@@ -987,7 +1026,7 @@ fn body_lines(
     }
 
     if let Some(gates) = gates {
-        lines.extend(gate_lines(gates, width, ascii, color));
+        lines.extend(gate_lines(gates, width, ascii, color, gate_room));
     }
 
     if let Some(error) = snapshot.prefetch.error() {
@@ -1050,16 +1089,43 @@ fn body_lines(
 
 /// The fetch gates, in the order they ran. A later gate after a failure is
 /// absent because it never ran; no status is invented for it.
-fn gate_lines(gates: &[Gate], width: usize, ascii: bool, color: bool) -> Vec<Line<'static>> {
-    if gates.is_empty() {
+/// The gate block, bounded by `room` rows including its title.
+///
+/// Gates are pre-flight context and the tree is the screen, so when the body
+/// is short the block keeps whole gates and one row saying how many it left
+/// out. The overflow row is inside the budget, not extra: a block that overruns
+/// by one row is what pushed the summary off the bottom.
+fn gate_lines(
+    gates: &[Gate],
+    width: usize,
+    ascii: bool,
+    color: bool,
+    room: usize,
+) -> Vec<Line<'static>> {
+    if gates.is_empty() || room == 0 {
         return Vec::new();
     }
     let mut lines = vec![Line::styled(cell_text("PRE-FLIGHT", width, ascii), bold())];
+    if room == 1 {
+        return lines;
+    }
+    let fits = (room - 1).min(gates.len());
+    let whole = if fits == gates.len() {
+        fits
+    } else {
+        fits.saturating_sub(1)
+    };
     lines.extend(
         gates
             .iter()
+            .take(whole)
             .map(|gate| gate_line(gate, width, ascii, color)),
     );
+    if whole < gates.len() {
+        let hidden = gates.len() - whole;
+        let more = format!("  {} {hidden} more gate(s)", if ascii { ":" } else { "⋮" });
+        lines.push(Line::styled(cell_text(&more, width, ascii), dim(color)));
+    }
     lines
 }
 
@@ -2892,16 +2958,25 @@ mod tests {
             );
         }
         // The viewport contract is explicit: running, failed and blocked rows
-        // are always kept; planned rows are not guaranteed at this size, so a
-        // `[ ]` is not asserted. The clipped marker and the root count are what
-        // prove the frame is honest about what it hid.
-        assert!(
-            narrow.contains('⋮'),
-            "hidden runs are marked, never silent:\n{narrow}"
+        // are always kept. Everything else is kept while it fits. At this size
+        // all eight packages fit, so the frame is honest with no marker at
+        // all; a marker is only owed when a run is actually hidden.
+        let hidden_runs = narrow.matches('⋮').count();
+        let shown_packages = narrow
+            .lines()
+            .filter(|line| line.starts_with("[") || line.contains("─ ["))
+            .count();
+        assert_eq!(
+            hidden_runs, 0,
+            "all eight packages fit, so nothing may claim to be hidden:\n{narrow}"
         );
+        assert_eq!(shown_packages, 8, "every package is on screen:\n{narrow}");
+        // With every package on screen there is nothing to report, so the
+        // plain title is correct; the clipped form is asserted where the
+        // window really clips (`a_200_package_window_...`).
         assert!(
-            narrow.contains("showing 3 of 5 roots"),
-            "the header reports the roots it kept:\n{narrow}"
+            narrow.contains("Dependency Graph:"),
+            "the header names the graph:\n{narrow}"
         );
         assert!(
             !narrow.contains('\u{fffd}'),
@@ -3981,7 +4056,7 @@ mod tests {
 
         let wide = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
         assert!(
-            wide.contains("Dependency Graph showing 11 of 197 roots:"),
+            wide.contains("Dependency Graph showing 31 of 197 roots:"),
             "the header names the clipped root count\n{wide}"
         );
         assert!(wide.contains("⋮"), "the clipped marker is shown\n{wide}");
@@ -4006,7 +4081,7 @@ mod tests {
 
         let compact = render_live_frame(&snapshot, &run, 80, 24, false, false, false);
         assert!(
-            compact.contains("Dependency Graph showing 6 of 197 roots:"),
+            compact.contains("Dependency Graph showing 15 of 197 roots:"),
             "the compact header names the clipped root count\n{compact}"
         );
         assert!(

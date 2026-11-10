@@ -1,14 +1,14 @@
 aur-prefetch | Fetch | 8 packages | live
-Dependency Graph showing 3 of 5 roots:                 install 8 packages | live
+Dependency Graph:                                      install 8 packages | live
 PRE-FLIGHT
 +  lock     no lock file, no pacman process
 +  lists    1 pending, 825 B to download
 +  cache    /var/cache/pacman/pkg
 +  space    /var/cache/pacman/pkg: need 5.0 GiB, have 14.2 GiB
 +  space    /: need 5.0 GiB, have 40.1 GiB
-  :
+[ ] paru 2.0.0-1                   planned | waiting for 1 >             1.1 MiB
 `-- [|] yay-bin 2.0.0-1            building | t 6s                       1.1 MiB
-  :
+[ ] ollama 2.0.0-1                 planned | waiting for 1 >             1.1 MiB
 [|] linux 2.0.0-1 downloading | t 7s 46.7 MiB/57.0 MiB       #########-    81.9%
 [v] lib32-glibc 2.0.0-1            skipped | cached                      1.1 MiB
    `-- [v] glibc 2.0.0-1           skipped | cached                      1.1 MiB

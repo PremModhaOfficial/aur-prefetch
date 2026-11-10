@@ -585,34 +585,69 @@ impl LiveView {
     pub fn window(&self, tree: &Tree, budget: usize) -> Window {
         let display = tree.display_rows();
         let budget = budget.max(1);
-        let mut selected = BTreeSet::new();
 
-        if display.len() <= budget {
-            selected.extend(0..display.len());
-        } else {
-            for (index, row) in display.iter().enumerate() {
-                let mandatory = self.row(row.id).is_some_and(|live| {
+        let mandatory: BTreeSet<usize> = display
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                self.row(row.id).is_some_and(|live| {
                     matches!(
                         live.state,
                         LiveState::Running | LiveState::Failed | LiveState::Blocked
                     )
-                });
-                if mandatory {
-                    selected.insert(index);
+                })
+            })
+            .map(|(index, _)| index)
+            .collect();
+
+        let mut selected = BTreeSet::new();
+        if display.len() <= budget {
+            selected.extend(0..display.len());
+        } else {
+            selected.extend(mandatory.iter().copied());
+            // Fill from the end: the bottom-up order puts the roots and the
+            // goal at the tail, and those are what a clipped frame must show.
+            for index in (0..display.len()).rev() {
+                if selected.len() == budget {
+                    break;
                 }
+                selected.insert(index);
             }
-            if selected.len() < budget {
-                for index in (0..display.len()).rev() {
-                    if selected.len() == budget {
-                        break;
-                    }
-                    selected.insert(index);
-                }
-            }
+        }
+
+        // A `⋮` marker is a slot too. Capping the selected rows at `budget`
+        // and then adding markers made the block always larger than its
+        // budget, which pushed the summary off the bottom of short frames.
+        // Removing a selected row can only merge two hidden runs, so the slot
+        // count strictly falls and this terminates.
+        let mut slots = Self::slots_for(&display, &selected);
+        while slots.len() > budget {
+            let Some(victim) = selected
+                .iter()
+                .copied()
+                .find(|index| !mandatory.contains(index))
+            else {
+                break;
+            };
+            selected.remove(&victim);
+            slots = Self::slots_for(&display, &selected);
         }
 
         let selected_ids: BTreeSet<RowId> =
             selected.iter().map(|index| display[*index].id).collect();
+        Window {
+            slots,
+            shown_roots: tree
+                .roots
+                .iter()
+                .filter(|root| selected_ids.contains(root))
+                .count(),
+            total_roots: tree.roots.len(),
+        }
+    }
+
+    /// One slot per selected row plus one per maximal run of hidden rows.
+    fn slots_for(display: &[&super::tree::TreeRow], selected: &BTreeSet<usize>) -> Vec<WindowSlot> {
         let mut slots = Vec::new();
         let mut marker_emitted = false;
         for (index, row) in display.iter().enumerate() {
@@ -624,16 +659,7 @@ impl LiveView {
                 marker_emitted = true;
             }
         }
-
-        Window {
-            slots,
-            shown_roots: tree
-                .roots
-                .iter()
-                .filter(|root| selected_ids.contains(root))
-                .count(),
-            total_roots: tree.roots.len(),
-        }
+        slots
     }
 }
 
