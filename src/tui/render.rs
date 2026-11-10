@@ -721,6 +721,10 @@ pub struct FramePlan {
     pub slots: Vec<WindowSlot>,
     /// The live window, when there is a live view. Carries the root counts.
     pub window: Option<Window>,
+    /// The body chunk, owned here so the renderer does not recompute it.
+    pub body_height: u16,
+    /// The footer rows, measured once against the same width.
+    pub footer: Vec<Line<'static>>,
 }
 
 #[allow(clippy::too_many_arguments)] // the frame carries the full view state
@@ -734,8 +738,8 @@ pub fn plan_frame(
     color: bool,
     gates: Option<&[Gate]>,
 ) -> FramePlan {
-    let footer_lines = footer_lines(footer, width as usize, ascii, color);
-    let footer_height = (footer_lines.len() as u16).max(2);
+    let footer = footer_lines(footer, width as usize, ascii, color);
+    let footer_height = (footer.len() as u16).max(2);
     // header(2) + body + footer, exactly as `draw_with` lays it out.
     let body_height = height.saturating_sub(2).saturating_sub(footer_height);
     let gate_count = gates.map_or(0, <[Gate]>::len);
@@ -758,7 +762,11 @@ pub fn plan_frame(
         .data()
         .map_or(0, |report| report.notes.len());
     let tail = 1 + notes;
-    let tree_rows = split.tree_rows.saturating_sub(tail).max(1);
+    // The summary and the notes are paid for before any row is planned. When
+    // they consume the whole block there is no row to draw; forcing one with
+    // `.max(1)` planned a row the frame then had to clip, which is how the
+    // cursor came to rest on a row that was never drawn.
+    let tree_rows = split.tree_rows.saturating_sub(tail);
 
     let (window, slots) = match (&live, &tree) {
         (Some(live), Some(Ok(tree))) => {
@@ -773,6 +781,8 @@ pub fn plan_frame(
         split,
         slots,
         window,
+        body_height,
+        footer,
     }
 }
 
@@ -813,16 +823,14 @@ fn draw_with(
         color,
         gates,
     );
-    let footer = footer_lines(footer, area.width as usize, ascii, color);
-    // Static and running footers keep the original two rows; the repair card
-    // takes only the rows it needs.
-    let footer_height = (footer.len() as u16).max(2);
+    // The body height comes from the plan. A footer measured twice is a second
+    // layout owner, and the two owners have diverged before.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),
+            Constraint::Length(plan.body_height),
             Constraint::Min(0),
-            Constraint::Length(footer_height),
         ])
         .split(area);
 
@@ -834,15 +842,13 @@ fn draw_with(
         (Some(run), Some(Ok(tree))) => Some(LiveView::build(tree, run)),
         _ => None,
     };
-    let gate_rows = u16::try_from(plan.split.gate_rows).unwrap_or(u16::MAX);
-    let tree_rows = u16::try_from(plan.split.tree_rows).unwrap_or(u16::MAX);
-    let window = plan.window;
+    let window = plan.window.as_ref();
 
     let header = header_lines(
         snapshot,
         tree.as_ref(),
         live.as_ref(),
-        window.as_ref(),
+        window,
         chunks[0].width as usize,
         ascii,
         color,
@@ -854,15 +860,14 @@ fn draw_with(
         snapshot,
         tree.as_ref(),
         live.as_ref(),
-        window.as_ref(),
         ascii,
         chunks[1].width as usize,
         color,
         ledger,
         gates,
         selection,
-        usize::from(gate_rows),
-        usize::from(tree_rows),
+        plan.split.gate_rows,
+        &plan.slots,
     );
     // Last line of defence: the body block may never exceed its chunk. Only
     // clipped markers are dropped here; a marker says "something is hidden"
@@ -909,7 +914,7 @@ fn draw_with(
     body.truncate(budget);
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
+    frame.render_widget(Paragraph::new(plan.footer), chunks[2]);
 
     if help {
         draw_help(frame, area, ascii);
@@ -1097,7 +1102,6 @@ fn body_lines(
     snapshot: &Snapshot,
     tree: Option<&Result<Tree, TreeError>>,
     live: Option<&LiveView>,
-    window: Option<&Window>,
     ascii: bool,
     width: usize,
     color: bool,
@@ -1105,7 +1109,7 @@ fn body_lines(
     gates: Option<&[Gate]>,
     selection: Selection,
     gate_room: usize,
-    body_budget: usize,
+    slots: &[WindowSlot],
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -1132,14 +1136,13 @@ fn body_lines(
 
     if let Some(report) = snapshot.prefetch.data() {
         let tree = tree.expect("the prefetch tree is built with the report");
-        // The summary and the notes come after the rows and must survive the
-        // clip, so they are paid for before the rows are given their budget.
-        let tail = 1 + report.notes.len();
+        // `plan_frame` already reserved the summary and the notes and named
+        // the slots. The frame draws those slots; it does not recompute them.
         lines.extend(prefetch_lines(
             report,
             tree,
             live,
-            window,
+            slots,
             snapshot.prefetch.at(),
             FrameStyle {
                 ascii,
@@ -1148,7 +1151,6 @@ fn body_lines(
             },
             ledger,
             selection,
-            body_budget.saturating_sub(tail),
         ));
         return lines;
     }
@@ -1238,12 +1240,11 @@ fn prefetch_lines(
     report: &PrefetchReport,
     tree: &Result<Tree, TreeError>,
     live: Option<&LiveView>,
-    window: Option<&Window>,
+    slots: &[WindowSlot],
     at: Option<SystemTime>,
     style: FrameStyle,
     ledger: bool,
     selection: Selection,
-    body_budget: usize,
 ) -> Vec<Line<'static>> {
     let FrameStyle {
         ascii,
@@ -1261,20 +1262,14 @@ fn prefetch_lines(
         match tree {
             Ok(tree) => {
                 let display = tree.display_rows();
-                // The live path already windowed itself and carries its own
-                // clipped markers. The static path has no window, so it keeps
-                // the roots and prints how many rows it dropped.
-                // One rule for the static frame, in live.rs, because the key
-                // handler must name the same rows the frame draws.
-                // `static_slots` already leads with one `Clipped` marker, so
-                // the visible count is the rows it kept and the hidden count
-                // is everything else. Emitting a second `hidden_line` on top
-                // of that marker printed `⋮ N more` and a bare `⋮`.
-                let slots: Vec<WindowSlot> = match window {
-                    Some(window) => window.slots.clone(),
-                    None => super::live::static_slots(tree, body_budget),
-                };
-                let static_hidden = (live.is_none() && window.is_none())
+                // `plan_frame` named these slots; the frame draws them and the
+                // key handler moves over them. `static_slots` already leads
+                // with one `Clipped` marker, so the visible count is the rows
+                // it kept and the hidden count is everything else. Emitting a
+                // second `hidden_line` on top of that marker printed
+                // `⋮ N more` and a bare `⋮`.
+                let static_hidden = live
+                    .is_none()
                     .then(|| {
                         let kept = slots
                             .iter()
@@ -1283,18 +1278,18 @@ fn prefetch_lines(
                         display.len().saturating_sub(kept)
                     })
                     .filter(|hidden| *hidden > 0);
-                let geometry = progress_geometry(tree, live, &slots, ascii, width);
+                let geometry = progress_geometry(tree, live, slots, ascii, width);
                 // Live rows draw a 3-cell marker, static rows a 1-cell glyph.
                 let lead = solve_lead(
                     tree,
-                    &slots,
+                    slots,
                     ledger,
                     ascii,
                     if live.is_some() { 3 } else { 1 },
                     width,
                 );
 
-                for slot in slots {
+                for slot in slots.iter().copied() {
                     match slot {
                         WindowSlot::Clipped => {
                             // A static frame can count what it dropped; a live
@@ -2418,7 +2413,7 @@ mod tests {
     }
 
     #[test]
-    fn the_static_plan_also_matches_its_frame() {
+    fn every_statically_planned_row_is_drawn() {
         // The live path passed while the static path still planned one row too
         // many: `plan_frame` reserved the notes but not the summary that
         // `prefetch_lines` also subtracts. Before a fetch — the first screen a
@@ -2485,11 +2480,11 @@ mod tests {
     }
 
     #[test]
-    fn the_plan_names_exactly_the_rows_the_frame_draws() {
+    fn the_plan_never_names_a_row_the_frame_does_not_draw() {
         // A review found this twice: the key handler computed its own window
         // and drifted from the renderer, so the cursor could land on a row
-        // that was never drawn. Both now call `plan_frame`, and this asserts
-        // that the plan's slots match the rows that appear in the frame.
+        // that was never drawn. Both now call `plan_frame`, and the frame
+        // draws `plan.slots`, so every planned row must appear.
         let snapshot = showcase_snapshot();
         let run = showcase_run();
         let card = showcase_card();
@@ -2545,6 +2540,64 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_block_with_no_tree_room_plans_no_row() {
+        // At 40x12 the summary and three notes can take the whole tree block.
+        // Reserving a minimum of one row anyway planned a row the frame then
+        // had to clip, so the cursor could sit on something that was not drawn.
+        let mut snapshot = prefetch_snapshot_with(
+            (0..8)
+                .map(|index| {
+                    live_package(
+                        &format!("app-{index:03}"),
+                        Repo::Extra,
+                        ArtifactState::Missing,
+                        &[],
+                    )
+                })
+                .collect(),
+        );
+        if let Some(report) = snapshot.prefetch.data() {
+            let mut report = report.clone();
+            report.notes = (0..3).map(|index| format!("note {index}")).collect();
+            snapshot.prefetch = Section::ready(report, at());
+        }
+        let tree = tree_of(&snapshot);
+        let run = LiveRun::plan(&tree, live_at()).expect("plan seeds");
+        let gates = fetch_gates();
+        let footer = Footer::default();
+        let plan = super::plan_frame(
+            &snapshot,
+            Some(&run),
+            footer,
+            40,
+            12,
+            false,
+            false,
+            Some(&gates),
+        );
+        assert!(
+            plan.slots.is_empty(),
+            "no tree room, yet the plan names {:?}",
+            plan.slots
+        );
+        let frame = render_live_frame_status(
+            &snapshot,
+            &run,
+            footer,
+            40,
+            12,
+            false,
+            false,
+            false,
+            false,
+            Some(&gates),
+            Selection::none(),
+        );
+        assert!(frame.contains("done"), "the summary survives:\n{frame}");
+        assert!(frame.contains("note 0"), "the notes survive:\n{frame}");
     }
 
     #[test]

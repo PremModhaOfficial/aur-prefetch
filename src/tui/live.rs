@@ -584,7 +584,16 @@ impl LiveView {
     /// is the display order and each row appears once.
     pub fn window(&self, tree: &Tree, budget: usize) -> Window {
         let display = tree.display_rows();
-        let budget = budget.max(1);
+        // No room means no rows and no marker: the caller has already spent
+        // the block on the summary and the notes. Forcing one row here is how
+        // the plan came to name a row the frame could not draw.
+        if budget == 0 {
+            return Window {
+                slots: Vec::new(),
+                shown_roots: 0,
+                total_roots: tree.roots.len(),
+            };
+        }
 
         let mandatory: BTreeSet<usize> = display
             .iter()
@@ -787,6 +796,9 @@ pub enum WindowSlot {
 /// the renderer: both sides must name the same rows.
 pub fn static_slots(tree: &Tree, budget: usize) -> Vec<WindowSlot> {
     let display = tree.display_rows();
+    if budget == 0 {
+        return Vec::new();
+    }
     if display.len() <= budget {
         return display.iter().map(|row| WindowSlot::Row(row.id)).collect();
     }
