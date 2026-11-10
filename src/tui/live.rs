@@ -653,9 +653,21 @@ impl LiveView {
             let keep = budget.saturating_sub(1).max(1).min(budget);
             selected = ranked.into_iter().take(keep).collect();
             slots = Self::slots_for(&display, &selected);
-            if slots.len() > budget {
-                slots.truncate(budget);
+            // A marker is an admission that something is hidden; a mandatory
+            // row is why the frame exists. When the budget cannot hold both,
+            // drop the admission, never the row. Truncating the slot list did
+            // the opposite at budget 1: it kept the leading `⋮` and threw away
+            // the failed row.
+            while slots.len() > budget {
+                let Some(marker) = slots
+                    .iter()
+                    .rposition(|slot| matches!(slot, WindowSlot::Clipped))
+                else {
+                    break;
+                };
+                slots.remove(marker);
             }
+            slots.truncate(budget);
         }
 
         let selected_ids: BTreeSet<RowId> =
@@ -1802,6 +1814,57 @@ mod tests {
                 "budget {budget} returned {} rows",
                 window.rows().count()
             );
+        }
+    }
+
+    #[test]
+    fn a_one_row_window_shows_the_failed_row_not_a_marker() {
+        // A review found this: at budget 1 the mandatory branch kept one row
+        // and then truncated the slot list, which cut the row and kept the
+        // leading `⋮`. The frame admitted it hid something and hid the failure
+        // that was the reason for the screen.
+        let mut packages = vec![package(
+            "libglibc",
+            Repo::Extra,
+            ArtifactState::Missing,
+            &[],
+        )];
+        for index in 0..8 {
+            packages.push(package(
+                &format!("app-{index:03}"),
+                Repo::Extra,
+                ArtifactState::Missing,
+                &["libglibc"],
+            ));
+        }
+        let tree = Tree::build(&packages).expect("forest");
+        let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
+        run.observe(
+            "libglibc",
+            Observed::Started,
+            at(),
+            Some(Activity::Build),
+            "started",
+        )
+        .expect("starts");
+        run.observe(
+            "libglibc",
+            Observed::Failed,
+            at() + Duration::from_secs(2),
+            None,
+            "exit 2",
+        )
+        .expect("fails");
+
+        let view = LiveView::build(&tree, &run);
+        for budget in 1..=3usize {
+            let window = view.window(&tree, budget);
+            assert!(
+                window.rows().any(|id| tree.rows[id].name == "libglibc"),
+                "budget {budget} hid the failed row: {:?}",
+                window.slots
+            );
+            assert!(window.rows().count() <= budget);
         }
     }
 
