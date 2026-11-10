@@ -1424,7 +1424,7 @@ fn static_summary_lines(
 /// are summed only over sizes that were actually observed; when some ready
 /// package has no known size the total is a floor and says so, rather than
 /// reporting a partial sum as a whole.
-fn prefetch_saving(report: &PrefetchReport) -> Option<String> {
+fn prefetch_saving(report: &PrefetchReport, ascii: bool) -> Option<String> {
     let mut ready = 0usize;
     let mut known = 0u64;
     let mut unknown = 0usize;
@@ -1447,7 +1447,13 @@ fn prefetch_saving(report: &PrefetchReport) -> Option<String> {
     if known == 0 {
         return Some(format!("{ready} prefetched"));
     }
-    let floor = if unknown > 0 { "\u{2265}" } else { "" };
+    // `to_ascii` maps every non-ASCII character to `?`, so the unicode floor
+    // would read as an unknown value rather than a lower bound.
+    let floor = match (unknown > 0, ascii) {
+        (false, _) => "",
+        (true, true) => ">=",
+        (true, false) => "\u{2265}",
+    };
     Some(format!("{ready} prefetched {floor}{}", human_bytes(known)))
 }
 
@@ -1496,7 +1502,7 @@ fn live_summary_lines(
         .unwrap_or_else(|| cores[2].clone());
     text.push_str(&frozen);
     let mut optional: Vec<String> = Vec::new();
-    if let Some(saving) = prefetch_saving(report) {
+    if let Some(saving) = prefetch_saving(report, ascii) {
         optional.push(saving);
     }
     if let Some(timer) = super::live::timer_label(live.summary.elapsed, ascii) {
@@ -2700,6 +2706,66 @@ mod tests {
                 "line over 40 cells: {line:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_savings_floor_is_ascii_in_ascii_mode() {
+        // `to_ascii` maps `≥` to `?`, so an ASCII frame claimed an unknown
+        // size instead of a lower bound. No golden covers an unknown size,
+        // which is how that survived a green suite.
+        let mut snapshot = prefetch_snapshot_with(vec![
+            live_package("unknown", Repo::Extra, ArtifactState::Cached, &[]),
+            live_package("known", Repo::Extra, ArtifactState::Cached, &[]),
+        ]);
+        if let Some(report) = snapshot.prefetch.data() {
+            let mut report = report.clone();
+            for package in &mut report.packages {
+                if package.name == "unknown" {
+                    package.download_bytes = None;
+                }
+            }
+            snapshot.prefetch = Section::ready(report, at());
+        }
+        let tree = tree_of(&snapshot);
+        let run = LiveRun::plan(&tree, live_at()).expect("plan seeds");
+        let ascii = render_live_frame_status(
+            &snapshot,
+            &run,
+            Footer::default(),
+            80,
+            24,
+            true,
+            false,
+            false,
+            false,
+            None,
+            Selection::none(),
+        );
+        assert!(
+            ascii.contains("2 prefetched >="),
+            "the ASCII floor:\n{ascii}"
+        );
+        assert!(
+            !ascii.contains("prefetched ?"),
+            "a '?' floor is a lie:\n{ascii}"
+        );
+        let unicode = render_live_frame_status(
+            &snapshot,
+            &run,
+            Footer::default(),
+            80,
+            24,
+            false,
+            false,
+            false,
+            false,
+            None,
+            Selection::none(),
+        );
+        assert!(
+            unicode.contains("2 prefetched \u{2265}"),
+            "the unicode floor:\n{unicode}"
+        );
     }
 
     #[test]
