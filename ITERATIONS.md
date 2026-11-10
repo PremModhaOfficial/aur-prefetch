@@ -141,3 +141,44 @@ worked until that was fixed.
    is real arithmetic, but only where a timer is above the floor.
 3. **j/k/f navigation.** The current keys are asserted by `sim 34/35`; adding
    movement and a filter is a separate change with its own golden churn.
+
+---
+
+## Independent review (clean-context subagents)
+
+Three reviewers with no memory of the reasoning ran on non-overlapping slices:
+layout/budget, state/input, honesty/docs. Two finished with reproduced defects;
+the honesty reviewer hit its turn limit and its partial findings are not
+counted as evidence either way.
+
+**What they proved, and what it says about the scores above.** The suite was
+green at 271 tests through four real faults. Every one lived in a state no
+golden covers: more mandatory rows than slots, enough rows to clip the notes,
+a delta larger than the row count, a window computed twice.
+
+| Defect | Severity | Reproduced |
+|---|---|---|
+| `window` returned more rows than its budget; summary and the failed row left the frame | high | 19/25/40 blocked at 80x24 |
+| live path clipped every collection note | high | 0 of 3 notes at 120x40 |
+| `Selection::moved` isize overflow | low | debug panic, not reachable from `j`/`k` |
+| `j`/`k` used a different window than the renderer drew | medium | first `j` moved the cursor to an invisible row |
+
+All four are fixed in `7f83883`, with two regression tests taken from the
+reproductions. No golden changed, which is the point: the goldens never
+covered these states.
+
+**Corrected scorecard.** The earlier rows were scored from frames that could
+not show these faults, so two of them were too generous:
+
+| Item | Claimed | Honest | Why |
+|---|---|---|---|
+| Responsiveness | 9 | 8 | the redraw key is sound, but the field that makes the spinner repaint is untested (a mutant with `spinner: 0` passes the whole suite) |
+| Layout 80 / wide / narrow | 9 | 7 | it was 9 only for the states the goldens cover; the blocked-heavy and note-heavy frames were broken until `7f83883` |
+
+The other rows stand. The lesson recorded for the next iteration: a score
+justified by goldens is a score about the states those goldens contain.
+
+**Also found and not yet fixed.** `Selection` stores a positional `RowId` and
+is never reset when a refresh replaces the tree, so after `r` the cursor can
+name a different package. It is cosmetic today (the cursor only underlines),
+but it is wrong and should be cleared on every snapshot replacement.
