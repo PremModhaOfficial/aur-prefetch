@@ -21,8 +21,7 @@ use crate::runner::{StreamKind, StreamLine};
 use crate::util::human_bytes;
 
 use super::live::{
-    Activity, GroupCounts, LiveRun, LiveState, LiveView, Progress, Window, WindowSlot,
-    tree_row_budget,
+    Activity, LiveRun, LiveState, LiveView, Progress, Window, WindowSlot, tree_row_budget,
 };
 use super::sanitize::{cell_text, display_width};
 use super::tree::{RowId, Tree, TreeError, TreeRow, TreeRowKind};
@@ -32,7 +31,6 @@ use super::tree::{RowId, Tree, TreeError, TreeRow, TreeRowKind};
 const PLANNED: Color = Color::Blue;
 const ACTIVE: Color = Color::Yellow;
 const DONE: Color = Color::Green;
-const HOST: Color = Color::Magenta;
 const DIM: Color = Color::DarkGray;
 const FAILURE: Color = Color::Red;
 
@@ -909,9 +907,8 @@ fn header_lines(
             package_count(packages)
         ),
     };
-    let top = if ascii { "+- " } else { "┏━ " };
-    let padding = width.saturating_sub(3 + display_width(&left) + display_width(&right));
-    let title = format!("{top}{left}{}{right}", " ".repeat(padding));
+    let padding = width.saturating_sub(display_width(&left) + display_width(&right));
+    let title = format!("{left}{}{right}", " ".repeat(padding));
 
     vec![
         Line::styled(cell_text(&header, width, ascii), bold()),
@@ -1099,11 +1096,10 @@ fn prefetch_lines(
                         }
                         WindowSlot::Row(id) => {
                             let row = &tree.rows[id];
-                            let border = if ascii { "| " } else { "┃ " };
                             let prefix = if ledger {
-                                border.to_string()
+                                String::new()
                             } else {
-                                format!("{border}{}", branch_prefix(tree, row, ascii))
+                                branch_prefix(tree, row, ascii)
                             };
                             if row.kind == TreeRowKind::Package {
                                 if let Some(live) = live {
@@ -1161,71 +1157,15 @@ fn static_summary_lines(
     color: bool,
 ) -> Vec<Line<'static>> {
     let counts = &report.counts;
-    let header = if ascii { "+--- " } else { "┣━━━ " };
-    let row = if ascii { "|    " } else { "┃    " };
-    let bottom = if ascii { "+- " } else { "┗━ " };
-    let held = counts
-        .held
-        .map_or_else(String::new, |held| format!(" {separator} held {held}"));
-    let sigma = if ascii { "S" } else { "Σ" };
-    let bytes: u64 = report
-        .packages
-        .iter()
-        .filter_map(|package| package.download_bytes)
-        .sum();
-    vec![
-        Line::styled(
-            cell_text(
-                &format!(
-                    "{header}Ready {} = {} cached + {} built {separator} stale {} {separator} partial {}",
-                    counts.ready(),
-                    counts.cached,
-                    counts.built,
-                    counts.stale,
-                    counts.partial
-                ),
-                width,
-                ascii,
-            ),
-            bold(),
-        ),
-        Line::styled(
-            cell_text(
-                &format!(
-                    "{row}missing {} {separator} build-pending {} {separator} failed {} {separator} unknown {}{held}",
-                    counts.missing, counts.build_pending, counts.failed, counts.unknown
-                ),
-                width,
-                ascii,
-            ),
-            bold(),
-        ),
-        Line::styled(
-            cell_text(
-                &format!(
-                    "{row}Host      {}",
-                    report.host.as_deref().unwrap_or("unknown")
-                ),
-                width,
-                ascii,
-            ),
-            accent(color, HOST),
-        ),
-        Line::styled(
-            cell_text(
-                &format!(
-                    "{bottom}{sigma} {} {separator} {} {separator} {} ready {separator} {} failed",
-                    package_count(report.counts.total()),
-                    human_bytes(bytes),
-                    counts.ready(),
-                    counts.failed
-                ),
-                width,
-                ascii,
-            ),
-            bold(),
-        ),
-    ]
+    let host = report.host.as_deref().unwrap_or("unknown");
+    let text = format!(
+        "{} packages {separator} {} ready {separator} {} missing {separator} {} stale {separator} {host}",
+        counts.total(),
+        counts.ready(),
+        counts.missing,
+        counts.stale
+    );
+    vec![Line::styled(cell_text(&text, width, ascii), dim(color))]
 }
 
 fn live_summary_lines(
@@ -1236,74 +1176,27 @@ fn live_summary_lines(
     color: bool,
 ) -> Vec<Line<'static>> {
     let separator = if ascii { "|" } else { "·" };
-    let bar = if ascii { "|" } else { "│" };
-    let header = if ascii { "+--- " } else { "┣━━━ " };
-    let row = if ascii { "|    " } else { "┃    " };
-    let bottom = if ascii { "+- " } else { "┗━ " };
-    let sigma = if ascii { "S" } else { "Σ" };
-    let builds = group_cell(live.summary.builds, Activity::Build, ascii);
-    let downloads = group_cell(live.summary.downloads, Activity::Download, ascii);
+    let running = live.summary.builds.running + live.summary.downloads.running;
+    let done = live.summary.builds.done + live.summary.downloads.done;
+    let waiting = live.summary.builds.planned + live.summary.downloads.planned;
     let host = report.host.as_deref().unwrap_or("unknown");
-    let mut tail = format!("{bottom}{sigma} {}", package_count(live.summary.total));
+    let mut text = format!(
+        "{} done {separator} {running} running {separator} {waiting} waiting {separator} {} failed",
+        done, live.summary.failed
+    );
     if let Some(timer) = super::live::timer_label(live.summary.elapsed, ascii) {
-        tail.push_str(&format!(" {separator} {timer}"));
+        text.push_str(&format!(" {separator} {timer}"));
     }
-    if live.summary.failed > 0 {
-        tail.push_str(&format!(" {separator} {} failed", live.summary.failed));
-    }
+    text.push_str(&format!(" {separator} {host}"));
     if live.summary.frozen {
-        tail.push_str(&format!(" {separator} frozen"));
+        text.push_str(&format!(" {separator} frozen"));
     }
-    let sigma_style = if live.summary.failed > 0 || live.summary.frozen {
+    let style = if live.summary.failed > 0 || live.summary.frozen {
         accent_bold(color, FAILURE)
     } else {
-        bold()
+        dim(color)
     };
-    vec![
-        Line::styled(
-            cell_text(
-                &format!(
-                    "{header}{} {bar} {} {bar} Host",
-                    pad_cell("Builds", 17),
-                    pad_cell("Downloads", 18)
-                ),
-                width,
-                ascii,
-            ),
-            bold(),
-        ),
-        Line::styled(
-            cell_text(
-                &format!(
-                    "{row}{} {bar} {} {bar} {host}",
-                    pad_cell(&builds, 17),
-                    pad_cell(&downloads, 18)
-                ),
-                width,
-                ascii,
-            ),
-            bold(),
-        ),
-        Line::styled(cell_text(&tail, width, ascii), sigma_style),
-    ]
-}
-
-fn pad_cell(text: &str, width: usize) -> String {
-    let used = display_width(text);
-    format!("{text}{}", " ".repeat(width.saturating_sub(used)))
-}
-
-fn group_cell(counts: GroupCounts, activity: Activity, ascii: bool) -> String {
-    let (running, done, planned) = match (activity, ascii) {
-        (Activity::Build, false) => ("⏵", "✔", "⏸"),
-        (Activity::Build, true) => (">", "+", "="),
-        (Activity::Download, false) => ("↓", "✔", "⏸"),
-        (Activity::Download, true) => ("v", "+", "="),
-    };
-    format!(
-        "{running} {}   {done} {}   {planned} {}",
-        counts.running, counts.done, counts.planned
-    )
+    vec![Line::styled(cell_text(&text, width, ascii), style)]
 }
 
 /// Nom's bottom-up branch grammar. The last child is the top row and gets the
@@ -1327,9 +1220,17 @@ fn branch_prefix(tree: &Tree, row: &TreeRow, ascii: bool) -> String {
         current = ancestor.parent;
     }
     ancestors.reverse();
-    for _ in ancestors {
-        // Nom's heavy box border carries the vertical lane; depth is spaces.
-        prefix.push_str("   ");
+    for id in ancestors {
+        let last = tree.rows[id]
+            .parent
+            .is_some_and(|parent| tree.rows[parent].children.last() == Some(&id));
+        prefix.push_str(if last {
+            "   "
+        } else if ascii {
+            "|  "
+        } else {
+            "│  "
+        });
     }
 
     let Some(parent) = row.parent else {
@@ -1527,19 +1428,27 @@ fn live_row_line(
 }
 
 fn live_glyph(live: &super::live::LiveRow, ascii: bool) -> &'static str {
-    let (unicode, fallback) = match live.state {
-        LiveState::Planned => ("⏸", "="),
-        LiveState::Running => match live.activity {
-            Some(Activity::Build) => ("⏵", ">"),
-            Some(Activity::Download) => ("↓ ⏵", "v >"),
-            None => ("⏵", ">"),
-        },
-        LiveState::Done => ("✔", "+"),
-        LiveState::Failed => ("⚠", "x"),
-        LiveState::Blocked => ("■", "!"),
-        LiveState::Skipped { .. } => ("⊘", "-"),
-    };
-    if ascii { fallback } else { unicode }
+    match live.state {
+        LiveState::Planned => "[ ]",
+        LiveState::Running => "[|]",
+        LiveState::Done => {
+            if ascii {
+                "[v]"
+            } else {
+                "[√]"
+            }
+        }
+        LiveState::Failed | LiveState::Blocked | LiveState::Skipped { satisfied: false } => {
+            if ascii { "[x]" } else { "[×]" }
+        }
+        LiveState::Skipped { satisfied: true } => {
+            if ascii {
+                "[v]"
+            } else {
+                "[√]"
+            }
+        }
+    }
 }
 
 fn live_state_label(live: &super::live::LiveRow) -> &'static str {
@@ -1650,7 +1559,7 @@ fn progress_left_text(
 ) -> String {
     let separator = if ascii { " | " } else { " · " };
     let progress = live.progress.expect("progress rows have bytes");
-    let mut text = format!("  {prefix}{} {}", live_glyph(live, ascii), row.label);
+    let mut text = format!("{prefix}{} {}", live_glyph(live, ascii), row.label);
     text.push(' ');
     text.push_str(live_state_label(live));
     if let Some(timer) = live.timer(ascii) {
@@ -1807,7 +1716,7 @@ fn progress_fill(progress: Progress, bar_width: usize) -> (usize, usize, usize) 
 }
 
 fn clipped_line(width: usize, ascii: bool, color: bool) -> Line<'static> {
-    let marker = if ascii { "|  :" } else { "┃  ⋮" };
+    let marker = if ascii { "  :" } else { "  ⋮" };
     Line::styled(cell_text(marker, width, ascii), dim(color))
 }
 
@@ -2762,19 +2671,19 @@ mod tests {
         let frame = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
 
         for needle in [
-            "⏵ left",
-            "✔ base",
-            "⏸ right",
+            "[|] left",
+            "[√] base",
+            "[ ] right",
             "planned",
             "building",
             "done",
             "waiting for 1 ⏵ 1 ⏸",
             "⏱ 2s",
-            "┣━━━ Builds",
-            "⏵ 1   ✔ 0   ⏸ 1",
-            "↓ 0   ✔ 1   ⏸ 1",
+            "1 done",
+            "1 running",
+            "2 waiting",
             "mirror.example.org",
-            "┗━ Σ 4 packages · ⏱ 2s",
+            "0 failed",
         ] {
             assert!(frame.contains(needle), "missing {needle:?} in\n{frame}");
         }
@@ -2793,18 +2702,18 @@ mod tests {
         let frame = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
 
         assert!(
-            frame.contains("⚠ base"),
+            frame.contains("[×] base"),
             "the failed node stays visible\n{frame}"
         );
         assert!(frame.contains("exit 2"), "the evidence is shown\n{frame}");
         for name in ["left", "right", "join"] {
             assert!(
-                frame.contains(&format!("■ {name}")),
+                frame.contains(&format!("[×] {name}")),
                 "{name} is blocked\n{frame}"
             );
         }
         assert!(
-            frame.contains("↓ ⏵ solo"),
+            frame.contains("[|] solo"),
             "an independent root keeps running\n{frame}"
         );
         assert!(frame.contains("1 failed"));
@@ -3325,7 +3234,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("cached-pkg"))
             .expect("the skipped row is on screen");
-        assert!(row.contains("⊘"), "skipped glyph\n{frame}");
+        assert!(row.contains("[√]"), "skipped glyph\n{frame}");
         assert!(row.contains("skipped"), "the live state is named\n{frame}");
         assert!(
             row.contains("cached"),
@@ -3443,7 +3352,7 @@ mod tests {
             .lines()
             .find(|line| line.contains("downloading"))
             .expect("the ascii transfer row is on screen");
-        assert!(row.contains("v > linux"), "the download glyph is ASCII");
+        assert!(row.contains("[|] linux"), "the download glyph is ASCII");
         assert_eq!(row.chars().count(), 80);
         assert!(row.ends_with(" 81.9%"));
         assert_eq!(row.matches('#').count(), 9, "full cells");
@@ -3598,7 +3507,7 @@ mod tests {
 
         let planned = find_row(&buffer, 120, "planned");
         let planned_glyph =
-            text_column(&buffer, 120, planned, "⏸").expect("the planned glyph is on the row");
+            text_column(&buffer, 120, planned, "[ ]").expect("the planned glyph is on the row");
         assert_eq!(
             cell_at(&buffer, 120, planned, planned_glyph).fg,
             Color::Blue,
@@ -3607,7 +3516,7 @@ mod tests {
 
         let running = find_row(&buffer, 120, "building");
         let glyph =
-            text_column(&buffer, 120, running, "⏵").expect("the running glyph is on the row");
+            text_column(&buffer, 120, running, "[|]").expect("the running glyph is on the row");
         assert_eq!(cell_at(&buffer, 120, running, glyph).fg, Color::Yellow);
         let name = text_column(&buffer, 120, running, "left").expect("the running name");
         assert!(
@@ -3616,8 +3525,8 @@ mod tests {
                 .contains(Modifier::BOLD)
         );
 
-        let done = find_row(&buffer, 120, "✔");
-        let done_glyph = text_column(&buffer, 120, done, "✔").expect("done glyph");
+        let done = find_row(&buffer, 120, "[√]");
+        let done_glyph = text_column(&buffer, 120, done, "[√]").expect("done glyph");
         assert_eq!(cell_at(&buffer, 120, done, done_glyph).fg, Color::Green);
 
         let host = find_row(&buffer, 120, "mirror.example.org");
@@ -3625,12 +3534,11 @@ mod tests {
             text_column(&buffer, 120, host, "mirror").is_some(),
             "the host value sits on the summary row"
         );
-        let labels = find_row(&buffer, 120, "Builds");
-        assert!(
-            cell_at(&buffer, 120, labels, 0)
-                .modifier
-                .contains(Modifier::BOLD),
-            "summary labels are bold"
+        let labels = find_row(&buffer, 120, "running");
+        assert_eq!(
+            cell_at(&buffer, 120, labels, 0).fg,
+            Color::DarkGray,
+            "the footer is dim"
         );
 
         let waiting = find_row(&buffer, 120, "waiting for");
@@ -3650,7 +3558,7 @@ mod tests {
         let roots = buffer_of(&roots_snapshot(), Some(&roots_run()), 120, 40, false, true);
         let download = find_row(&roots, 120, "downloading");
         let down_glyph =
-            text_column(&roots, 120, download, "↓").expect("the download glyph is on the row");
+            text_column(&roots, 120, download, "[|]").expect("the running marker is on the row");
         assert_eq!(
             cell_at(&roots, 120, download, down_glyph).fg,
             Color::Yellow,
@@ -3666,14 +3574,14 @@ mod tests {
             true,
         );
         let failed = find_row(&failure, 120, "failed");
-        let warning = text_column(&failure, 120, failed, "⚠").expect("the failure glyph");
+        let warning = text_column(&failure, 120, failed, "[×]").expect("the failure glyph");
         assert_eq!(
             cell_at(&failure, 120, failed, warning).fg,
             Color::Red,
             "a failure is red"
         );
         let blocked = find_row(&failure, 120, "blocked");
-        let square = text_column(&failure, 120, blocked, "■").expect("the blocked glyph");
+        let square = text_column(&failure, 120, blocked, "[×]").expect("the blocked glyph");
         assert_eq!(
             cell_at(&failure, 120, blocked, square).fg,
             Color::DarkGray,
@@ -3689,7 +3597,8 @@ mod tests {
             true,
         );
         let skipped_row = find_row(&skipped, 80, "cached-pkg");
-        let skipped_glyph = text_column(&skipped, 80, skipped_row, "⊘").expect("the skipped glyph");
+        let skipped_glyph =
+            text_column(&skipped, 80, skipped_row, "[√]").expect("the skipped glyph");
         assert_eq!(
             cell_at(&skipped, 80, skipped_row, skipped_glyph).fg,
             Color::DarkGray,
@@ -3755,8 +3664,8 @@ mod tests {
             assert!(frame.contains(label), "missing {label} in\n{frame}");
         }
         assert_eq!(frame.matches("simapp").count(), 1);
-        assert!(frame.contains("Ready 1 = 1 cached + 0 built"));
-        assert!(frame.contains("Host      mirror.example.org"));
+        assert!(frame.contains("1 ready · 1 missing · 1 stale"));
+        assert!(frame.contains("mirror.example.org"));
         assert!(frame.contains("4 packages"));
     }
 
@@ -3811,14 +3720,17 @@ mod tests {
             "an earlier child uses a branch\n{frame}"
         );
         assert!(
-            frame.contains("┏━ Dependency Graph:"),
+            frame.contains("Dependency Graph:"),
             "the nom box top\n{frame}"
         );
         assert!(
-            frame.contains("┃ ┌─"),
-            "the box border carries the connector\n{frame}"
+            frame.contains("┌─"),
+            "the corner connector is back\n{frame}"
         );
-        assert!(!frame.contains("│  "), "no light tree lanes\n{frame}");
+        assert!(
+            !frame.contains("┏━") && !frame.contains("┃"),
+            "the heavy nom box is gone\n{frame}"
+        );
         assert_eq!(frame.matches("? glibc").count(), 1);
         assert_eq!(frame.matches("simapp").count(), 1);
         assert!(frame.contains("unknown"));

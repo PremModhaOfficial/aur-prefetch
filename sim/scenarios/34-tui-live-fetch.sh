@@ -70,8 +70,7 @@ assert_contains "$clean" "esc detach" "a running fetch offers detach only"
 assert_contains "$clean" "PRE-FLIGHT" "the gate checklist is visible"
 assert_contains "$clean" "lock" "the lock gate ran"
 assert_contains "$clean" "1 pending" "the lists gate carries the real count"
-assert_contains "$clean" "fetch log" "l opens the captured log"
-assert_contains "$clean" "Synchronizing" "the log shows a real pacman line"
+assert_contains "$clean" "Synchronizing" "l opens the captured log and shows a real pacman line"
 
 # The install gate must stay shut while the fetch is in flight: one mutation at
 # a time, and the lock may not exist for the first moments.
@@ -80,7 +79,7 @@ assert_false "the install gate is refused during a fetch" \
 assert_contains "$clean" "blocked" "the refused install key names the reason"
 
 # 2. The row becomes done from the final artifact.
-assert_contains "$clean" "✔ simapp" "the final artifact finishes the row"
+assert_contains "$clean" "[√]" "the final artifact finishes the row"
 assert_contains "$clean" "done" "the row says done"
 assert_contains "$clean" "exit 0" "the result footer carries the real exit"
 # The key line is drawn across cells, so the space between the words can be

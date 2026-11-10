@@ -1,12 +1,12 @@
 aur-prefetch | Fetch | 4 packages | live
-+- Dependency Graph:                                   install 4 packages | live
-| `-- = right 2.0.0-1            planned                                 1.1 MiB
-|    `-- + base 2.0.0-1            done                                  1.1 MiB
-| |-- > left 2.0.0-1             building | t 2s                         1.1 MiB
-| = join 2.0.0-1              planned | waiting for 1 > 1 =              1.1 MiB
-+--- Builds            | Downloads          | Host
-|    > 1   + 0   = 1   | v 0   + 1   = 1    | mirror.example.org
-+- S 4 packages | t 2s
+Dependency Graph:                                      install 4 packages | live
+`-- [ ] right 2.0.0-1            planned                                 1.1 MiB
+|  `-- [v] base 2.0.0-1            done                                  1.1 MiB
+|-- [|] left 2.0.0-1             building | t 2s                         1.1 MiB
+[ ] join 2.0.0-1              planned | waiting for 1 > 1 =              1.1 MiB
+1 done | 1 running | 2 waiting | 0 failed | t 2s | mirror.example.org
+
+
 
 
 

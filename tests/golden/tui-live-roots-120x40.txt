@@ -1,12 +1,12 @@
 aur-prefetch · Fetch · 4 packages · live
-┏━ Dependency Graph:                                                                           install 4 packages · live
-┃ ┌─ ⏵ root-b 2.0.0-1                       building · ⏱ 2s                                                      1.1 MiB
-┃ ⏸ child-b 2.0.0-1                      planned · waiting for 1 ⏵                                               1.1 MiB
-┃ ┌─ ↓ ⏵ root-a 2.0.0-1                       downloading · ⏱ 2s                                                 1.1 MiB
-┃ ⏸ child-a 2.0.0-1                      planned · waiting for 1 ↓                                               1.1 MiB
-┣━━━ Builds            │ Downloads          │ Host
-┃    ⏵ 1   ✔ 0   ⏸ 1   │ ↓ 1   ✔ 0   ⏸ 1    │ mirror.example.org
-┗━ Σ 4 packages · ⏱ 2s
+Dependency Graph:                                                                              install 4 packages · live
+┌─ [|] root-b 2.0.0-1                       building · ⏱ 2s                                                      1.1 MiB
+[ ] child-b 2.0.0-1                      planned · waiting for 1 ⏵                                               1.1 MiB
+┌─ [|] root-a 2.0.0-1                       downloading · ⏱ 2s                                                   1.1 MiB
+[ ] child-a 2.0.0-1                      planned · waiting for 1 ↓                                               1.1 MiB
+0 done · 2 running · 2 waiting · 0 failed · ⏱ 2s · mirror.example.org
+
+
 
 
 

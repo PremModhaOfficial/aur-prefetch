@@ -1228,11 +1228,15 @@ restores the terminal, re-collects and shows the result. The attached command
 is never shown as a fake live tree. Sim 36 proves the upgrade, the scoped
 escalation, the state write and the terminal restore.
 
-T4 visual pass landed: the tree now uses nom's heavy frame — `┏━ Dependency
-Graph:`, a `┃` border on every row, no light inner lanes, a `┣━━━ Builds │
-Downloads │ Host` table and a `┗━ ∑ …` footer. The ASCII frames use `+-`, `|`
-and `+---` with the same cells. The gates sit above the box and are not part of
-it.
+T4 visual pass landed: the live and static trees now follow bootvine's grammar.
+Status is a bracketed marker, not an activity glyph: `[ ]` waiting, `[|]`
+running, `[√]` done or skipped-satisfied, `[×]` failed, blocked or
+skipped-unsatisfied (dim when it is only blocked). The tree is light (`├─`,
+`└─`, `│`), the header is a plain `Dependency Graph:` line, and the summary is
+one dim footer line: done, running, waiting and failed counts plus the elapsed
+timer, the host and `frozen` when the frontier stopped. ASCII uses `[ ]`,
+`[|]`, `[v]`, `[x]` and the same light tree. The gates and the repair card sit
+above the footer and are not part of the tree.
 
 T3d landed: the receipt is built from `post_install::collect` and shows the
 real exit, the running kernel against `/usr/lib/modules`, the `.pacnew` count,

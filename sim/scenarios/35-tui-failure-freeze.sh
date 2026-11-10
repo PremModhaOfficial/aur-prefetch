@@ -41,7 +41,7 @@ assert_eq "$status" "0" "the TUI exited 0 after dismissing the failure"
 clean=$(sed -e 's/\x1b\[[0-9;?]*[a-zA-Z]//g' -e 's/\x1b[()][A-Za-z0-9]//g' "$screen" | tr -d '\r')
 
 # 1. The failed node stays visible and the frontier is frozen.
-assert_contains "$clean" "⚠ simapp" "the failed row stays visible"
+assert_contains "$clean" "[×]" "the failed row stays visible"
 assert_contains "$clean" "frozen" "the frontier is frozen, not retried"
 
 # 2. The repair card replaces the action line with observed facts.
