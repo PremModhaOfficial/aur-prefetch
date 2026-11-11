@@ -13,6 +13,27 @@ Early. All six commands are implemented and proven in `sim/`. Nothing here has
 been run against a real Arch system yet. `AGENTS.md` lists the rules that apply
 while implementing, and `sim/` is where behaviour gets proven.
 
+## Install
+
+From the AUR:
+
+```bash
+yay -S aur-prefetch
+```
+
+The package installs `/usr/bin/aur-prefetch` and the two user units in
+`/usr/lib/systemd/user`. Enabling the timer is your call:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now aur-prefetch.timer
+```
+
+`pacman` is required; `aurto` and `yay` are optional and only used by the paths
+that need them. `aur-prefetch init --apply` is still the command that installs
+the exact `pacman -Syuw` sudoers rule through `visudo -c`. The `PKGBUILD` and
+its units live at the repo root and in `packaging/`.
+
 ## Start here
 
 The working plan is **[`NEXT.md`](NEXT.md)**. Read it before touching

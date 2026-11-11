@@ -396,7 +396,7 @@ mod tests {
 
     use super::{
         Setup, current_user, install_sudoers, install_sudoers_with_sudo_in, render_service,
-        run_with, write_atomic, write_private,
+        render_timer, run_with, write_atomic, write_private,
     };
     use crate::config::Config;
     use crate::error::Error;
@@ -909,5 +909,19 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+    #[test]
+    fn the_packaged_units_match_what_init_renders() {
+        // A packaged install ships these files under /usr/lib/systemd/user.
+        // They must stay exactly what `init` writes for /usr/bin/aur-prefetch,
+        // or a packaged user and an init user would run different units.
+        assert_eq!(
+            include_str!("../../packaging/aur-prefetch.timer"),
+            render_timer()
+        );
+        assert_eq!(
+            include_str!("../../packaging/aur-prefetch.service"),
+            render_service(Path::new("/usr/bin/aur-prefetch")).expect("service")
+        );
     }
 }
