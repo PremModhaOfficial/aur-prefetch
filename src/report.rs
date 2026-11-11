@@ -274,7 +274,7 @@ pub struct StateInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LockState {
     None,
-    HeldByPacman,
+    HeldBy(String),
     Stale(PathBuf),
 }
 

@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::config::Config;
 use crate::error::Error;
 use crate::gate::{Gate, GateState};
+use crate::lock;
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 use crate::util::path_str;
@@ -66,8 +67,11 @@ pub fn preflight(config: &Config, runner: &dyn CommandRunner) -> Preflight {
         }
     };
 
-    match check_lock(config, runner) {
-        Ok(()) => gates.push(Gate::pass("lock", "no lock file, no pacman process")),
+    match lock::check(config, runner, "install") {
+        Ok(()) => gates.push(Gate::pass(
+            "lock",
+            "no pacman transaction or AUR build running",
+        )),
         Err(error) => gates.push(Gate::fail("lock", error.to_string())),
     }
 
@@ -170,7 +174,7 @@ pub fn run_with_status(
         ));
     }
 
-    check_lock(config, runner)?;
+    lock::check(config, runner, "install")?;
 
     let (official, aur) = collect_lists(config, runner)?;
 
@@ -259,30 +263,6 @@ fn collect_lists(
         }
     };
     Ok((official, aur))
-}
-
-fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    if !config.pacman_lock.exists() {
-        return Ok(());
-    }
-
-    let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
-    match pgrep.code {
-        0 => Err(Error::blocked(format!(
-            "pacman is running; refusing to install while {} is held",
-            config.pacman_lock.display()
-        ))),
-        // pgrep exits 1 when no process matched: the lock is stale, but only
-        // the user can confirm that. Never delete it ourselves.
-        1 => Err(Error::blocked(format!(
-            "stale lock {}: no pacman process is running; verify and remove it yourself",
-            config.pacman_lock.display()
-        ))),
-        code => Err(Error::failed(format!(
-            "pgrep -x pacman exited {code}; cannot tell whether pacman is running, so {} must stay",
-            config.pacman_lock.display()
-        ))),
-    }
 }
 
 enum Trust {
@@ -501,6 +481,13 @@ mod tests {
         }
     }
 
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
+    }
+
     fn options(yes: bool, force: bool, stdin_is_tty: bool) -> Options {
         Options {
             yes,
@@ -511,6 +498,7 @@ mod tests {
     }
 
     fn queue_lists(runner: &FakeRunner, official: &str) {
+        runner.push_output(none_running());
         runner.push_output(ok(official));
         runner.push_output(ok(""));
     }
@@ -529,6 +517,7 @@ mod tests {
         fs::write(&config.trusted_users, "alice\nbob\n").expect("trust file");
         let runner = FakeRunner::new();
         runner.push_output(ok("1000\n"));
+        runner.push_output(none_running());
         runner.push_output(ok("simapp 1.0.0-1 -> 2.0.0-1\n"));
         runner.push_output(ok("aurpkg 1.0-1 -> 1.1-1\n"));
 
@@ -565,6 +554,7 @@ mod tests {
         fs::write(&config.trusted_users, "# nobody\n\n").expect("trust file");
         let runner = FakeRunner::new();
         runner.push_output(ok("1000\n"));
+        runner.push_output(none_running());
         runner.push_output(ok(""));
         runner.push_output(ok(""));
 
@@ -588,6 +578,7 @@ mod tests {
         let config = test_config(&dir);
         let runner = FakeRunner::new();
         runner.push_output(ok("1000\n"));
+        runner.push_output(none_running());
         runner.push_output(ok(""));
         runner.push_output(ok(""));
 
@@ -612,6 +603,7 @@ mod tests {
         fs::write(&config.trusted_users, "alice\n").expect("trust file");
         let runner = FakeRunner::new();
         runner.push_output(ok("0\n"));
+        runner.push_output(none_running());
         runner.push_output(ok(""));
         runner.push_output(ok(""));
 
@@ -646,7 +638,7 @@ mod tests {
         let refused = test_config(&refused_dir);
         fs::write(&refused.pacman_lock, "").expect("lock");
         let blocked = FakeRunner::new();
-        blocked.push_output(ok("1234\n"));
+        blocked.push_output(ok("1234 pacman\n"));
         let error = run_with_status(&refused, &blocked, options(true, false, true))
             .expect_err("the lock gate refuses");
         assert!(matches!(error, Error::Blocked(_)));
@@ -803,6 +795,7 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(""));
         runner.push_output(CommandOutput {
             code: 2,
@@ -916,7 +909,7 @@ mod tests {
         let config = test_config(&dir);
         fs::write(&config.pacman_lock, "").expect("lock file");
         let runner = FakeRunner::new();
-        runner.push_output(ok("4321\n"));
+        runner.push_output(ok("4321 pacman\n"));
 
         let result = run_with(&config, &runner, options(true, false, false));
 
@@ -980,6 +973,7 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(CommandOutput {
             code: 2,
             stdout: String::new(),
@@ -1010,6 +1004,7 @@ mod tests {
         let runner = FakeRunner::new();
         let mut no_updates = ok("");
         no_updates.code = 1;
+        runner.push_output(none_running());
         runner.push_output(no_updates);
         runner.push_output(ok(""));
         runner.push_interactive(0);

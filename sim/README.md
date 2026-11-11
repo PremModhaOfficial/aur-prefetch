@@ -16,6 +16,16 @@ touching your machine.
 
 Requires Docker or Podman. The container runs with `--network none`.
 
+After any source change, rebuild the image without the cache before running:
+
+```bash
+docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .
+```
+
+The classic docker builder caches `COPY --from=builder`, so a plain
+`./sim/run.sh` can silently test the previous binary. There is no buildx on the
+current host, so `--no-cache` is the only reliable way to get a fresh image.
+
 ## What the image contains
 
 - `archlinux:base-devel`
@@ -94,6 +104,9 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows the PRE-FLIGHT gates, opens the captured log with a real pacman line, shows real `.part` bytes and a bar, finishes from the final artifact, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
 | `35-tui-failure-freeze.sh` | a corrupted repo artifact behind the paced transfer makes the real fetch fail: the running row freezes, the repair card names the evidence and the hint, `/usr` is unchanged, no state is written, and only the allowed argv is escalated |
 | `36-tui-install-attached.sh` | the attested install gate runs the exact attached `yay -Syuu` path as the sim installer: the package upgrades, the scoped helper is the only escalation, no AUR build happens, the state file records the install, the terminal is restored, and the read-only post-install receipt shows the exit, kernel and pacnew state |
+| `37-fetch-refuses-during-a-build.sh` | `fetch` refuses with exit 1 while any of `pacman`, `yay`, `makepkg`, `aurto` runs, even with no `db.lck`, and `check` reports the live process |
+| `38-check-and-fetch-share-the-floor.sh` | `check` refuses on the same 5 GiB snapshot floor `fetch` refuses on, so its verdict matches fetch's |
+| `39-fetch-state-unwritable.sh` | a download that completed exits 0 with a loud warning when the state file cannot be written, instead of turning the timer red |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.

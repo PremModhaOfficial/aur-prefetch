@@ -141,12 +141,17 @@ accessible to that user, or downloads fail. Test a moved CacheDir explicitly.
 
 Gates in order: lock, free space, then pacman.
 
-- [x] Lock: `/var/lib/pacman/db.lck` present refuses with exit 1. If
-      `pgrep -x pacman` is alive, say pacman is running; otherwise call the lock
-      stale and leave removal to the user. Never delete the lock.
-- [x] Free space: `need = max(2 GiB, 2 * pending_download + 2 GiB)`. Check the
-      CacheDir filesystem, and `/` too when they differ. 5 GiB floor if
-      snapshots are detected.
+- [x] Lock: refuse with exit 1 while `db.lck` exists or while `pacman`, `yay`,
+      `makepkg` or `aurto` is running. One shared gate in `src/lock.rs`, used by
+      `fetch`, `install` and `check`, because a build leaves no lock file and no
+      process named `pacman`. A lock nobody holds is stale and its removal is
+      left to the user. Never delete the lock.
+- [x] Free space: one `space_floor(config, pending_bytes)` in
+      `src/commands/fetch.rs` =
+      `max(min_free_bytes, 5 GiB when snapshots are configured) + 2 *
+      pending_download`. Check the CacheDir filesystem, and `/` too when they
+      differ. `check` reports against the same number, so its verdict cannot
+      disagree with fetch's.
 - [x] Pending download size: sum `Download Size` from `pacman -Qui`, fall back
       to the floor if parsing fails.
 - [x] Run `sudo -n /usr/bin/pacman -Syuw --noconfirm`, or pacman directly when
@@ -166,7 +171,8 @@ Read-only. Never writes state.
 
 - [x] Pending official updates: `pacman -Qu`.
 - [x] Pending AUR updates: `yay -Qua`.
-- [x] Disk: `df` bytes and inodes for `/` and CacheDir.
+- [x] Disk: `df` bytes and inodes for `/` and CacheDir, against fetch's
+      free-space floor.
 - [x] Lock: file plus live process.
 - [x] Caches: downloads, yay builds, aurto repo, chroots.
 - [x] Timer: `systemctl --user list-timers`, last service result.

@@ -347,17 +347,16 @@ impl FetchSession {
 
         if code == 0 {
             let unproven = self.monitor.live().graph().running.len();
-            let state_error = fetch::record_success(&self.config, &self.plan, at).err();
+            let state_warning = fetch::record_success(&self.config, &self.plan, at);
             self.phase = Phase::Finished { unproven };
             self.status = if unproven == 0 {
                 "fetch: exit 0".to_string()
             } else {
                 format!("fetch: exit 0 · {unproven} download(s) without a final artifact")
             };
-            self.failure = state_error.is_some();
-            if let Some(error) = state_error {
-                self.status
-                    .push_str(&format!(" · state write failed: {error}"));
+            self.failure = state_warning.is_some();
+            if let Some(warning) = state_warning {
+                self.status.push_str(&format!(" · {warning}"));
             }
         } else {
             let evidence = failure_evidence(code, &stderr);
@@ -528,6 +527,7 @@ mod tests {
         }
 
         fn queue_gates(&self, runner: &FakeRunner) {
+            runner.push_output(none_running());
             runner.push_output(ok("Name            : tool\nDownload Size   : 1000.00 B\n"));
             runner.push_output(ok(&format!("{}\n", self.cache.display())));
             runner.push_output(ok("10737418240\n"));
@@ -556,6 +556,13 @@ mod tests {
             stdout: stdout.to_string(),
             stderr: String::new(),
         }
+    }
+
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
     }
 
     fn at(seconds: u64) -> std::time::SystemTime {
@@ -626,7 +633,7 @@ mod tests {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("db.lck"), "").expect("lock");
         let fake = Arc::new(FakeRunner::new());
-        fake.push_output(ok("1234\n"));
+        fake.push_output(ok("1234 pacman\n"));
 
         let error = FetchSession::start(
             &fixture.config,
@@ -643,7 +650,11 @@ mod tests {
             fake.calls(),
             vec![(
                 "pgrep".to_string(),
-                vec!["-x".to_string(), "pacman".to_string()]
+                vec![
+                    "-x".to_string(),
+                    "-l".to_string(),
+                    crate::lock::PATTERN.to_string()
+                ]
             )]
         );
     }
@@ -744,7 +755,7 @@ mod tests {
         let fixture = Fixture::new();
         fs::write(fixture.root.join("db.lck"), "").expect("lock");
         let fake = Arc::new(FakeRunner::new());
-        fake.push_output(ok("1234\n"));
+        fake.push_output(ok("1234 pacman\n"));
 
         let failure = FetchSession::start(
             &fixture.config,
