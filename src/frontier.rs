@@ -340,6 +340,44 @@ impl GraphState {
         Ok(transitions)
     }
 
+    /// Mark every running node failed in one batch and freeze.
+    ///
+    /// A single terminal event — a nonzero command exit — applies to every
+    /// in-flight download at once. The one-observation path cannot express
+    /// this: [`Self::reduce`] ignores observations once `frozen` is set, so
+    /// folding `Failed` for each running node in turn would leave all but the
+    /// first stuck `Running`. This method does the whole freeze as one
+    /// transition batch, so every running node and its blocked dependents
+    /// reach a terminal state together.
+    ///
+    /// With no running node it changes nothing and freezes nothing, exactly
+    /// as the single-observation path does when there is no node the evidence
+    /// points at.
+    pub fn fail_all_running(&mut self, seq: u64) -> Result<Vec<Transition>, FrontierError> {
+        let expected = self.last_seq.saturating_add(1);
+        if seq != expected {
+            return Err(FrontierError::Sequence { expected, got: seq });
+        }
+        self.last_seq = seq;
+
+        let mut transitions = Vec::new();
+        if self.frozen {
+            return Ok(transitions);
+        }
+        let running: Vec<NodeId> = self.running.iter().cloned().collect();
+        if running.is_empty() {
+            return Ok(transitions);
+        }
+        for node in &running {
+            self.set_state(node, NodeState::Failed, seq, &mut transitions);
+        }
+        self.frozen = true;
+        for node in &running {
+            self.recompute(seq, Some(node), &mut transitions);
+        }
+        Ok(transitions)
+    }
+
     pub fn is_complete(&self) -> bool {
         self.nodes.values().all(|state| state.is_terminal())
     }

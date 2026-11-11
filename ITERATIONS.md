@@ -268,3 +268,15 @@ U+206A..206F and admits U+2028/U+2029 (`src/tui/sanitize.rs`);
 the cache scan stats with `fs::metadata`, which follows a symlink swapped in
 after the listing (`src/fetch_source.rs`); and a spawn failure is reported as
 `exit -1` (`src/tui/fetch_session.rs`).
+
+---
+
+## Fifth review (branch as a unit, round 1)
+
+One fresh-context reviewer (deepseek-v4-pro via a T3 thread) read the whole
+span from `5b2a290`. Three `should` and two `nit` findings, none repeating the
+tables above. Accepted and fixed, one commit each:
+
+| Defect | Severity | Fixed in |
+|---|---|---|
+| a nonzero fetch exit failed only the alphabetically-first running node; the rest stayed `Running` in a frozen graph | should | (this commit) |

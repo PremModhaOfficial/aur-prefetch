@@ -379,6 +379,43 @@ impl LiveRun {
         Ok(transitions)
     }
 
+    /// Fail every running node in one batch and freeze.
+    ///
+    /// A nonzero command exit applies to every in-flight download at once, so
+    /// the evidence and finish time are recorded for each failed node and the
+    /// waiting counts are settled from the returned transitions, exactly as
+    /// [`Self::observe`] does for a single failure.
+    pub fn fail_all_running(
+        &mut self,
+        at: SystemTime,
+        evidence: impl Into<String>,
+    ) -> Result<Vec<Transition>, FrontierError> {
+        let evidence = evidence.into();
+        let was_frozen = self.graph.frozen;
+        let seq = self.graph.last_seq.saturating_add(1);
+        let transitions = self.graph.fail_all_running(seq)?;
+
+        if !was_frozen {
+            self.clock = self.clock.max(at);
+        }
+
+        for transition in &transitions {
+            if transition.to == NodeState::Failed {
+                self.finished.insert(transition.node.clone(), at);
+                self.evidence
+                    .insert(transition.node.clone(), evidence.clone());
+            }
+            let activity = self.activities.get(&transition.node).copied();
+            self.settle_waiting(
+                &transition.node,
+                Waiting::from_state(transition.from, activity),
+                Waiting::from_state(transition.to, activity),
+            );
+        }
+
+        Ok(transitions)
+    }
+
     /// Move one prerequisite's contribution to every dependent's counts.
     fn settle_waiting(&mut self, node: &str, before: Waiting, after: Waiting) {
         if before == after {

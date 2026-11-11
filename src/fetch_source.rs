@@ -226,10 +226,9 @@ impl FetchMonitor {
     /// Fold the command result and stop polling.
     ///
     /// A nonzero code fails every running node with `exit N` and a short
-    /// stderr excerpt; the reducer's freeze then blocks dependents. The
-    /// reducer accepts only the first failure, so later running nodes keep
-    /// their running state in a frozen graph. A zero code finishes only a
-    /// running node with a final artifact and leaves the rest running.
+    /// stderr excerpt in one batch, then freezes; the reducer blocks
+    /// dependents. A zero code finishes only a running node with a final
+    /// artifact and leaves the rest running.
     ///
     /// A failed command that observed no running node freezes nothing: there
     /// is no node the evidence points at, and planned nodes are never marked
@@ -241,18 +240,15 @@ impl FetchMonitor {
         self.sealed = true;
 
         let mut transitions = Vec::new();
-        let running: Vec<String> = self.run.graph().running.iter().cloned().collect();
         self.run.advance(at);
 
         if exit.code != 0 {
             let evidence = failure_evidence(exit.code, &exit.stderr);
-            for name in running {
-                transitions.extend(
-                    self.run
-                        .observe(&name, Observed::Failed, at, None, evidence.clone())
-                        .map_err(frontier_error)?,
-                );
-            }
+            transitions.extend(
+                self.run
+                    .fail_all_running(at, evidence)
+                    .map_err(frontier_error)?,
+            );
             return Ok(transitions);
         }
 
@@ -660,6 +656,50 @@ mod tests {
             .and_then(|row| row.evidence.clone())
             .expect("failure evidence");
         assert_eq!(evidence, "exit 1: error: failed retrieving file 'a'");
+    }
+
+    #[test]
+    fn a_nonzero_exit_fails_every_running_download_not_just_the_first() {
+        let fixture = Fixture::new();
+        let tree = Tree::build(&[
+            package("base", ArtifactState::Missing, Some(1000), &[]),
+            package("left", ArtifactState::Missing, Some(1000), &["base"]),
+            package("right", ArtifactState::Missing, Some(1000), &["base"]),
+            package(
+                "join",
+                ArtifactState::Missing,
+                Some(1000),
+                &["left", "right"],
+            ),
+        ])
+        .expect("tree");
+        let mut monitor = FetchMonitor::new(&tree, &fixture.plan(), at(1)).expect("monitor");
+
+        fixture.write("base-2.0.0-1-x86_64.pkg.tar.zst.part", &[0; 10]);
+        monitor.poll(at(2)).expect("poll");
+        fixture.write("left-2.0.0-1-x86_64.pkg.tar.zst.part", &[0; 10]);
+        fixture.write("right-2.0.0-1-x86_64.pkg.tar.zst.part", &[0; 10]);
+        monitor.poll(at(3)).expect("poll");
+        assert_eq!(monitor.live().state("base"), Some(NodeState::Running));
+        assert_eq!(monitor.live().state("left"), Some(NodeState::Running));
+        assert_eq!(monitor.live().state("right"), Some(NodeState::Running));
+
+        monitor
+            .finish(
+                FetchExit {
+                    code: 1,
+                    stderr: "error: failed retrieving file 'base'".to_string(),
+                },
+                at(4),
+            )
+            .expect("finish");
+
+        assert_eq!(monitor.live().state("base"), Some(NodeState::Failed));
+        assert_eq!(monitor.live().state("left"), Some(NodeState::Failed));
+        assert_eq!(monitor.live().state("right"), Some(NodeState::Failed));
+        assert_eq!(monitor.live().state("join"), Some(NodeState::Blocked));
+        assert!(monitor.live().graph().frozen);
+        assert!(monitor.live().graph().running.is_empty());
     }
 
     #[test]
