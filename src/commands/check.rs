@@ -2,8 +2,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::commands::fetch;
 use crate::config::Config;
 use crate::error::Error;
+use crate::lock;
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 use crate::util::{human_bytes, path_str, resolve_cache_dir};
@@ -52,9 +54,15 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         }
     }
 
+    // The same floor `fetch` refuses on, pending download included: a check
+    // that reports more free space than the next fetch needs sends the user
+    // nowhere.
+    let pending_bytes = fetch::pending_download(path_str(&config.pacman)?, runner)?.0;
+    let need = fetch::space_floor(config, pending_bytes);
+
     let cache_dir = resolve_cache_dir(config, runner)?;
     if cache_dir.exists() {
-        if report_disk(runner, &cache_dir, config.min_free_bytes)? {
+        if report_disk(runner, &cache_dir, need)? {
             actionable += 1;
         }
     } else {
@@ -66,9 +74,7 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         );
         actionable += 1;
     }
-    if cache_dir != PathBuf::from("/")
-        && report_disk(runner, Path::new("/"), config.min_free_bytes)?
-    {
+    if cache_dir != PathBuf::from("/") && report_disk(runner, Path::new("/"), need)? {
         actionable += 1;
     }
 
@@ -153,17 +159,17 @@ fn parse_pair(stdout: &str) -> Option<(u64, u64)> {
 }
 
 fn report_lock(config: &Config, runner: &dyn CommandRunner) -> Result<bool, Error> {
+    if let Some(name) = lock::running(runner)? {
+        println!("check: lock: held by {name}");
+        return Ok(true);
+    }
+
     if !config.pacman_lock.exists() {
         println!("check: lock: none");
         return Ok(false);
     }
 
-    let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
-    if pgrep.code == 0 {
-        println!("check: lock: held by pacman");
-    } else {
-        println!("check: lock: stale {}", config.pacman_lock.display());
-    }
+    println!("check: lock: stale {}", config.pacman_lock.display());
     Ok(true)
 }
 
@@ -339,6 +345,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{report_cache, run_with, scheduled_timer};
+    use crate::commands::fetch;
     use crate::config::Config;
     use crate::error::Error;
     use crate::runner::{CommandOutput, FakeRunner};
@@ -361,6 +368,7 @@ mod tests {
             ("AUR_PREFETCH_PACMAN_LOG", dir.join("pacman.log")),
             ("AUR_PREFETCH_YAY_CACHE_DIR", dir.join("yay")),
             ("AUR_PREFETCH_TRUSTED_USERS", dir.join("trusted-users")),
+            ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", dir.join("snapper")),
         ] {
             map.insert(key.to_string(), value.to_string_lossy().into_owned());
         }
@@ -380,13 +388,36 @@ mod tests {
         }
     }
 
+    /// `pacman -Qui` output straight from the fixture shape, one pending
+    /// package whose download size is known.
+    fn qui(pending: u64) -> CommandOutput {
+        ok(&format!(
+            "Name            : simapp\nDownload Size   : {pending} B\n"
+        ))
+    }
+
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
+    }
+
     /// Queue one response per external call, in the order `run_with` makes them.
-    fn queue(runner: &FakeRunner, dir: &Path, official: &str, available: u64, lock_held: bool) {
+    fn queue(
+        runner: &FakeRunner,
+        dir: &Path,
+        official: &str,
+        available: u64,
+        lock_held: bool,
+        pending: u64,
+    ) {
         let cache = dir.join("cache");
         fs::create_dir_all(&cache).expect("cache dir");
 
         runner.push_output(ok(official));
         runner.push_output(ok(""));
+        runner.push_output(qui(pending));
         runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
 
         let size = format!("107374182400 {available}\n");
@@ -396,7 +427,9 @@ mod tests {
         runner.push_output(ok("6553600 3200000\n"));
 
         if lock_held {
-            runner.push_output(ok("4321\n"));
+            runner.push_output(ok("4321 pacman\n"));
+        } else {
+            runner.push_output(none_running());
         }
 
         for _ in 0..5 {
@@ -411,7 +444,7 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
-        queue(&runner, &dir, "", 53_687_091_200, false);
+        queue(&runner, &dir, "", 53_687_091_200, false, 0);
 
         run_with(&config, &runner).expect("check");
 
@@ -431,6 +464,7 @@ mod tests {
             "simapp 1.0.0-1 -> 2.0.0-1\n",
             53_687_091_200,
             false,
+            0,
         );
 
         let result = run_with(&config, &runner);
@@ -447,7 +481,7 @@ mod tests {
         let config = test_config(&dir);
         fs::write(&config.pacman_lock, "").expect("lock file");
         let runner = FakeRunner::new();
-        queue(&runner, &dir, "", 53_687_091_200, true);
+        queue(&runner, &dir, "", 53_687_091_200, true, 0);
 
         let result = run_with(&config, &runner);
 
@@ -462,13 +496,66 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
-        queue(&runner, &dir, "", 1000, false);
+        queue(&runner, &dir, "", 1000, false, 0);
 
         let result = run_with(&config, &runner);
 
         assert!(matches!(result, Err(Error::Blocked(_))));
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    /// #31: check must give the same verdict as fetch, one byte around the
+    /// floor, with a pending download so the doubled size term is live. Before
+    /// the shared floor, check used the 1 MiB configured floor here and passed
+    /// while fetch refused on the 5 GiB snapshot floor.
+    #[test]
+    fn check_blocks_exactly_where_fetch_blocks() {
+        let pending = 104_857_600; // 100 MiB
+        let snapshot_floor = 5 * 1024 * 1024 * 1024;
+
+        for delta in [-1i64, 0, 1] {
+            let dir = temp_dir();
+            let config = test_config(&dir);
+            fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
+            let floor = snapshot_floor + 2 * pending;
+            let available = (floor as i64 + delta) as u64;
+            assert_eq!(
+                fetch::space_floor(&config, pending),
+                floor,
+                "delta {delta}: the shared floor"
+            );
+
+            // fetch on this machine: the same space, the same pending download.
+            let fetch_runner = FakeRunner::new();
+            fetch_runner.push_output(none_running());
+            fetch_runner.push_output(qui(pending));
+            fetch_runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+            fetch_runner.push_output(ok(&format!("{available}\n")));
+            fetch_runner.push_output(ok(&format!("{available}\n")));
+            fetch_runner.push_output(ok("0\n"));
+            fetch_runner.push_output(ok(""));
+            let fetched = fetch::run_with(&config, &fetch_runner);
+
+            let check_runner = FakeRunner::new();
+            queue(&check_runner, &dir, "", available, false, pending);
+            let checked = run_with(&config, &check_runner);
+
+            assert_eq!(
+                checked.is_err(),
+                fetched.is_err(),
+                "delta {delta}: check and fetch must agree (check {:?}, fetch {:?})",
+                checked.as_ref().err().map(ToString::to_string),
+                fetched.as_ref().err().map(ToString::to_string)
+            );
+            assert_eq!(
+                fetched.is_err(),
+                delta < 0,
+                "delta {delta}: fetch's own boundary is the shared floor"
+            );
+
+            fs::remove_dir_all(&dir).expect("clean temp dir");
+        }
     }
 
     #[test]
@@ -498,9 +585,11 @@ mod tests {
         let runner = FakeRunner::new();
         runner.push_output(ok(""));
         runner.push_output(ok(""));
+        runner.push_output(qui(0));
         runner.push_output(ok(&format!("{}\n", missing.to_string_lossy())));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(none_running());
         for _ in 0..5 {
             runner.push_output(ok("1048576\n"));
         }
@@ -540,11 +629,13 @@ mod tests {
         let mut failed = ok("");
         failed.code = 2;
         runner.push_output(failed);
+        runner.push_output(qui(0));
         runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(none_running());
         for _ in 0..5 {
             runner.push_output(ok("1048576\n"));
         }
@@ -568,11 +659,13 @@ mod tests {
         let runner = FakeRunner::new();
         runner.push_output(ok(""));
         runner.push_output(ok(""));
+        runner.push_output(qui(0));
         runner.push_output(ok(&format!("{}\n", cache.to_string_lossy())));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(none_running());
 
         let mut unreadable = ok("");
         unreadable.code = 1;

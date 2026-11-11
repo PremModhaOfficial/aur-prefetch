@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::lock;
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 
@@ -18,28 +19,14 @@ pub fn run() -> Result<(), Error> {
 /// `pacman -Qui` sits between the lock and the space gate because the size
 /// estimate needs it. It only reads.
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    check_lock(config, runner)?;
+    lock::check(config, runner, "fetch")?;
 
     let pacman = path_str(&config.pacman)?;
-    let quiet = runner.run(pacman, &["-Qui"])?;
-    let (pending_bytes, pending_names) = if quiet.code == 0 {
-        parse_pending(&quiet.stdout)
-    } else {
-        eprintln!(
-            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
-            quiet.code
-        );
-        (0, Vec::new())
-    };
+    let (pending_bytes, pending_names) = pending_download(pacman, runner)?;
     let pending_count = pending_names.len() as u64;
 
     let cache_dir = resolve_cache_dir(config, runner)?;
-    let floor = if config.snapper_config_dir.is_dir() {
-        config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
-    } else {
-        config.min_free_bytes
-    };
-    let need = floor.saturating_add(pending_bytes.saturating_mul(2));
+    let need = space_floor(config, pending_bytes);
     check_space(runner, &cache_dir, need)?;
     if cache_dir != PathBuf::from("/") {
         check_space(runner, Path::new("/"), need)?;
@@ -84,26 +71,34 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     Ok(())
 }
 
-fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    if !config.pacman_lock.exists() {
-        return Ok(());
-    }
+/// The free-space floor `fetch` and `check` both compare against, so the two
+/// commands cannot disagree about whether the next fetch will work. Snapshot
+/// configs raise the floor to 5 GiB, and the pending download is provisioned
+/// twice (download plus install).
+pub(crate) fn space_floor(config: &Config, pending_bytes: u64) -> u64 {
+    let floor = if config.snapper_config_dir.is_dir() {
+        config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
+    } else {
+        config.min_free_bytes
+    };
+    floor.saturating_add(pending_bytes.saturating_mul(2))
+}
 
-    let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
-    if pgrep.code == 0 {
-        return Err(Error::blocked(format!(
-            "pacman is running; refusing to fetch while {} is held",
-            config.pacman_lock.display()
-        )));
+/// Pending download size and the names behind it. A query that cannot answer
+/// is a warning and the minimum floor, never a silent zero.
+pub(crate) fn pending_download(
+    pacman: &str,
+    runner: &dyn CommandRunner,
+) -> Result<(u64, Vec<String>), Error> {
+    let quiet = runner.run(pacman, &["-Qui"])?;
+    if quiet.code != 0 {
+        eprintln!(
+            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
+            quiet.code
+        );
+        return Ok((0, Vec::new()));
     }
-
-    // pacman refuses any transaction while the file exists, so proceeding
-    // would only turn this into an opaque pacman failure. Never delete it:
-    // the user has to confirm nothing holds it.
-    Err(Error::blocked(format!(
-        "stale lock {}: no pacman process is running; verify and remove it yourself",
-        config.pacman_lock.display()
-    )))
+    Ok(parse_pending(&quiet.stdout))
 }
 
 fn resolve_cache_dir(config: &Config, runner: &dyn CommandRunner) -> Result<PathBuf, Error> {
@@ -227,9 +222,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{parse_pending, run_with};
+    use super::{parse_pending, pending_download, run_with, space_floor};
     use crate::config::Config;
     use crate::error::Error;
+    use crate::lock::PATTERN;
     use crate::runner::{CommandOutput, FakeRunner};
     use crate::state::State;
 
@@ -280,6 +276,17 @@ mod tests {
         )
     }
 
+    fn pgrep_call() -> (String, Vec<String>) {
+        call("pgrep", &["-x", "-l", PATTERN])
+    }
+
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
+    }
+
     #[test]
     fn parses_sizes_and_names_from_pacman_qui() {
         let (bytes, names) = parse_pending(QUI);
@@ -290,19 +297,66 @@ mod tests {
     }
 
     #[test]
+    fn the_space_floor_raises_to_the_snapshot_floor_and_doubles_the_download() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        const MIB: u64 = 1024 * 1024;
+        const GIB: u64 = 1024 * MIB;
+
+        assert_eq!(space_floor(&config, 0), MIB, "no snapshots: the floor");
+        assert_eq!(space_floor(&config, 1000), MIB + 2000, "download twice");
+
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
+        assert_eq!(space_floor(&config, 0), 5 * GIB, "snapshots: 5 GiB");
+        assert_eq!(space_floor(&config, 1000), 5 * GIB + 2000);
+
+        assert_eq!(space_floor(&config, u64::MAX), u64::MAX, "never overflows");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_configured_floor_above_the_snapshot_floor_wins() {
+        let dir = temp_dir();
+        let mut config = test_config(&dir);
+        let eight_gib = 8 * 1024 * 1024 * 1024;
+        config.min_free_bytes = eight_gib;
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
+
+        assert_eq!(space_floor(&config, 0), eight_gib);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unanswerable_qui_falls_back_to_the_floor_not_to_a_guess() {
+        let runner = FakeRunner::new();
+        let mut failed = ok("");
+        failed.code = 1;
+        runner.push_output(failed);
+
+        let (bytes, names) = pending_download("/usr/bin/pacman", &runner).expect("warning only");
+
+        assert_eq!(bytes, 0);
+        assert!(names.is_empty());
+
+        assert_eq!(runner.calls(), vec![call("/usr/bin/pacman", &["-Qui"])]);
+    }
+
+    #[test]
     fn a_held_lock_blocks_before_any_pacman_command() {
         let dir = temp_dir();
         let config = test_config(&dir);
         fs::write(&config.pacman_lock, "").expect("lock file");
 
         let runner = FakeRunner::new();
-        runner.push_output(ok("1234\n"));
+        runner.push_output(ok("1234 pacman\n"));
 
         let result = run_with(&config, &runner);
 
         assert!(matches!(result, Err(Error::Blocked(_))));
         assert_eq!(result.unwrap_err().exit_code(), 1);
-        assert_eq!(runner.calls(), vec![call("pgrep", &["-x", "pacman"])]);
+        assert_eq!(runner.calls(), vec![pgrep_call()]);
         assert!(
             config.pacman_lock.exists(),
             "the lock must never be deleted"
@@ -327,7 +381,7 @@ mod tests {
         assert!(matches!(result, Err(Error::Blocked(_))));
         let message = result.unwrap_err().to_string();
         assert!(message.contains("stale lock"), "message was: {message}");
-        assert_eq!(runner.calls(), vec![call("pgrep", &["-x", "pacman"])]);
+        assert_eq!(runner.calls(), vec![pgrep_call()]);
         assert!(config.pacman_lock.exists());
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
@@ -339,6 +393,7 @@ mod tests {
         let config = test_config(&dir);
 
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(QUI));
         runner.push_output(ok("/var/cache/pacman/pkg/\n"));
         runner.push_output(ok(LOW));
@@ -348,7 +403,7 @@ mod tests {
         assert!(matches!(result, Err(Error::Blocked(_))));
         let message = result.unwrap_err().to_string();
         assert!(message.contains("free space"), "message was: {message}");
-        assert_eq!(runner.calls().len(), 3, "no command may run after the gate");
+        assert_eq!(runner.calls().len(), 4, "no command may run after the gate");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -365,6 +420,7 @@ mod tests {
         .expect("seed state");
 
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(QUI));
         runner.push_output(ok("/var/cache/pacman/pkg/\n"));
         runner.push_output(ok(HIGH));
@@ -377,6 +433,7 @@ mod tests {
         assert_eq!(
             runner.calls(),
             vec![
+                pgrep_call(),
                 call("/usr/bin/pacman", &["-Qui"]),
                 call("pacman-conf", &["--config", "/etc/pacman.conf", "CacheDir"]),
                 call("df", &["-B1", "--output=avail", "/var/cache/pacman/pkg/"]),
@@ -404,6 +461,7 @@ mod tests {
         let config = test_config(&dir);
 
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(QUI));
         runner.push_output(ok("/var/cache/pacman/pkg/\n"));
         runner.push_output(ok(HIGH));
