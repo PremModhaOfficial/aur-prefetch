@@ -32,11 +32,11 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 ## Commands
 
 - `aur-prefetch init [--apply]` — print, or with `--apply` write, the user service, timer, and exact sudoers rule. Run it as your user; it prompts for sudo only to install the rule, and never runs `aurto`
-- `aur-prefetch check` — pending updates, disk, lock, caches, timer status
+- `aur-prefetch check [--json]` — pending updates, disk, lock, caches, timer status
 - `aur-prefetch fetch` — free-space gate, `pacman -Syuw` only
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
 - `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
-- `aur-prefetch doctor` — verify timers, limits, repo, journald
+- `aur-prefetch doctor [--json]` — verify timers, limits, repo, journald
 - `aur-prefetch tui [--render-once] [--ascii]` - dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
 
 ### `tui`
@@ -81,6 +81,19 @@ not fail a healthy system; unreadable user caches do.
 
 Exit codes: `0` when clean, `1` when one or more checks need attention, `2`
 when a check could not run (for example `pacman -Qu` failed).
+
+### `--json`
+
+`check --json` and `doctor --json` print one JSON object instead of the text
+report, for a script or a dashboard. Field names are the report field names, so
+the text output and the JSON cannot disagree: a section is
+`{"state":"ready","data":…,"at":<unix seconds>}`, `{"state":"failed","error":…}`,
+or `{"state":"not_collected"}`, and a section a command did not collect says so
+instead of guessing. `verdict` is `clean`/`ok`, `action_needed`, or `error` when
+collection stopped; `check` also carries `actionable`, `doctor` carries
+`problems`. `check`'s `fatal` and `doctor`'s `error` are `null` on a normal run.
+The exit code is the same as the text form, and there is no colour or glyph in
+the JSON.
 
 ## Environment overrides
 

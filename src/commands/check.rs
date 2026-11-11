@@ -15,15 +15,27 @@ use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 use crate::util::{human_bytes, path_str, resolve_cache_dir};
 
-pub fn run() -> Result<(), Error> {
+pub fn run(json: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
-    run_with(&config, &SystemRunner)
+    run_with_options(&config, &SystemRunner, json)
+}
+
+pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
+    run_with_options(config, runner, false)
 }
 
 /// Read-only: this command never writes state or the caches it inspects.
-pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
+pub fn run_with_options(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    json: bool,
+) -> Result<(), Error> {
     let snapshot = collect(config, runner, SystemTime::now())?;
-    print!("{}", render_text(&snapshot));
+    if json {
+        println!("{}", crate::json::check(&snapshot)?);
+    } else {
+        print!("{}", render_text(&snapshot));
+    }
     if let Some(error) = snapshot.fatal.clone() {
         return Err(error);
     }
@@ -645,7 +657,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use super::{collect_cache, render_text, run_with, scheduled_timer};
+    use super::{collect_cache, render_text, run_with, run_with_options, scheduled_timer};
     use crate::commands::fetch;
     use crate::config::Config;
     use crate::error::Error;
@@ -1152,5 +1164,46 @@ check: action needed (1 item(s))
         assert!(text.contains("check: lock: none"));
         assert!(!text.contains("not collected"));
         assert!(!text.contains("check: clean"));
+    }
+
+    #[test]
+    fn json_keeps_the_exit_code_and_prints_no_colour() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        queue(
+            &runner,
+            &dir,
+            "simapp 1.0.0-1 -> 2.0.0-1\n",
+            53_687_091_200,
+            false,
+            0,
+        );
+
+        let result = run_with_options(&config, &runner, true);
+
+        assert!(matches!(result, Err(Error::Blocked(_))));
+        assert_eq!(result.unwrap_err().exit_code(), 1);
+        assert!(!config.state_file.exists(), "check must not write state");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn json_keeps_the_execution_error() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        let mut failed = ok("");
+        failed.code = 2;
+        failed.stderr = "database error".to_string();
+        runner.push_output(failed);
+
+        let result = run_with_options(&config, &runner, true);
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        assert_eq!(result.unwrap_err().exit_code(), 2);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 }

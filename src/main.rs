@@ -26,7 +26,11 @@ enum Commands {
         apply: bool,
     },
     /// Pending updates, disk, lock, caches, timer status
-    Check,
+    Check {
+        /// Print one JSON object instead of the text report
+        #[arg(long)]
+        json: bool,
+    },
     /// Free-space gate, pacman -Syuw only
     Fetch,
     /// News gate, lock check, then yay -Syuu
@@ -45,7 +49,11 @@ enum Commands {
         apply: bool,
     },
     /// Verify timers, limits, repo, journald
-    Doctor,
+    Doctor {
+        /// Print one JSON object instead of the text report
+        #[arg(long)]
+        json: bool,
+    },
     /// Interactive dependency tree
     Tui {
         /// Render one frame to stdout and exit. Works without a tty.
@@ -61,11 +69,11 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Commands::Init { apply } => commands::init::run(apply),
-        Commands::Check => commands::check::run(),
+        Commands::Check { json } => commands::check::run(json),
         Commands::Fetch => commands::fetch::run(),
         Commands::Install { yes, force } => commands::install::run(yes, force),
         Commands::Clean { apply } => commands::clean::run(apply),
-        Commands::Doctor => commands::doctor::run(),
+        Commands::Doctor { json } => commands::doctor::run(json),
         Commands::Tui { render_once, ascii } => aur_prefetch::tui::run(render_once, ascii),
     };
 

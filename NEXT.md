@@ -268,7 +268,7 @@ A container cannot test snapshots or boot.
 - [ ] `PKGBUILD` for the AUR, depends on `pacman`, optional `aurto`, `yay`.
 - [ ] Install the binary to `/usr/bin`, units to `/usr/lib/systemd/user`.
 - [ ] `cargo install` path documented.
-- [ ] `--json` output for `check` and `doctor`.
+- [x] `--json` output for `check` and `doctor`.
 - [ ] Release workflow with `cargo publish --dry-run`.
 
 ---
