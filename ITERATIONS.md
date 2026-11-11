@@ -284,3 +284,4 @@ tables above. Accepted and fixed, one commit each:
 | `draw_with` kept a second clipping pass that re-derived the body budget independently of `plan_frame` | should | (this commit) |
 | `tree_row_budget` was dead in production, referenced only by its own test | nit | (this commit) |
 | an unrooted-cycle frame still printed `Dependency Graph:` above the error line | nit | (this commit) |
+| (round 2) removing the clip pass exposed an unreserved tree-error line: a cyclic report with notes overran the body by one row | blocker | (this commit) |

@@ -798,12 +798,17 @@ pub fn plan_frame(
             .data()
             .is_some_and(|report| report.packages.is_empty()),
     );
+    // A tree that fails to build draws one error line in place of the tree
+    // rows. It is a row like any other, so the plan reserves it or the body
+    // overruns by one when notes fill the rest of the block.
+    let error_row = usize::from(matches!(tree, Some(Err(_))));
     // `BodySplit` already set the summary row aside (`after_summary`), and the
-    // prefetch block draws that summary itself; only the notes and the
-    // `system current` row come out of the tree rows. Reserving the summary
-    // here as well cost one row on every frame, and forcing a minimum of one
-    // row when they had spent the block planned a row the frame had to clip.
-    let reserved = notes + empty_row;
+    // prefetch block draws that summary itself; only the notes, the
+    // `system current` row and a possible tree-error line come out of the
+    // tree rows. Reserving the summary here as well cost one row on every
+    // frame, and forcing a minimum of one row when they had spent the block
+    // planned a row the frame had to clip.
+    let reserved = notes + empty_row + error_row;
     if reserved > split.tree_rows {
         // The summary, notes and `system current` are not optional. When they
         // need more than the tree share, the gate block gives up rows; a body
@@ -1436,9 +1441,11 @@ fn prefetch_lines(
     // the plan can hold, the last row counts the ones that were left out
     // rather than letting the body overrun and cut the gate overflow row.
     let empty_row = usize::from(report.packages.is_empty());
+    let error_row = usize::from(tree.is_err());
     let note_room = block_room
         .saturating_sub(slots.len())
-        .saturating_sub(empty_row);
+        .saturating_sub(empty_row)
+        .saturating_sub(error_row);
     let drawn = if report.notes.len() > note_room {
         note_room.saturating_sub(1)
     } else {
@@ -5500,6 +5507,54 @@ mod tests {
         assert!(
             !frame.contains("Dependency Graph"),
             "a cycle frame claims no graph:\n{frame}"
+        );
+    }
+
+    #[test]
+    fn a_cycle_with_notes_caps_them_instead_of_overrunning_the_body() {
+        let now = at();
+        let mut snapshot = prefetch_snapshot_with(vec![
+            prefetch_package(
+                "a",
+                "2.0.0-1",
+                ArtifactState::Missing,
+                "not in cache",
+                now,
+                &["b"],
+            ),
+            prefetch_package(
+                "b",
+                "2.0.0-1",
+                ArtifactState::Missing,
+                "not in cache",
+                now,
+                &["a"],
+            ),
+        ]);
+        let packages = snapshot
+            .prefetch
+            .data()
+            .expect("prefetch present")
+            .packages
+            .clone();
+        snapshot.prefetch = Section::ready(
+            PrefetchReport::new(
+                packages,
+                Some("mirror.example.org".to_string()),
+                (0..7).map(|i| format!("note {i}")).collect(),
+            ),
+            now,
+        );
+
+        // 80x12 gives the cycle error, the summary and seven notes one row
+        // fewer than they need. The error line is a row like any other, so
+        // the notes must be counted, never silently dropped off the bottom.
+        let frame = render_frame(&snapshot, 80, 12, false, false, false);
+
+        assert!(frame.contains("error: dependency cycle has no root: a, b"));
+        assert!(
+            frame.contains("more note(s)"),
+            "notes that do not fit are counted, never silently dropped:\n{frame}"
         );
     }
 
