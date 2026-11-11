@@ -67,3 +67,52 @@ Ledger: `/tmp/aur-prefetch-runs/09/ledger.tsv`.
 - One item per commit, conventional message, no push, no PR.
 - `./ci.sh` green before every commit; baseline 276 tests.
 - Tick the matching `NEXT.md` Phase 6 boxes in the same commit.
+
+## Results
+
+All four items landed, `./ci.sh` green before each commit.
+
+1. `--json` for `check` and `doctor` — `572311f`. The doctor refactor is
+   proven byte-identical: 117 captured lines across 15 setup states,
+   `/tmp/aur-prefetch-runs/09/doctor-baseline.txt` vs `doctor-after.txt`, diff
+   empty. Two frozen text tests now hold it. `check`'s two existing frozen tests
+   still pass. Exit codes unchanged.
+2. `PKGBUILD` — `5e08582`. `bash -n` OK; `build()`/`package()` driven into a
+   temp `pkgdir` (755 `/usr/bin` binary that runs and matches the release
+   build, 644 units, licences); `systemd-analyze verify` parses both units; a
+   test keeps the packaged units byte-equal to `init`'s renderer.
+   **`makepkg` was not run** — the host rule forbids it. Handoff below.
+3. `cargo install` — `ce629e5`. Proven with
+   `cargo install --path . --locked --root <tmp>`.
+4. `cargo publish --dry-run` — `5debc73`, as a CI step with no token. Local
+   run: 160 files, 295 KB `.crate`, verify build green.
+
+Sim: scenarios 09, 10, 11, 12, 21, 22, 23, 24, 25, 27, 28, 30 re-run against
+the refactor, then the full `./sim/run.sh` — 36/36 PASS. `check --json` and
+`doctor --json` in the sim image print one object with no ESC byte and keep
+exit 1.
+
+## Handoff: what a human must run
+
+The PKGBUILD sources the `v0.1.0` git tag, which does not exist yet. On a
+machine with the tag pushed, in a disposable Arch container (never the dev
+host):
+
+```bash
+tag=v0.1.0
+docker run --rm -it --network host -v "$PWD":/src:ro archlinux:latest bash -lc '
+  set -e
+  pacman -Syu --noconfirm --needed base-devel git rust
+  useradd -m builder && printf "builder ALL=(ALL) NOPASSWD: ALL\n" > /etc/sudoers.d/builder
+  cp -r /src /work && chown -R builder /work
+  su builder -c "cd /work && makepkg -f"
+  pacman -U --noconfirm /work/aur-prefetch-0.1.0-1-*.pkg.tar.zst
+  pacman -Ql aur-prefetch | grep -E "bin/|systemd/user"
+  aur-prefetch --version
+'
+```
+
+Expected: `makepkg` reports `Finished making: aur-prefetch 0.1.0-1`,
+`pacman -Ql` lists `/usr/bin/aur-prefetch` and the two units under
+`/usr/lib/systemd/user`, and `--version` prints `0.1.0`. A `sha256sums=('SKIP')`
+warning from a trust check is expected for a git source.
