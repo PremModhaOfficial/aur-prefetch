@@ -30,29 +30,6 @@ delay=$(cat /etc/sim/xfer-delay 2>/dev/null || echo 2)
 size=$(stat -c %s "$src")
 half=$((size / 2))
 
-# Fault injection, off unless a scenario writes one word to xfer-fault:
-#   kill - the running pacman dies after the first chunk of the package
-#   fill - the filesystem holding the cache fills up before the last chunk
-# The fault fires once and disarms itself, so the retry a scenario runs next is
-# a clean run. The scenario drives the fault from the harness; no scenario
-# sleeps to fake timing.
-case $(cat /etc/sim/xfer-fault 2>/dev/null || true) in
-kill)
-    rm -f /etc/sim/xfer-fault
-    head -c "$half" "$src" >"$out"
-    pkill -KILL -x pacman
-    exit 0
-    ;;
-fill)
-    rm -f /etc/sim/xfer-fault
-    head -c "$half" "$src" >"$out"
-    # Stop when the kernel refuses the next chunk: that is a real ENOSPC.
-    while dd if=/dev/zero bs=4096 count=64 status=none 2>/dev/null >>"$out.filler"; do :; done
-    tail -c +"$((half + 1))" "$src" >>"$out" || exit 1
-    exit 0
-    ;;
-esac
-
 head -c "$half" "$src" >"$out"
 sleep "$delay"
 tail -c +"$((half + 1))" "$src" >>"$out"

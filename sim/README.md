@@ -16,16 +16,6 @@ touching your machine.
 
 Requires Docker or Podman. The container runs with `--network none`.
 
-A scenario that needs its own container flag asks for it with a header comment,
-so no other scenario sees it (a value may not contain a space):
-
-```bash
-# sim-run-args: --tmpfs /var/cache/pacman/pkg:size=2m
-```
-
-That is how scenario 41 gets a `CacheDir` small enough to fill without filling
-the container's root filesystem.
-
 ## What the image contains
 
 - `archlinux:base-devel`
@@ -53,18 +43,8 @@ the container's root filesystem.
 - Pacman config fixtures for default, multiple, empty, and moved `CacheDir`
   under `/usr/local/lib/sim/fixtures`
 - A slow `XferCommand` fixture (`sim-xfer` plus `pacman-slow-xfer.conf`) that
-  writes a package `.part` in two chunks. Only scenarios 34, 40 and 41 install
-  it. pacman still chooses the argv, verifies the package, and renames the
-  final file. `sim-xfer` also carries the fault injection: write `kill` or
-  `fill` to `/etc/sim/xfer-fault` and the next package transfer either
-  SIGKILLs the running pacman (`kill`) or fills the filesystem holding the
-  cache before the last chunk (`fill`). The fault fires once and disarms
-  itself. Database transfers are never faulted, so a scenario can prove the
-  lists arrived before the package did
-- `/usr/local/bin/make-pkg.sh NAME VERSION BYTES`, which publishes one extra
-  package into `/srv/simrepo` with a single zero-filled file of `BYTES` bytes.
-  The interrupt scenario uses it to make a payload larger than a file-size
-  limit; `make-repo.sh` still owns the two deterministic `simapp` versions
+  writes a package `.part` in two chunks. Only scenario 34 installs it. pacman
+  still chooses the argv, verifies the package, and renames the final file
 - `/usr/local/bin/aur-prefetch`, built inside the image so the glibc matches
 
 The sim binary is built with the `sim-hooks` feature. It adds one env-gated
@@ -114,7 +94,6 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows the PRE-FLIGHT gates, opens the captured log with a real pacman line, shows real `.part` bytes and a bar, finishes from the final artifact, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
 | `35-tui-failure-freeze.sh` | a corrupted repo artifact behind the paced transfer makes the real fetch fail: the running row freezes, the repair card names the evidence and the hint, `/usr` is unchanged, no state is written, and only the allowed argv is escalated |
 | `36-tui-install-attached.sh` | the attested install gate runs the exact attached `yay -Syuu` path as the sim installer: the package upgrades, the scoped helper is the only escalation, no AUR build happens, the state file records the install, the terminal is restored, and the read-only post-install receipt shows the exit, kernel and pacnew state |
-| `40-kill-mid-download.sh` | the transfer hook SIGKILLs a real pacman mid-download: the package lists were refreshed first, the `.part` holds exactly the first chunk, the hard kill leaves `db.lck` (and the tool refuses it instead of deleting it), and after the user removes the lock the same cache retries to a verified artifact with `/usr` and the package DB untouched |
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
@@ -135,10 +114,7 @@ finish
 Each scenario runs in a fresh container, so no cleanup is needed. Helpers live
 in `sim/lib.sh`: `assert_eq`, `assert_ne`, `assert_contains`, `assert_true`,
 `assert_false`, `installed_version`, `payload_version`, `cache_files`,
-`tree_state`, `local_db_state`, `sync_db_state`, `usr_state`, `yay_log`,
-`yay_built_something`, `sudo_log`, `finish`. `tree_state DIR...` prints a
-digest per file, so a read-only command can be compared before and after and a
-failure names the file that moved.
+`usr_state`, `yay_log`, `yay_built_something`, `sudo_log`, `finish`.
 
 ## Limits
 

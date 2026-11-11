@@ -52,12 +52,10 @@ RUN useradd --create-home --shell /bin/bash installer \
 COPY sim/pacman.conf /etc/pacman.conf
 COPY sim/yay /usr/local/bin/yay
 COPY sim/make-repo.sh /usr/local/bin/make-repo.sh
-COPY sim/make-pkg.sh /usr/local/bin/make-pkg.sh
 COPY sim/lib.sh /usr/local/lib/sim/lib.sh
 COPY sim/stubs/ /usr/local/bin/
 COPY sim/fixtures /usr/local/lib/sim/fixtures
 RUN chmod 755 /usr/local/bin/yay /usr/local/bin/make-repo.sh \
-        /usr/local/bin/make-pkg.sh \
         /usr/local/bin/systemctl /usr/local/bin/journalctl \
         /usr/local/bin/loginctl /usr/local/bin/aurto \
         /usr/local/bin/paccache /usr/local/bin/pacdiff /usr/local/bin/sudo \

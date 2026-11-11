@@ -60,21 +60,6 @@ cache_files() {
     find /var/cache/pacman/pkg -maxdepth 1 -type f -printf '%f\n' 2>/dev/null | sort
 }
 
-# One line per file under the given paths: digest, then path. A read-only
-# command must leave this identical, and a failure names the file that moved.
-tree_state() {
-    find "$@" -type f 2>/dev/null | sort | while IFS= read -r file; do
-        printf '%s %s\n' "$(sha256sum "$file" | cut -d' ' -f1)" "$file"
-    done
-}
-
-# The package DB entries. `fetch` may never write these; `check` and `doctor`
-# may never write anything at all.
-local_db_state() { tree_state /var/lib/pacman/local; }
-
-# The sync DBs, the one place `fetch` is allowed to write besides the cache.
-sync_db_state() { tree_state /var/lib/pacman/sync; }
-
 # Content digest of the package payload. Catches an upgrade that somehow kept
 # the old version string but replaced files.
 usr_state() {
