@@ -941,49 +941,9 @@ fn draw_with(
         plan.split.tree_rows,
         &plan.slots,
     );
-    // Last line of defence: the body block may never exceed its chunk. Only
-    // clipped markers are dropped here; a marker says "something is hidden"
-    // and a summary says how the whole run is going, so the summary wins.
-    let mut body = body;
-    let budget = usize::from(chunks[1].height);
-    // The last rows are the summary and the notes. They are the reason the
-    // frame can be read at all, so they are reserved before any row is cut;
-    // `truncate` from the end is what silently ate every live note.
-    let tail = snapshot
-        .prefetch
-        .data()
-        .map_or(1, |report| 1 + report.notes.len())
-        .min(body.len());
-    let keep_tail: Vec<_> = body.split_off(body.len() - tail);
-    // Only a marker that belongs to a run still represented by another marker
-    // may go. Dropping the last `⋮` would make the frame claim it shows
-    // everything, which is the one thing a clipped frame must not do.
-    let row_budget = budget.saturating_sub(keep_tail.len());
-    while body.len() > row_budget {
-        let markers: Vec<usize> = body
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| {
-                let text = line.to_string();
-                let trimmed = text.trim_start();
-                // Only a bare clip marker is droppable. The gate block's own
-                // `⋮ N more gate(s)` row is content: dropping it made a frame
-                // show three gates and claim it had shown them all.
-                if trimmed.contains("gate") {
-                    return false;
-                }
-                trimmed == "⋮" || trimmed == ":" || trimmed == "  ⋮" || trimmed == "  :"
-            })
-            .map(|(index, _)| index)
-            .collect();
-        if markers.len() < 2 {
-            break;
-        }
-        body.remove(markers[0]);
-    }
-    body.truncate(row_budget);
-    body.extend(keep_tail);
-    body.truncate(budget);
+    // `plan_frame` owns the layout: the body it planned is the body drawn,
+    // with no second clipping pass that could disagree with the slots the
+    // cursor walks.
     frame.render_widget(Paragraph::new(body), chunks[1]);
 
     frame.render_widget(Paragraph::new(plan.footer), chunks[2]);
