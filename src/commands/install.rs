@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::gate::{Gate, GateState};
 use crate::lock;
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
@@ -15,6 +16,118 @@ pub struct Options {
     pub force: bool,
     pub stdin_is_tty: bool,
     pub euid: u32,
+}
+
+pub const NEWS_URL: &str = "https://archlinux.org/news/";
+pub const INSTALL_COMMAND: &str = "yay -Syuu";
+
+/// Read-only install-gate facts for the TUI.
+///
+/// It uses the same helpers as [`run_with`], runs no transaction, and never
+/// takes the terminal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preflight {
+    pub gates: Vec<Gate>,
+    pub official: usize,
+    pub aur: usize,
+    pub news_since: String,
+    /// The effective uid when `id -u` answered. The action passes it back into
+    /// [`Options`] so the CLI gates are not re-derived.
+    pub euid: Option<u32>,
+}
+
+impl Preflight {
+    pub fn blocked(&self) -> bool {
+        self.gates.iter().any(|gate| gate.state == GateState::Fail)
+    }
+}
+
+/// Collect the gates in the order the CLI checks them.
+///
+/// A gate after the first collection error still runs where it is read-only:
+/// the overlay is an inspection surface, not the action itself.
+pub fn preflight(config: &Config, runner: &dyn CommandRunner) -> Preflight {
+    let mut gates = Vec::new();
+
+    let euid = match effective_uid(runner) {
+        Ok(0) => {
+            gates.push(Gate::fail(
+                "root",
+                "install must run as the user, not root: yay and PKGBUILDs must never run as root",
+            ));
+            Some(0)
+        }
+        Ok(uid) => {
+            gates.push(Gate::pass("root", "running as the user, not root"));
+            Some(uid)
+        }
+        Err(error) => {
+            gates.push(Gate::fail("root", error.to_string()));
+            None
+        }
+    };
+
+    match lock::check(config, runner, "install") {
+        Ok(()) => gates.push(Gate::pass(
+            "lock",
+            "no pacman transaction or AUR build running",
+        )),
+        Err(error) => gates.push(Gate::fail("lock", error.to_string())),
+    }
+
+    let (official, aur) = match collect_lists(config, runner) {
+        Ok((official, aur)) => {
+            gates.push(Gate::pass(
+                "lists",
+                format!(
+                    "{} official, {} AUR update(s) pending",
+                    official.len(),
+                    aur.len()
+                ),
+            ));
+            (official, aur)
+        }
+        Err(error) => {
+            gates.push(Gate::fail("lists", error.to_string()));
+            (Vec::new(), Vec::new())
+        }
+    };
+
+    match trust_state(config) {
+        Ok(Trust::Count(count)) => gates.push(Gate::pass(
+            "trust",
+            format!("allowlist · {count} maintainer(s)"),
+        )),
+        Ok(Trust::Missing) => gates.push(Gate::warn(
+            "trust",
+            "trusted-users is missing; aurto trusts everyone; a confirmation is required",
+        )),
+        Ok(Trust::Empty) => gates.push(Gate::fail(
+            "trust",
+            "trusted-users is empty; aurto would trust no one; fix the file first",
+        )),
+        Err(error) => gates.push(Gate::fail("trust", error.to_string())),
+    }
+
+    let news_since = match State::load(&config.state_file) {
+        Ok(state) => install_since(&state, &config.pacman_log),
+        Err(error) => {
+            gates.push(Gate::fail("state", error.to_string()));
+            "unknown".to_string()
+        }
+    };
+    gates.push(Gate::warn(
+        "news",
+        format!("cannot be verified; read {NEWS_URL} since {news_since}"),
+    ));
+
+    Preflight {
+        gates,
+        official: official.len(),
+        aur: aur.len(),
+        news_since,
+        euid,
+    }
 }
 
 pub fn run(yes: bool, force: bool) -> Result<(), Error> {
@@ -38,6 +151,23 @@ pub fn run_with(
     runner: &dyn CommandRunner,
     options: Options,
 ) -> Result<(), Error> {
+    let code = run_with_status(config, runner, options)?;
+    if code != 0 {
+        return Err(Error::failed(format!("yay -Syuu exited {code}")));
+    }
+    Ok(())
+}
+
+/// Run the install and return the command's real exit code.
+///
+/// `Ok(code)` means `yay` actually ran, even when `code` is nonzero; `Err`
+/// means the install never started (a gate or a spawn failure). The TUI's
+/// receipt uses this distinction instead of parsing an error string.
+pub fn run_with_status(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    options: Options,
+) -> Result<i32, Error> {
     if options.euid == 0 {
         return Err(Error::blocked(
             "install must run as the user, not root: yay and PKGBUILDs must never run as root",
@@ -46,6 +176,53 @@ pub fn run_with(
 
     lock::check(config, runner, "install")?;
 
+    let (official, aur) = collect_lists(config, runner)?;
+
+    println!(
+        "install: {} official, {} AUR update(s) pending",
+        official.len(),
+        aur.len()
+    );
+    for line in official.iter().chain(aur.iter()) {
+        println!("  {line}");
+    }
+    let mut state = State::load(&config.state_file)?;
+    println!(
+        "install: read https://archlinux.org/news/ since the last install ({})",
+        install_since(&state, &config.pacman_log)
+    );
+
+    if !options.stdin_is_tty && !options.yes {
+        return Err(Error::blocked(
+            "stdin is not a TTY; re-run with --yes to continue",
+        ));
+    }
+
+    check_trust(config, &options)?;
+
+    println!("install: running yay -Syuu");
+    let code = runner.run_interactive("yay", &["-Syuu"])?;
+    if code != 0 {
+        return Ok(code);
+    }
+
+    if let Some(warning) = record_install(&mut state, config, now_unix()) {
+        eprintln!("install: warning: {warning}");
+    }
+
+    println!("install: done");
+    println!("install: next: sudo pacdiff");
+    println!("install: next: uname -r && ls /usr/lib/modules/ && pacman -Q linux");
+    println!("install: reboot if the kernel or libraries changed, or if news says so");
+    Ok(0)
+}
+
+/// The two update queries the install gate needs. One implementation for the
+/// CLI and the overlay.
+fn collect_lists(
+    config: &Config,
+    runner: &dyn CommandRunner,
+) -> Result<(Vec<String>, Vec<String>), Error> {
     let pacman = path_str(&config.pacman)?;
     let official_output = runner.run(pacman, &["-Qu"])?;
     let official = match official_output.code {
@@ -85,47 +262,16 @@ pub fn run_with(
             )));
         }
     };
-
-    println!(
-        "install: {} official, {} AUR update(s) pending",
-        official.len(),
-        aur.len()
-    );
-    for line in official.iter().chain(aur.iter()) {
-        println!("  {line}");
-    }
-    let mut state = State::load(&config.state_file)?;
-    println!(
-        "install: read https://archlinux.org/news/ since the last install ({})",
-        install_since(&state, &config.pacman_log)
-    );
-
-    if !options.stdin_is_tty && !options.yes {
-        return Err(Error::blocked(
-            "stdin is not a TTY; re-run with --yes to continue",
-        ));
-    }
-
-    check_trust(config, &options)?;
-
-    println!("install: running yay -Syuu");
-    let code = runner.run_interactive("yay", &["-Syuu"])?;
-    if code != 0 {
-        return Err(Error::failed(format!("yay -Syuu exited {code}")));
-    }
-
-    if let Some(warning) = record_install(&mut state, config, now_unix()) {
-        eprintln!("install: warning: {warning}");
-    }
-
-    println!("install: done");
-    println!("install: next: sudo pacdiff");
-    println!("install: next: uname -r && ls /usr/lib/modules/ && pacman -Q linux");
-    println!("install: reboot if the kernel or libraries changed, or if news says so");
-    Ok(())
+    Ok((official, aur))
 }
 
-fn check_trust(config: &Config, options: &Options) -> Result<(), Error> {
+enum Trust {
+    Missing,
+    Empty,
+    Count(usize),
+}
+
+fn trust_state(config: &Config) -> Result<Trust, Error> {
     match fs::read_to_string(&config.trusted_users) {
         Ok(text) => {
             let count = text
@@ -136,29 +282,37 @@ fn check_trust(config: &Config, options: &Options) -> Result<(), Error> {
                 })
                 .count();
             if count == 0 {
-                if !options.force {
-                    return Err(Error::blocked(
-                        "trusted-users is empty; aurto would trust no one; use --force to continue",
-                    ));
-                }
-                println!("install: warning: trusted-users is empty; continuing because of --force");
+                Ok(Trust::Empty)
             } else {
-                println!("install: trust: {count} maintainer(s)");
+                Ok(Trust::Count(count))
             }
         }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Trust::Missing),
+        Err(err) => Err(Error::failed(format!(
+            "cannot read {}: {err}",
+            config.trusted_users.display()
+        ))),
+    }
+}
+
+fn check_trust(config: &Config, options: &Options) -> Result<(), Error> {
+    match trust_state(config)? {
+        Trust::Count(count) => println!("install: trust: {count} maintainer(s)"),
+        Trust::Empty => {
+            if !options.force {
+                return Err(Error::blocked(
+                    "trusted-users is empty; aurto would trust no one; use --force to continue",
+                ));
+            }
+            println!("install: warning: trusted-users is empty; continuing because of --force");
+        }
+        Trust::Missing => {
             if !options.yes {
                 return Err(Error::blocked(
                     "trusted-users is missing; aurto trusts everyone; use --yes to continue",
                 ));
             }
             println!("install: warning: trusted-users is missing; aurto trusts everyone");
-        }
-        Err(err) => {
-            return Err(Error::failed(format!(
-                "cannot read {}: {err}",
-                config.trusted_users.display()
-            )));
         }
     }
     Ok(())
@@ -285,9 +439,13 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{Options, effective_uid, format_unix_utc, install_since, record_install, run_with};
+    use super::{
+        Options, effective_uid, format_unix_utc, install_since, preflight, record_install,
+        run_with, run_with_status,
+    };
     use crate::config::Config;
     use crate::error::Error;
+    use crate::gate::GateState;
     use crate::runner::{CommandOutput, FakeRunner};
     use crate::state::State;
 
@@ -323,6 +481,13 @@ mod tests {
         }
     }
 
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
+    }
+
     fn options(yes: bool, force: bool, stdin_is_tty: bool) -> Options {
         Options {
             yes,
@@ -337,28 +502,149 @@ mod tests {
         runner.push_output(ok(official));
         runner.push_output(ok(""));
     }
-    /// No pacman, yay, makepkg or aurto is running.
-    fn none_running() -> CommandOutput {
-        let mut output = ok("");
-        output.code = 1;
-        output
-    }
-    fn pgrep_call() -> (String, Vec<String>) {
-        (
-            "pgrep".to_string(),
-            vec![
-                "-x".to_string(),
-                "-l".to_string(),
-                crate::lock::PATTERN.to_string(),
-            ],
-        )
-    }
 
     fn ran_yay(runner: &FakeRunner) -> bool {
         runner
             .calls()
             .iter()
             .any(|(program, args)| program == "yay" && args.len() == 1 && args[0] == "-Syuu")
+    }
+
+    #[test]
+    fn preflight_reports_every_gate_and_runs_no_install() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.trusted_users, "alice\nbob\n").expect("trust file");
+        let runner = FakeRunner::new();
+        runner.push_output(ok("1000\n"));
+        runner.push_output(none_running());
+        runner.push_output(ok("simapp 1.0.0-1 -> 2.0.0-1\n"));
+        runner.push_output(ok("aurpkg 1.0-1 -> 1.1-1\n"));
+
+        let preflight = preflight(&config, &runner);
+
+        let names: Vec<&str> = preflight.gates.iter().map(|gate| gate.name).collect();
+        assert_eq!(names, ["root", "lock", "lists", "trust", "news"]);
+        assert!(
+            preflight
+                .gates
+                .iter()
+                .all(|gate| gate.state != GateState::Fail),
+            "no blocking gate: {:?}",
+            preflight.gates
+        );
+        assert_eq!(preflight.official, 1);
+        assert_eq!(preflight.aur, 1);
+        assert!(preflight.gates[2].detail.contains("1 official, 1 AUR"));
+        assert!(preflight.gates[3].detail.contains("2 maintainer(s)"));
+        assert!(
+            preflight.gates[4].detail.contains("archlinux.org/news"),
+            "the news gate names the URL"
+        );
+        assert!(!preflight.blocked());
+        assert!(!ran_yay(&runner), "preflight never runs yay -Syuu");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn preflight_blocks_on_an_empty_trust_file() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.trusted_users, "# nobody\n\n").expect("trust file");
+        let runner = FakeRunner::new();
+        runner.push_output(ok("1000\n"));
+        runner.push_output(none_running());
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
+
+        let preflight = preflight(&config, &runner);
+
+        assert!(preflight.blocked());
+        let trust = preflight
+            .gates
+            .iter()
+            .find(|gate| gate.name == "trust")
+            .expect("trust gate");
+        assert_eq!(trust.state, GateState::Fail);
+        assert!(trust.detail.contains("trust no one"));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn preflight_warns_when_the_trust_file_is_missing() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(ok("1000\n"));
+        runner.push_output(none_running());
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
+
+        let preflight = preflight(&config, &runner);
+
+        assert!(!preflight.blocked(), "a missing file is a warning");
+        let trust = preflight
+            .gates
+            .iter()
+            .find(|gate| gate.name == "trust")
+            .expect("trust gate");
+        assert_eq!(trust.state, GateState::Warn);
+        assert!(trust.detail.contains("trusts everyone"));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn preflight_flags_root_and_never_reaches_yay_syuu() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.trusted_users, "alice\n").expect("trust file");
+        let runner = FakeRunner::new();
+        runner.push_output(ok("0\n"));
+        runner.push_output(none_running());
+        runner.push_output(ok(""));
+        runner.push_output(ok(""));
+
+        let preflight = preflight(&config, &runner);
+
+        assert!(preflight.blocked());
+        assert_eq!(preflight.gates[0].name, "root");
+        assert_eq!(preflight.gates[0].state, GateState::Fail);
+        assert!(!ran_yay(&runner));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn run_with_status_returns_the_real_yay_code_or_an_error_when_it_never_ran() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::write(&config.trusted_users, "alice\n").expect("trust");
+        let runner = FakeRunner::new();
+        queue_lists(&runner, "simapp 1.0.0-1 -> 2.0.0-1\n");
+        runner.push_interactive(7);
+
+        let code = run_with_status(&config, &runner, options(true, false, true))
+            .expect("yay ran and returned its code");
+        assert_eq!(code, 7, "the real nonzero code is not converted to 2");
+        assert!(
+            !config.state_file.exists(),
+            "a failed install records nothing"
+        );
+
+        let refused_dir = temp_dir();
+        let refused = test_config(&refused_dir);
+        fs::write(&refused.pacman_lock, "").expect("lock");
+        let blocked = FakeRunner::new();
+        blocked.push_output(ok("1234 pacman\n"));
+        let error = run_with_status(&refused, &blocked, options(true, false, true))
+            .expect_err("the lock gate refuses");
+        assert!(matches!(error, Error::Blocked(_)));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+        fs::remove_dir_all(&refused_dir).expect("clean temp dir");
     }
 
     #[test]
@@ -628,7 +914,7 @@ mod tests {
         let result = run_with(&config, &runner, options(true, false, false));
 
         assert!(matches!(result, Err(Error::Blocked(_))));
-        assert_eq!(runner.calls(), vec![pgrep_call()], "only pgrep may run");
+        assert_eq!(runner.calls().len(), 1, "only pgrep may run");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

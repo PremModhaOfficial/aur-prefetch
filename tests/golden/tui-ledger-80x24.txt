@@ -1,0 +1,24 @@
+aur-prefetch · Fetch · 4 packages · live
+Ledger:                                                install 4 packages · live
+[ ] right 2.0.0-1             planned                                    1.1 MiB
+[√] base 2.0.0-1              done                                       1.1 MiB
+[|] left 2.0.0-1              building · ⏱ 2s                            1.1 MiB
+[ ] join 2.0.0-1              planned · waiting for 1 ⏵ 1 ⏸              1.1 MiB
+1 done · 1 running · 2 waiting · 0 failed · ⏱ 2s · mirror.example.org
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+q quit · g tree · ? help · r refresh
+

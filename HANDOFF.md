@@ -1,37 +1,147 @@
 # HANDOFF.md
 
-Written 2026-11-07. Orientation for a fresh agent. The plan itself is
+Updated 2026-11-09. Orientation for a fresh agent. The plan is
 [`NEXT.md`](NEXT.md), the rules are [`AGENTS.md`](AGENTS.md). This file only
 covers where things stand and the first move. Do not re-plan.
 
 ## Where things stand
 
-- Repo: `PremModhaOfficial/aur-prefetch`, branch `main`, clean at `420b842`
-  before this file. This handoff is the commit after it.
-- `CI` and `Sim` are green on GitHub.
-- Six subcommands exist as stubs. Nothing has run against a real Arch system.
-- **No Phase 1 code has been written yet.** The scaffold is the next task.
+- Repo: `PremModhaOfficial/aur-prefetch`, branch `main`.
+- All six subcommands (`init`, `check`, `fetch`, `install`, `clean`, `doctor`)
+  are implemented and have sim scenarios.
+- Phase 1-3 in `NEXT.md` are ticked. Phase 4 (chaos), Phase 5 (VM) and Phase 6
+  (packaging) are open and still block a release.
+- Phase 7 T0 (the shared report layer) is landed: `src/report.rs`, collect and
+  render splits for `check`/`fetch`/`clean`, the system cache paths in
+  `Config`, and frozen `check` text. The full CI and all 31 sim scenarios pass.
+- Phase 7 T1's shell is landed: `aur-prefetch tui`, `--render-once`, `--ascii`,
+  `NO_COLOR`, the Drop guard, the panic hook, the static tree frame, the
+  sanitizer, and sim `31-tui-readonly.sh`. The pty checks prove a normal quit,
+  Ctrl-C exit 130, a forced-panic restore, and Ctrl-Z re-entry/clear with raw
+  mode restored.
+- The DAG execution model is landed in `docs/ANIMATION.md`: states, readiness,
+  parallel fronts, replay, and the `.part` byte source. `TUI.md` and
+  `PROGRESS.md` now point at it.
+- The pure reducer is landed in `src/frontier.rs`: readiness, blocking,
+  skipped-satisfied, freeze, replay, and a bounded trace. Diamond and two-root
+  unit tests pass.
+- T2b is landed: `src/tui/live.rs` is the pure live view over the forest and
+  `frontier::GraphState`. It seeds cached/built artifacts as `NoWork`, records
+  observation timestamps, derives planned/running/done/failed/blocked/skipped
+  rows, activity kind, prerequisite waiting counts, and timers above 1 s.
+  `render.rs` maps the states to nom's glyphs and the ANSI-16 palette and adds
+  the grouped `Builds`/`Downloads` summary. Goldens cover the diamond, two
+  roots, the failure freeze, sub-second and above-one-second timers, ASCII and
+  NO_COLOR. This slice uses synthetic observations; the real fetch byte source
+  is not wired.
+- T2c is landed for bars and the viewport, still on synthetic observations.
+  `LiveRow.progress` carries observed `done`/`total` bytes, clamped by
+  `Progress::new`; a zero or unknown total clears it. `render.rs` draws nom's
+  bar geometry and the `■/◧/□` (or `#/-/ `) fill, and the live viewport keeps
+  roughly `height / 3` tree rows, marks clipped runs with `⋮`, never hides
+  running/failed/blocked rows, and reports the shown root count. Goldens cover
+  known and unknown bytes, ASCII, a 40-column row and a 200-package forest. The
+  real fetch byte source, the repair card and the ledger remain.
+- T2d is landed: `src/fetch_source.rs` is the real fetch observation source.
+  `FetchMonitor::new` seeds `LiveRun::plan` and `poll` reads only
+  `plan.cache_dir`. A `.part` file starts a node and reports its real length
+  against `TreeRow.size`; a vanishing `.part` plus a final artifact finishes a
+  running node. `finish` fails running nodes on a nonzero exit with `exit N`
+  and a stderr excerpt, or finishes only running nodes with an artifact on
+  zero. It writes nothing and runs no command.
+- T2e is landed: `F` in the interactive tree runs the real `fetch` path.
+  `src/tui/fetch_session.rs` reuses `fetch::plan` and `fetch::command_argv`,
+  streams the command on a worker through the one `run_streaming` seam, polls
+  `FetchMonitor` on the 100 ms tick, redraws only when the frame key changes,
+  and folds the real exit. On success it calls `fetch::record_success`, the
+  same state writer as the CLI; on failure the footer carries `exit N` and the
+  stderr excerpt. `Esc`/`q` detach without killing the child and without
+  claiming its result. The frontier gained an explicit
+  `ExecutionMode::Concurrent`: downloads may start before a prerequisite
+  finishes, while the edges still block dependents after a failure. A final
+  artifact alone finishes a pending or ready node, so a tiny package that
+  renames between polls is never falsely ready. Sim 34 proves the real `.part`
+  bytes, the bar, the done row, the unchanged `/usr`, the one state write and
+  the one allowed escalation under a pty.
+- T2f is landed: a nonzero exit builds one `RepairCard` from observed facts
+  (failed row, `exit N` plus the first stderr line, a hint keyed to that
+  evidence, the blocked count, and no state write) and the card replaces the
+  duplicated status line. `g` toggles a flat ledger over the same rows,
+  statically and live; the static `--render-once` frame is unchanged. Sim 35
+  corrupts the repo artifact behind the paced transfer and proves the running
+  row, the real failure, the frozen frontier, the card, no install, no state
+  write and the one allowed escalation.
+- T3a is landed: the fetch action renders the PRE-FLIGHT gates from
+  `fetch::plan_observed` (lock, real pending count/bytes, resolved cache path,
+  free space), so the gates are never duplicated and a gate after a failure is
+  never invented. `l` opens a bounded, sanitized log of the real captured
+  lines; `Esc` closes the log before it can detach. Sim 34 proves the
+  checklist and a real pacman log line.
+- T3b is landed: `i` opens a read-only install gate overlay.
+  `install::preflight` reuses the CLI's own helpers and shows only checks that
+  ran: root, lock, the real official/AUR counts, the trust allowlist or its
+  missing/empty reason, and the news URL with the last-install age. The exact
+  `yay -Syuu` command is shown; `space` records a session-only attestation and
+  writes nothing. Sim 32 proves the gate cancels with no change and no
+  `yay -Syuu`.
+- T3c is landed: once attested and unblocked, `enter` suspends the TUI, runs
+  `install::run_with` with the CLI's exact `Options` (yes, no force, tty, the
+  preflight euid), restores the terminal, re-collects and shows an honest
+  result line. The attached command is never faked as live. Sim 36 runs as the
+  sim `installer` and proves the upgrade, the scoped escalation, the state
+  write and the terminal restore.
+- T3d is landed: a finished install opens the read-only post-install receipt
+  built from `post_install::collect`: the real exit, the running kernel against
+  `/usr/lib/modules`, the `.pacnew` count, kernel-based reboot advice and a
+  repair line on failure. It closes with enter or esc. Sim 36 proves the
+  success receipt. The attached `p` (sudo pacdiff), copy and install-log keys
+  are not wired; the receipt says to run `sudo pacdiff` after closing. T3 is
+  closed; T4 polish is next.
+- T2's prefetch slice is landed: `progress::collect` reads `pacman -Qui` and
+  the real download cache, fills `report::PrefetchReport`, and the TUI draws
+  cached/stale/partial/missing/build-pending/built badges, counts, host and
+  `Σ`. Sim 33 proves cached, stale, partial, missing and built, and no writes.
+- T2a is landed: `src/tui/tree.rs` is a pure forest model over
+  `PackageView.depends`, and the prefetch frame is the bottom-up dependency
+  forest. One row per package, one root per pending package with no pending
+  dependent, display-only `?` leaves for dependencies outside the pending set,
+  deterministic siblings, cycle/self-edge protection, and no duplicate
+  subtree. The `install N packages` total is header context, not a row. The
+  frontier is not wired yet.
+- The nom capture study is landed: [`docs/NOM.md`](docs/NOM.md) measures the
+  2026-11-09 `nh home switch` run and orders the remaining T2 work. The
+  playable comparison is [`prototype/nom-study.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/nom-study.html);
+  the still is [`prototype/shots/nom-study.png`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/shots/nom-study.png).
+  No TUI code changed in that pass.
+- The T1 shell is implemented. The prefetch view is the T2a bottom-up
+  dependency tree; the T2b live grammar and palette read the pure frontier, and
+  T2e runs the real fetch and drives the real cache source. The design sketches
+  are archived on `archive/prototype-studies`, keeping this PR under GitHub's
+  diff render cap.
+- `NEXT.md` Phase 7 is the TUI order of work. T1, T2 and T3 are closed. T4
+  polish is next.
 
-## Do this first: Phase 1 scaffolding
+## Do this first: T4
 
-Read `NEXT.md` Phase 1 for the acceptance criteria. Then, in this order:
+1. T2 and T3 are closed: the forest, the pure live view and palette, the bars
+   and viewport, the real `FetchMonitor`, the live fetch loop, the repair card,
+   the ledger, the fetch checklist/log, the install gate, the attached install
+   and the post-install receipt are done. The next TUI work is T4 polish:
+   `--no-motion`, the ASCII pass, the 2,000-package performance pass and keymap
+   overrides. Optionally wire the receipt's attached `p` (sudo pacdiff), copy
+   and install-log keys. Use `check::collect`, `progress::collect` and
+   `fetch::plan`; do not add a second update collector. The ready set is a set,
+   not a queue.
 
-1. `src/runner.rs`: `CommandRunner` trait, `SystemRunner`, `FakeRunner`.
-   Every external command must go through it. No `Command::new` elsewhere.
-2. `src/error.rs`: `Blocked` maps to exit 1, `Failed` maps to exit 2.
-3. `src/config.rs`: paths with env overrides for pacman, pacman.conf, CacheDir,
-   trusted-users, state file, min free bytes.
-4. `src/state.rs`: `last_fetch_unix`, `last_fetch_pending`,
-   `last_install_unix`. Atomic write, manual parse, no new dependencies.
-5. Split `src/lib.rs` from `src/main.rs`. Move the six stubs into
-   `src/commands/{fetch,check,install,clean,doctor,init}.rs`.
-6. Add `description`, `repository`, `keywords`, `categories` to `Cargo.toml`.
+Do not add dashboard panels; those are Phase 8. Do not give the TUI its own
+collectors; that is how the two paths drift. The prefetch tree is read-only;
+only the explicit `F` action writes, through `fetch`'s existing state file.
 
-Then run both gates, tick the Phase 1 boxes in `NEXT.md`, commit, push.
+## Gates
 
-One naming detail: `NEXT.md` suggests bare env names like `PACMAN_CONF`. Prefer
-the `AUR_PREFETCH_` prefix in code to avoid clobbering system variables, and
-update `NEXT.md` to match in the same commit.
+- `./ci.sh` must be green: fmt, clippy `-D warnings`, tests, cargo-deny.
+- `./sim/run.sh` must be green with no scenario edits for T0.
+- Any change that touches pacman behaviour needs a new sim scenario.
 
 ## Hard rules
 
@@ -42,75 +152,9 @@ Read `AGENTS.md`. The short version:
 - All runtime behaviour is tested through `./sim/run.sh`, a disposable Arch
   container with `--network none`.
 - `fetch` never writes `/usr`. `check` and `doctor` write nothing.
-- No skipped gates that still print success.
+- No skipped gate may print success.
 - A command is done only when a sim scenario proves its side effects.
 
 ## Decisions already made
 
-`NEXT.md` Phase 0 has D1 to D6. They are locked with the recommended values.
-Do not re-litigate unless the user asks. The one worth restating:
-
-- The trust gate belongs in `install`, not `fetch`. `fetch` only handles
-  official repo packages.
-- Missing `/etc/aurto/trusted-users` means aurto trusts everyone. Empty means
-  trust no one. Non-empty is an allowlist.
-
-Order of implementation: `fetch`, `check`, `doctor`, `clean`, `install`,
-`init`.
-
-## Environment facts
-
-- Host is Arch, pacman 7.1.0, `DownloadUser = alpm`.
-- `yay` 13.1.0 is installed. `aurto` 0.14.7 exists upstream but is not
-  installed here.
-- `rust-toolchain.toml` pins 1.85. `cargo-deny` 0.20.2 is in `~/.cargo/bin`,
-  which may not be on `PATH`.
-- Docker is available. `archlinux:base-devel` is already pulled.
-- Sim image build is about 60 seconds cold, scenarios about 2 seconds.
-
-## Pitfalls already hit, do not repeat
-
-- `repo-add` can land in the same second as `pacman -Sy`, and pacman then skips
-  the `file://` database. `make-repo.sh` uses `-Syy` for this reason.
-- An empty `.gpg/` directory appeared from a tool run. It is removed and
-  `/.gpg/` is ignored.
-- GitHub reports the license as Apache-2.0 because the repo is dual licensed.
-  That is expected, not a mistake.
-- The sim currently runs as root, so the real `sudo -n` path is untested.
-  Phase 2 fixes that.
-
-## Verify before handing back
-
-```bash
-cd ~/projects/aur-prefetch
-./ci.sh          # fmt, clippy -D warnings, tests, cargo-deny
-./sim/run.sh     # Arch container scenarios
-git status       # expect clean
-```
-
-For `cargo-deny`, prepend `PATH="$HOME/.cargo/bin:$PATH"` if needed.
-
-## Pointers
-
-| File | Why |
-|---|---|
-| `NEXT.md` | The only plan. Phase order, decisions, acceptance criteria |
-| `AGENTS.md` | Rules, definition of done, honesty rules |
-| `spec.md` | User-facing flow, the five ways to break an Arch box |
-| `context.md` | Edge cases, not a plan |
-| `sim/README.md` | Harness layout and how to add a scenario |
-
-## Suggested skills for the next agent
-
-- `/implement` with `NEXT.md` Phase 1 as the ticket.
-- `/tdd` for `runner`, `config`, and `state` unit tests.
-- `/code-review` before the first commit.
-- `/handoff` again at the end of the session.
-
-## Note on T3 delegation
-
-The previous session had no T3 orchestration tools exposed: no
-`delegate_task`, no `orchestrator_capabilities`, and no ACP bridge environment.
-No agents were spawned and no work was delegated. If the next session has those
-tools, the clean split is `src/` scaffolding in one lane and `sim/` upgrades in
-another, because the file sets do not overlap.
+`NEXT.md` Phase 0 has D1-D7. They are locked with the recommended values.

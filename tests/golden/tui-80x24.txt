@@ -1,0 +1,24 @@
+aur-prefetch · 3 pending · 2 action(s)
+
+install 3 packages
+  ├── bash 5.2.037-1 -> 5.2.037-2
+  ├── linux 6.11.5.arch1-1 -> 6.11.6.arch1-1
+  └── yay-bin 12.4.0-1 -> 12.4.1-1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+q quit · ? help · r refresh
+

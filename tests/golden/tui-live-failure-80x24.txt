@@ -1,0 +1,24 @@
+aur-prefetch · Fetch · 5 packages · live
+Dependency Graph:                                      install 5 packages · live
+[|] solo 2.0.0-1                  downloading · ⏱ 2s                     1.1 MiB
+┌─ [×] right 2.0.0-1              blocked                                1.1 MiB
+│  ┌─ [×] base 2.0.0-1            failed · exit 2 · ⏱ 2s                 1.1 MiB
+├─ [×] left 2.0.0-1               blocked                                1.1 MiB
+[×] join 2.0.0-1                  blocked                                1.1 MiB
+0 done · 1 running · 0 waiting · 1 failed · frozen · ⏱ 2s · mirror.example.org
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+q quit · ? help · r refresh
+

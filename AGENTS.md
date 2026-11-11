@@ -10,8 +10,19 @@ Before planning or writing code, read [`NEXT.md`](NEXT.md). It is the
 authoritative order of work. If a chat summary, `context.md`, or an old plan
 disagrees with it, `NEXT.md` wins.
 
-Current position: Phase 0 decisions, then Phase 1 scaffolding, then `fetch`.
-Do not start from `src/main.rs`.
+Current position: all six commands are implemented and sim-covered. Phases 4-6
+(chaos, VM, packaging) remain release hardening. Phase 7 T0 (the report layer),
+the T1 read-only shell, the DAG execution model, and its pure frontier reducer
+are landed. T2's prefetch badges, real cache scan, pure bottom-up forest view
+(T2a), the pure live grammar/palette (T2b), and the synthetic byte bars and
+viewport (T2c) are landed. T2d's real cache observation source is landed in
+`src/fetch_source.rs`. T2e runs the real fetch from `F`: `src/tui/fetch_session.rs`
+streams the command on a worker, polls the real cache, and redraws on real
+changes; sim 34 proves it under a pty. T2f adds the repair card on a real
+failure and the `g` ledger; sim 35 proves both. T3a adds the fetch PRE-FLIGHT
+gates and the `l` log; T3b adds the read-only install gate and T3c wires the
+attached install; T3d adds the post-install receipt. T2 and T3 are closed; T4
+polish is next.
 
 If you are picking up mid-work, read [`HANDOFF.md`](HANDOFF.md) for the current
 state and the first concrete move.
@@ -79,9 +90,14 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 | Path | Role |
 |---|---|
 | `spec.md` | User-facing, plain-language flow and failure modes |
+| `PROGRESS.md` | Prefetch-aware dependency tree: states, edges, replay |
+| `TUI.md` | Terminal UI spec: screens, keys, action safety |
+| `GLOSSARY.md` | The words this project uses. Test names and commits use these, not synonyms |
+| `docs/ANIMATION.md` | DAG execution frontier: readiness, parallel fronts, replay |
 | `NEXT.md` | Working plan: decisions, phases, acceptance criteria |
 | `context.md` | Implementation notes and edge cases |
 | `src/main.rs` | CLI surface (subcommands) |
+| `src/tui/` | Terminal UI: shell, forest, live view, fetch session, renderer |
 | `ci.sh` | Local mirror of the GitHub checks |
 | `sim/` | Arch simulation harness (see `sim/README.md`) |
 | `.github/workflows/ci.yml` | Build, lint, test, audit |
@@ -93,10 +109,30 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 
 ## Current status
 
-All six subcommands are stubs. `NEXT.md` is the authoritative order of work.
-`sim/` proves the harness works and enforces the read-only safety invariants;
-positive assertions (fetch actually downloads, install actually installs) get
-added with each command's implementation.
+All six subcommands are implemented and every one has sim coverage. `NEXT.md`
+is the authoritative order of work. The TUI is specified in `TUI.md` and
+`PROGRESS.md`; its execution model is `docs/ANIMATION.md`. Phase 7 T0 (the
+shared report layer), the T1 shell, and the model are landed. The shell is
+read-only until `F`; there is no dashboard. The pure reducer is in `src/frontier.rs`;
+`src/tui/live.rs` is the pure adapter from the T2a forest and that reducer to
+nom rows. The prefetch view is the T2a bottom-up dependency forest: one row per
+package, one root per pending package with no pending dependent, display-only
+`?` leaves for dependencies outside the pending set, and the real
+cached/stale/partial/missing/built badges. The `install N packages` total is
+header context, not a tree row. T2b adds the live glyphs, waiting counts,
+timers, grouped summary and ANSI-16 palette. T2e streams the real fetch command
+and polls the real cache for `.part` bytes. T2f turns a nonzero exit into the
+repair card, freezes the failed row and blocked dependents, and adds the `g`
+ledger. T3a adds the PRE-FLIGHT gates from `fetch::plan_observed` and the `l`
+log of the real captured lines. T3b adds the read-only install gate from
+`install::preflight`. T3c runs the attached install with the CLI's exact
+`Options` and restores the terminal. T3d adds the read-only post-install
+receipt (`post_install::collect`). Sim 32 proves the gate is read-only; sim 33
+proves the badges; sim 34 proves the live fetch, the real bytes, the gates, the
+log and the one state write; sim 35 proves the failure freeze; sim 36 proves
+the attached install, the receipt and the terminal restore.
 
-Next action: Phase 0 decisions in `NEXT.md`, then the runner trait, then
-`fetch`.
+Next action: T4. Add `--no-motion`, finish the ASCII pass, and do the
+2,000-package performance pass; optionally wire the receipt's attached `p`.
+The tree reads `check::collect`, `progress::collect` and `fetch::plan`; it does
+not collect its own facts.

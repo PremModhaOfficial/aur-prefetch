@@ -52,7 +52,14 @@ current host, so `--no-cache` is the only reliable way to get a fresh image.
   the real tool; `pacdiff` never runs for real.
 - Pacman config fixtures for default, multiple, empty, and moved `CacheDir`
   under `/usr/local/lib/sim/fixtures`
+- A slow `XferCommand` fixture (`sim-xfer` plus `pacman-slow-xfer.conf`) that
+  writes a package `.part` in two chunks. Only scenario 34 installs it. pacman
+  still chooses the argv, verifies the package, and renames the final file
 - `/usr/local/bin/aur-prefetch`, built inside the image so the glibc matches
+
+The sim binary is built with the `sim-hooks` feature. It adds one env-gated
+forced panic after the terminal guard is active, used to prove the panic hook
+restores the pty. A packaged build does not enable the feature.
 
 No mirrors, no keys, no network at scenario time. If a scenario needs another
 package, add it to `sim/make-repo.sh`, do not open the network.
@@ -91,6 +98,12 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `28-doctor-symlinked-cache.sh` | a symlinked `CacheDir` is resolved before checking `alpm` traversal |
 | `29-init-visudo-root.sh` | root `visudo -cf` accepts the user-owned temp rule that `init` validates through sudo |
 | `30-doctor-missing-aurto.sh` | an `Include` line whose aurto file is missing makes `doctor` exit 1 |
+| `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and pty quit, Ctrl-C, forced panic, and Ctrl-Z all restore the terminal |
+| `32-tui-install-gate.sh` | `i` opens the install gate, `space` attests the news for the session, `esc` cancels, and `/usr`, the package DB, the cache, the state file and the sudo log are untouched; `yay -Syuu` never runs |
+| `33-tui-prefetch.sh` | the prefetch frame reads the real cache: missing, cached, stale, partial and built, with no writes |
+| `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows the PRE-FLIGHT gates, opens the captured log with a real pacman line, shows real `.part` bytes and a bar, finishes from the final artifact, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
+| `35-tui-failure-freeze.sh` | a corrupted repo artifact behind the paced transfer makes the real fetch fail: the running row freezes, the repair card names the evidence and the hint, `/usr` is unchanged, no state is written, and only the allowed argv is escalated |
+| `36-tui-install-attached.sh` | the attested install gate runs the exact attached `yay -Syuu` path as the sim installer: the package upgrades, the scoped helper is the only escalation, no AUR build happens, the state file records the install, the terminal is restored, and the read-only post-install receipt shows the exit, kernel and pacnew state |
 | `37-fetch-refuses-during-a-build.sh` | `fetch` refuses with exit 1 while any of `pacman`, `yay`, `makepkg`, `aurto` runs, even with no `db.lck`, and `check` reports the live process |
 | `38-check-and-fetch-share-the-floor.sh` | `check` refuses on the same 5 GiB snapshot floor `fetch` refuses on, so its verdict matches fetch's |
 | `39-fetch-state-unwritable.sh` | a download that completed exits 0 with a loud warning when the state file cannot be written, instead of turning the timer red |

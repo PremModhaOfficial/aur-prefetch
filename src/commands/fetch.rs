@@ -3,11 +3,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::gate::{Gate, GateState};
 use crate::lock;
-use crate::runner::{CommandRunner, SystemRunner};
+use crate::runner::{CommandOutput, CommandRunner, SystemRunner};
 use crate::state::State;
+use crate::util::{human_bytes, parse_size, path_str, resolve_cache_dir};
 
 const SNAPSHOT_FLOOR_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Everything the download needs, before any download starts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchPlan {
+    pub pending: Vec<String>,
+    pub pending_bytes: u64,
+    pub cache_dir: PathBuf,
+    pub need: u64,
+    pub state: State,
+}
 
 pub fn run() -> Result<(), Error> {
     let config = Config::from_env()?;
@@ -19,37 +31,15 @@ pub fn run() -> Result<(), Error> {
 /// `pacman -Qui` sits between the lock and the space gate because the size
 /// estimate needs it. It only reads.
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    lock::check(config, runner, "fetch")?;
-
-    let pacman = path_str(&config.pacman)?;
-    let (pending_bytes, pending_names) = pending_download(pacman, runner)?;
-    let pending_count = pending_names.len() as u64;
-
-    let cache_dir = resolve_cache_dir(config, runner)?;
-    let need = space_floor(config, pending_bytes);
-    check_space(runner, &cache_dir, need)?;
-    if cache_dir != PathBuf::from("/") {
-        check_space(runner, Path::new("/"), need)?;
-    }
-
-    let mut state = State::load(&config.state_file)?;
-
-    println!(
-        "fetch: {pending_count} pending package(s), {} to download",
-        human_bytes(pending_bytes)
-    );
-
-    let mut argv: Vec<&str> = Vec::new();
-    if !is_root(runner)? {
-        argv.push("sudo");
-        argv.push("-n");
-    }
-    argv.push(pacman);
-    argv.push("-Syuw");
-    argv.push("--noconfirm");
-    println!("fetch: running {}", argv.join(" "));
-
-    let output = runner.run(argv[0], &argv[1..])?;
+    let plan = plan_observed(config, runner, &mut |gate| {
+        if gate.state == GateState::Warn {
+            eprintln!("warning: {}", gate.detail);
+        }
+    })?;
+    print!("{}", render_plan(&plan));
+    let argv = command_argv(config, runner)?;
+    print!("{}", render_running(&argv));
+    let output = execute(&argv, runner)?;
     if !output.stdout.is_empty() {
         print!("{}", output.stdout);
     }
@@ -64,23 +54,24 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         )));
     }
 
-    if let Some(warning) = record_success(&mut state, config, pending_count, now_unix()) {
+    if let Some(warning) = record_success(config, &plan, SystemTime::now()) {
         eprintln!("fetch: warning: {warning}");
     }
     println!("fetch: ok");
     Ok(())
 }
 
-/// Record a completed fetch. Returns a warning instead of failing the command:
-/// the packages downloaded, so an unwritable state file must not turn a success
-/// into exit 2. `install` makes the same call for the same reason.
-fn record_success(
-    state: &mut State,
-    config: &Config,
-    pending_count: u64,
-    now: Result<u64, Error>,
-) -> Option<String> {
-    let time = match now {
+/// Record a successful fetch.
+///
+/// The CLI and the TUI call this one function, so the state file has one
+/// writer and one format. `at` is the caller's observation time; the TUI
+/// passes the tick that folded the exit, never a second wall-clock read.
+///
+/// A failure returns a warning instead of an error: the packages downloaded,
+/// so an unwritable state file or an unreadable clock must not turn a success
+/// into exit 2.
+pub fn record_success(config: &Config, plan: &FetchPlan, at: SystemTime) -> Option<String> {
+    let time = match seconds_since_epoch(at) {
         Ok(time) => time,
         Err(err) => {
             return Some(format!(
@@ -88,15 +79,166 @@ fn record_success(
             ));
         }
     };
-
+    let mut state = plan.state.clone();
     state.last_fetch_unix = Some(time);
-    state.last_fetch_pending = Some(pending_count);
+    state.last_fetch_pending = Some(plan.pending.len() as u64);
     state.save(&config.state_file).err().map(|err| {
         format!(
             "the download finished but {} was not updated: {err}",
             config.state_file.display()
         )
     })
+}
+
+/// Read the gates and the pending set. This runs no transaction.
+pub fn plan(config: &Config, runner: &dyn CommandRunner) -> Result<FetchPlan, Error> {
+    plan_observed(config, runner, &mut |_| {})
+}
+
+/// Evaluate the gates in order and report each result as it happens.
+///
+/// The first blocking gate returns its error and ends the sequence; later gates
+/// are not run and not reported. [`plan`] is this function with no observer.
+pub fn plan_observed(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    observe: &mut dyn FnMut(Gate),
+) -> Result<FetchPlan, Error> {
+    match lock::check(config, runner, "fetch") {
+        Ok(()) => observe(Gate::pass(
+            "lock",
+            "no pacman transaction or AUR build running",
+        )),
+        Err(error) => {
+            observe(Gate::fail("lock", error.to_string()));
+            return Err(error);
+        }
+    }
+
+    let pacman = match path_str(&config.pacman) {
+        Ok(path) => path,
+        Err(error) => {
+            observe(Gate::fail("lists", error.to_string()));
+            return Err(error);
+        }
+    };
+    let quiet = match runner.run(pacman, &["-Qui"]) {
+        Ok(output) => output,
+        Err(error) => {
+            observe(Gate::fail("lists", error.to_string()));
+            return Err(error);
+        }
+    };
+    let (pending_bytes, pending) = if quiet.code == 0 {
+        let parsed = parse_pending(&quiet.stdout);
+        observe(Gate::pass(
+            "lists",
+            format!(
+                "{} pending, {} to download",
+                parsed.1.len(),
+                human_bytes(parsed.0)
+            ),
+        ));
+        parsed
+    } else {
+        observe(Gate::warn(
+            "lists",
+            format!(
+                "pacman -Qui exited {}; assuming the minimum free-space floor",
+                quiet.code
+            ),
+        ));
+        (0, Vec::new())
+    };
+
+    let cache_dir = match resolve_cache_dir(config, runner) {
+        Ok(dir) => dir,
+        Err(error) => {
+            observe(Gate::fail("cache", error.to_string()));
+            return Err(error);
+        }
+    };
+    observe(Gate::pass("cache", cache_dir.display().to_string()));
+
+    let need = space_floor(config, pending_bytes);
+    match check_space(runner, &cache_dir, need) {
+        Ok(available) => observe(Gate::pass(
+            "space",
+            format!(
+                "{}: need {}, have {}",
+                cache_dir.display(),
+                human_bytes(need),
+                human_bytes(available)
+            ),
+        )),
+        Err(error) => {
+            observe(Gate::fail("space", error.to_string()));
+            return Err(error);
+        }
+    }
+    if cache_dir != PathBuf::from("/") {
+        match check_space(runner, Path::new("/"), need) {
+            Ok(available) => observe(Gate::pass(
+                "space",
+                format!(
+                    "/: need {}, have {}",
+                    human_bytes(need),
+                    human_bytes(available)
+                ),
+            )),
+            Err(error) => {
+                observe(Gate::fail("space", error.to_string()));
+                return Err(error);
+            }
+        }
+    }
+
+    match State::load(&config.state_file) {
+        Ok(state) => Ok(FetchPlan {
+            pending,
+            pending_bytes,
+            cache_dir,
+            need,
+            state,
+        }),
+        Err(error) => {
+            observe(Gate::fail("state", error.to_string()));
+            Err(error)
+        }
+    }
+}
+
+/// The one line printed before the command is chosen.
+pub fn render_plan(plan: &FetchPlan) -> String {
+    format!(
+        "fetch: {} pending package(s), {} to download\n",
+        plan.pending.len(),
+        human_bytes(plan.pending_bytes)
+    )
+}
+
+/// Build the exact argv. `id -u` runs here, after the plan is rendered, so a
+/// failure leaves the same output as the old in-place command.
+pub fn command_argv(config: &Config, runner: &dyn CommandRunner) -> Result<Vec<String>, Error> {
+    let mut argv: Vec<String> = Vec::new();
+    if !is_root(runner)? {
+        argv.push("sudo".to_string());
+        argv.push("-n".to_string());
+    }
+    argv.push(path_str(&config.pacman)?.to_string());
+    argv.push("-Syuw".to_string());
+    argv.push("--noconfirm".to_string());
+    Ok(argv)
+}
+
+pub fn render_running(argv: &[String]) -> String {
+    format!("fetch: running {}\n", argv.join(" "))
+}
+
+/// Run the captured download. The renderer prints the returned streams.
+pub fn execute(argv: &[String], runner: &dyn CommandRunner) -> Result<CommandOutput, Error> {
+    let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+    runner.run(args[0], &args[1..])
 }
 
 /// The free-space floor `fetch` and `check` both compare against, so the two
@@ -129,21 +271,7 @@ pub(crate) fn pending_download(
     Ok(parse_pending(&quiet.stdout))
 }
 
-fn resolve_cache_dir(config: &Config, runner: &dyn CommandRunner) -> Result<PathBuf, Error> {
-    let conf = path_str(&config.pacman_conf)?;
-    match runner.run("pacman-conf", &["--config", conf, "CacheDir"]) {
-        Ok(output) if output.code == 0 => Ok(output
-            .stdout
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config.pacman_cache_dir.clone())),
-        _ => Ok(config.pacman_cache_dir.clone()),
-    }
-}
-
-fn check_space(runner: &dyn CommandRunner, path: &Path, need: u64) -> Result<(), Error> {
+fn check_space(runner: &dyn CommandRunner, path: &Path, need: u64) -> Result<u64, Error> {
     let path = path_str(path)?;
     let output = runner.run("df", &["-B1", "--output=avail", path])?;
     if output.code != 0 {
@@ -167,7 +295,7 @@ fn check_space(runner: &dyn CommandRunner, path: &Path, need: u64) -> Result<(),
             human_bytes(available)
         )));
     }
-    Ok(())
+    Ok(available)
 }
 
 fn is_root(runner: &dyn CommandRunner) -> Result<bool, Error> {
@@ -200,47 +328,10 @@ fn parse_pending(stdout: &str) -> (u64, Vec<String>) {
     (total, names)
 }
 
-fn parse_size(value: &str) -> Option<u64> {
-    let mut parts = value.split_whitespace();
-    let number: f64 = parts.next()?.parse().ok()?;
-    let factor = match parts.next()? {
-        "B" => 1.0,
-        "KiB" => 1024.0,
-        "MiB" => 1024.0 * 1024.0,
-        "GiB" => 1024.0 * 1024.0 * 1024.0,
-        "TiB" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
-        _ => return None,
-    };
-    Some((number * factor) as u64)
-}
-
-fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-
-    while value >= 1024.0 && unit + 1 < UNITS.len() {
-        value /= 1024.0;
-        unit += 1;
-    }
-
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
-fn now_unix() -> Result<u64, Error> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn seconds_since_epoch(at: SystemTime) -> Result<u64, Error> {
+    at.duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .map_err(|err| Error::failed(format!("system clock is before the epoch: {err}")))
-}
-
-fn path_str(path: &Path) -> Result<&str, Error> {
-    path.to_str()
-        .ok_or_else(|| Error::failed(format!("path is not valid UTF-8: {}", path.display())))
 }
 
 #[cfg(test)]
@@ -249,11 +340,14 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, UNIX_EPOCH};
 
-    use super::{parse_pending, pending_download, record_success, run_with, space_floor};
+    use super::{
+        FetchPlan, GateState, parse_pending, pending_download, plan_observed, record_success,
+        run_with, space_floor,
+    };
     use crate::config::Config;
     use crate::error::Error;
-    use crate::lock::PATTERN;
     use crate::runner::{CommandOutput, FakeRunner};
     use crate::state::State;
 
@@ -305,7 +399,7 @@ mod tests {
     }
 
     fn pgrep_call() -> (String, Vec<String>) {
-        call("pgrep", &["-x", "-l", PATTERN])
+        call("pgrep", &["-x", "-l", crate::lock::PATTERN])
     }
 
     /// No pacman, yay, makepkg or aurto is running.
@@ -322,53 +416,6 @@ mod tests {
         assert_eq!(names, vec!["bash".to_string(), "linux".to_string()]);
         assert!(bytes > 140 * 1024 * 1024, "expected more than 140 MiB");
         assert!(bytes < 145 * 1024 * 1024, "expected less than 145 MiB");
-    }
-
-    #[test]
-    fn the_space_floor_raises_to_the_snapshot_floor_and_doubles_the_download() {
-        let dir = temp_dir();
-        let config = test_config(&dir);
-        const MIB: u64 = 1024 * 1024;
-        const GIB: u64 = 1024 * MIB;
-
-        assert_eq!(space_floor(&config, 0), MIB, "no snapshots: the floor");
-        assert_eq!(space_floor(&config, 1000), MIB + 2000, "download twice");
-
-        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
-        assert_eq!(space_floor(&config, 0), 5 * GIB, "snapshots: 5 GiB");
-        assert_eq!(space_floor(&config, 1000), 5 * GIB + 2000);
-
-        assert_eq!(space_floor(&config, u64::MAX), u64::MAX, "never overflows");
-
-        fs::remove_dir_all(&dir).expect("clean temp dir");
-    }
-
-    #[test]
-    fn a_configured_floor_above_the_snapshot_floor_wins() {
-        let dir = temp_dir();
-        let mut config = test_config(&dir);
-        let eight_gib = 8 * 1024 * 1024 * 1024;
-        config.min_free_bytes = eight_gib;
-        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
-
-        assert_eq!(space_floor(&config, 0), eight_gib);
-
-        fs::remove_dir_all(&dir).expect("clean temp dir");
-    }
-
-    #[test]
-    fn an_unanswerable_qui_falls_back_to_the_floor_not_to_a_guess() {
-        let runner = FakeRunner::new();
-        let mut failed = ok("");
-        failed.code = 1;
-        runner.push_output(failed);
-
-        let (bytes, names) = pending_download("/usr/bin/pacman", &runner).expect("warning only");
-
-        assert_eq!(bytes, 0);
-        assert!(names.is_empty());
-
-        assert_eq!(runner.calls(), vec![call("/usr/bin/pacman", &["-Qui"])]);
     }
 
     #[test]
@@ -432,6 +479,64 @@ mod tests {
         let message = result.unwrap_err().to_string();
         assert!(message.contains("free space"), "message was: {message}");
         assert_eq!(runner.calls().len(), 4, "no command may run after the gate");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn plan_reports_each_gate_in_order_with_real_details() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(none_running());
+        runner.push_output(ok(QUI));
+        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok(HIGH));
+        runner.push_output(ok(HIGH));
+
+        let mut gates = Vec::new();
+        plan_observed(&config, &runner, &mut |gate| gates.push(gate)).expect("plan");
+
+        let names: Vec<&str> = gates.iter().map(|gate| gate.name).collect();
+        assert_eq!(names, ["lock", "lists", "cache", "space", "space"]);
+        assert!(gates.iter().all(|gate| gate.state == GateState::Pass));
+        assert!(
+            gates[1].detail.contains("2 pending"),
+            "the lists gate carries the real count: {}",
+            gates[1].detail
+        );
+        assert!(
+            gates[2].detail.contains("/var/cache/pacman/pkg/"),
+            "the cache gate names the resolved path"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn plan_stops_reporting_after_the_first_failed_gate() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(none_running());
+        runner.push_output(ok(QUI));
+        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok(LOW));
+
+        let mut gates = Vec::new();
+        let error = plan_observed(&config, &runner, &mut |gate| gates.push(gate))
+            .expect_err("low space blocks");
+
+        assert!(matches!(error, Error::Blocked(_)));
+        let names: Vec<&str> = gates.iter().map(|gate| gate.name).collect();
+        assert_eq!(names, ["lock", "lists", "cache", "space"]);
+        assert_eq!(gates.last().map(|gate| gate.state), Some(GateState::Fail));
+        assert!(
+            gates
+                .last()
+                .is_some_and(|gate| gate.detail.contains("free space")),
+            "the failed gate keeps its exact reason"
+        );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -509,6 +614,53 @@ mod tests {
     }
 
     #[test]
+    fn the_space_floor_raises_to_the_snapshot_floor_and_doubles_the_download() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        const MIB: u64 = 1024 * 1024;
+        const GIB: u64 = 1024 * MIB;
+
+        assert_eq!(space_floor(&config, 0), MIB, "no snapshots: the floor");
+        assert_eq!(space_floor(&config, 1000), MIB + 2000, "download twice");
+
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
+        assert_eq!(space_floor(&config, 0), 5 * GIB, "snapshots: 5 GiB");
+        assert_eq!(space_floor(&config, 1000), 5 * GIB + 2000);
+
+        assert_eq!(space_floor(&config, u64::MAX), u64::MAX, "never overflows");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_configured_floor_above_the_snapshot_floor_wins() {
+        let dir = temp_dir();
+        let mut config = test_config(&dir);
+        let eight_gib = 8 * 1024 * 1024 * 1024;
+        config.min_free_bytes = eight_gib;
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
+
+        assert_eq!(space_floor(&config, 0), eight_gib);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unanswerable_qui_falls_back_to_the_floor_not_to_a_guess() {
+        let runner = FakeRunner::new();
+        let mut failed = ok("");
+        failed.code = 1;
+        runner.push_output(failed);
+
+        let (bytes, names) = pending_download("/usr/bin/pacman", &runner).expect("warning only");
+
+        assert_eq!(bytes, 0);
+        assert!(names.is_empty());
+
+        assert_eq!(runner.calls(), vec![call("/usr/bin/pacman", &["-Qui"])]);
+    }
+
+    #[test]
     fn a_state_save_failure_does_not_turn_a_successful_fetch_into_an_error() {
         let dir = temp_dir();
         let mut config = test_config(&dir);
@@ -536,14 +688,18 @@ mod tests {
         let dir = temp_dir();
         let mut config = test_config(&dir);
         config.state_file = PathBuf::from("/proc/self/aur-prefetch-state.json");
-        let mut state = State::default();
+        let plan = FetchPlan {
+            pending: vec!["a".to_string(), "b".to_string()],
+            pending_bytes: 1000,
+            cache_dir: PathBuf::from("/var/cache/pacman/pkg"),
+            need: 2000,
+            state: State::default(),
+        };
 
-        let warning = record_success(&mut state, &config, 2, Ok(42))
+        let warning = record_success(&config, &plan, UNIX_EPOCH + Duration::from_secs(1))
             .expect("the save error must become a warning");
 
         assert!(warning.contains("not updated"), "warning was: {warning}");
-        assert_eq!(state.last_fetch_unix, Some(42));
-        assert_eq!(state.last_fetch_pending, Some(2));
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -552,18 +708,18 @@ mod tests {
     fn a_clock_error_after_fetch_is_a_warning_not_an_error() {
         let dir = temp_dir();
         let config = test_config(&dir);
-        let mut state = State::default();
+        let plan = FetchPlan {
+            pending: vec![],
+            pending_bytes: 0,
+            cache_dir: PathBuf::from("/var/cache/pacman/pkg"),
+            need: 0,
+            state: State::default(),
+        };
 
-        let warning = record_success(
-            &mut state,
-            &config,
-            2,
-            Err(Error::failed("system clock is before the epoch")),
-        )
-        .expect("the clock error must become a warning");
+        let warning = record_success(&config, &plan, UNIX_EPOCH - Duration::from_secs(1))
+            .expect("the clock error must become a warning");
 
         assert!(warning.contains("not recorded"), "warning was: {warning}");
-        assert_eq!(state.last_fetch_unix, None);
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

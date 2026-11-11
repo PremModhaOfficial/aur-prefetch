@@ -37,6 +37,38 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
 - `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
 - `aur-prefetch doctor` — verify timers, limits, repo, journald
+- `aur-prefetch tui [--render-once] [--ascii]` - dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
+
+### `tui`
+
+The tree is a renderer over the same snapshot as `check`, plus a read-only
+download-cache scan. It labels each pending package cached, stale, partial,
+missing, build-pending, built or unknown, and prints the counts, mirror host and
+`Σ` line. Starting it and quitting writes no state or cache. `--render-once`
+prints one frame to stdout so a script or a pipe can read it; the exit code is
+`1` when the snapshot is actionable and `2` when collection failed. Without a
+terminal, the interactive form exits `2` and points at `--render-once`.
+`--ascii` replaces every glyph with ASCII, and `NO_COLOR` removes color.
+
+Exit codes follow `check`: `0` healthy or done, `1` actionable, `2` a terminal
+or collection error, and `130` when Ctrl-C ends the interactive tree.
+
+In the interactive tree, `F` runs `fetch` with its existing lock and free-space
+gates and its exact `sudo -n pacman -Syuw --noconfirm` argv. While it runs, the
+tree shows each download from the real `.part` length against the real
+`Download Size`; a percentage appears only when both are known. The command is
+captured, never attached, and nothing is installed. `Esc` or `q` detaches and
+leaves the child running; the result stays on screen until dismissed. A failed
+fetch freezes the tree and shows the failed row, the exit evidence, a repair
+hint and the blocked count. `g` toggles a flat ledger of the same rows. The
+running screen shows the gates that actually ran, and `l` opens the captured
+log of pacman's own lines. `i` opens a read-only install gate with the same
+checks the CLI runs, the exact `yay -Syuu` command, and a session-only news
+attestation. Once attested and unblocked, `enter` suspends the TUI and runs
+`yay -Syuu` attached with the CLI's options; the terminal is restored, the tree
+re-collected, and a read-only post-install receipt shows the exit, kernel,
+`.pacnew` count and reboot advice. The fetch's only write is its existing state
+file after a successful exit.
 
 ### `check`
 
@@ -64,6 +96,9 @@ An empty value falls back to the default.
 | `AUR_PREFETCH_PACMAN_LOG` | `/var/log/pacman.log` |
 | `AUR_PREFETCH_YAY_CACHE_DIR` | `$XDG_CACHE_HOME/yay` or `~/.cache/yay` |
 | `AUR_PREFETCH_TRUSTED_USERS` | `/etc/aurto/trusted-users` |
+| `AUR_PREFETCH_AURTO_REPO` | `/var/cache/pacman/aurto` |
+| `AUR_PREFETCH_AURBUILD_DIR` | `/var/lib/aurbuild` |
+| `AUR_PREFETCH_ARCHBUILD_DIR` | `/var/lib/archbuild` |
 | `AUR_PREFETCH_SNAPPER_CONFIG_DIR` | `/etc/snapper/configs` |
 | `AUR_PREFETCH_SUDOERS` | `/etc/sudoers.d/aur-prefetch` |
 | `AUR_PREFETCH_USER_UNIT_DIR` | `$XDG_CONFIG_HOME/systemd/user` or `~/.config/systemd/user` |
@@ -93,6 +128,36 @@ effects. `sim/` can: it boots an Arch container with a local package repo,
 runs the binary, and asserts on `/usr`, the download cache, and the fake AUR
 helper's log. The development machine is never a test machine.
 
+### Reviewing the TUI without a terminal
+
+The frames are text, so they can be reviewed from files. Two layers exist:
+
+- `tests/golden/*.txt` are the **contract**. `cargo test` fails if a frame
+  changes. `cargo test regenerate_golden -- --ignored` rewrites them after an
+  intentional change, and the diff is the review.
+- `target/frames/<case>/<size>-<tint>.txt` are the **working view**, written by
+  `cargo test dump_frames -- --ignored`. Every case is dumped at 80x24, 120x40
+  and 40x15, in colour and in ASCII, so a layout question is answered by
+  reading a file rather than by running the TUI.
+
+```bash
+cargo test dump_frames -- --ignored          # write target/frames
+sed -n '1,20p' target/frames/showcase/80x24-color.txt
+cargo test                                   # the goldens must still match
+```
+
+The cases are `showcase` (every state at once, with gates and the repair
+card), `diamond`, `failure` and `progress`. Adding a case means adding it to
+`dump_frames` and, if it is worth freezing, to `regenerate_golden_frames`.
+
+Animation is tested as state, not as pixels: `LiveView.spinner` is derived from
+the observation clock, and `the_spinner_turns_only_while_something_runs`
+asserts the four phases plus the idle and frozen cases. That is why no test
+needs to sleep.
+
+`ITERATIONS.md` records the UI hillclimb: the scorecard, what was kept, and
+what was reverted with the evidence for doing so.
+
 ## Code review
 
 Every PR gets an automated review from a self-hosted
@@ -121,6 +186,9 @@ remain the merge gate; this is the review layer on top.
 
 - [`NEXT.md`](NEXT.md) — the working plan: decisions, phases, acceptance criteria
 - [`spec.md`](spec.md) — plain-language flow and the five ways to break an Arch box
+- [`PROGRESS.md`](PROGRESS.md) — prefetch-aware dependency tree: states, edges, tree, replay
+- [`TUI.md`](TUI.md) — terminal UI spec: screens, keys, action safety
+- [`docs/ANIMATION.md`](docs/ANIMATION.md) — DAG execution frontier: readiness, parallel fronts, replay
 - [`context.md`](context.md) — implementation notes and edge cases
 - [`sim/README.md`](sim/README.md) — simulation harness
 - [`AGENTS.md`](AGENTS.md) — operating rules and definition of done

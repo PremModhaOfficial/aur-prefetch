@@ -64,7 +64,23 @@ are filled in. Change them here first, then implement.
 - `0` healthy, nothing to do, or action completed.
 - `1` action needed or blocked by a gate (updates pending, disk low, lock held).
 - `2` execution error (pacman, yay, config parse, permission).
+- `130` the interactive TUI was interrupted by Ctrl-C. Raw mode means Ctrl-C is
+  a key event, not a signal, and the conventional shell status for an interrupt
+  is the one exception to the three-code contract. A non-interactive command
+  never returns 130.
 - Same contract for every command. Document it in `--help`.
+
+### D7. TUI defaults
+
+The TUI spec (`TUI.md`, `PROGRESS.md`) leaves five choices open. These are the
+v1 answers; change them here before implementing different behaviour.
+
+- News attestation is required before `install` from the TUI.
+- No theme auto-detect in v1. The default `ansi` theme inherits the user's
+  palette; auto-detect is a T4 experiment.
+- The last panel is not persisted. Every start opens the dashboard.
+- Mouse is not in v1. The app is keyboard-first; click and wheel are T4.
+- Bare `aur-prefetch` still prints help. The TUI is `aur-prefetch tui`.
 
 ---
 
@@ -254,6 +270,248 @@ A container cannot test snapshots or boot.
 - [ ] `cargo install` path documented.
 - [ ] `--json` output for `check` and `doctor`.
 - [ ] Release workflow with `cargo publish --dry-run`.
+
+---
+
+## Phase 7: TUI
+
+`TUI.md` is the full spec: screens, keys, action registry, safety rules.
+`PROGRESS.md` is the prefetch/install progress screen. This section is only the
+order of work and the acceptance gates.
+
+`docs/ANIMATION.md` is the execution model: states, readiness, parallel fronts
+and replay. T2 implements its reducer; the tree is a view of that graph.
+
+Phase 7 can start before Phases 4-6 because T0 changes no pacman behaviour. It
+does not make them optional; they still block a release.
+
+### T0. Report layer (prerequisite, no UI)
+
+- [x] `src/report.rs`: `Snapshot`, `Section<T>`, per-domain structs.
+- [x] `check`, `fetch`, `clean`: split collection from text rendering.
+- [x] Reuse `CommandRunner`; add only the fetch stream channel in T3.
+- [x] Move the aurto repo and build-chroot paths into `Config`.
+- [x] Golden text tests for `check`; its output is frozen during the move.
+
+Done when `./ci.sh` and `./sim/run.sh` are green with no scenario edits and the
+CLI output is byte-identical.
+
+T0 landed. `Snapshot::fatal` carries a hard collection error: the text renderer
+keeps the sections collected before it, and the command returns the original
+error. Section failures such as an unavailable `yay` render as their own line.
+
+### T1. Tree shell
+
+- [x] `ratatui` + `crossterm`, `src/tui/`, terminal guard with `Drop` restore
+      and a panic hook.
+- [x] Event loop: input, resize, tick only while a captured task runs.
+- [x] Header, footer, help, quit, `--render-once`, `--ascii`, `NO_COLOR`.
+- [x] `sanitize_cell` and width-aware truncation; raw child output never reaches
+      a cell.
+- [x] Ctrl-C, Ctrl-Z, SIGTERM, SIGHUP, panic, bracketed paste and the Esc
+      timeout handled without leaving raw mode on.
+- [x] The tree at 80×24 and 120×40. No dashboard.
+
+Done when golden frames exist at 80×24 and 120×40; interactive non-tty exits 2
+while `--render-once` is exempt; a forced panic leaves the terminal restored;
+ASCII has no non-ASCII bytes.
+
+T1 closed. Sim 31 proves a normal quit, Ctrl-C exit 130, a forced-panic restore,
+and Ctrl-Z re-entry/clear with raw mode restored.
+
+### T2. The tree
+
+- [x] Prefetch badges: cached, built, stale, partial, missing, unknown.
+- [x] `install N packages` header context, counters, `Σ`, host.
+- [x] Pure ready/running/done reducer with diamond and two-root tests
+      (`src/frontier.rs`).
+- [x] Wire the tree to reducer observations; parallel roots are sets, not a
+      queue, and a join waits for every required edge.
+- [x] Live grammar and ANSI-16 palette: nom glyphs, activity kind, waiting
+      counts, timers after 1s, grouped counters (`src/tui/live.rs`,
+      `src/tui/render.rs`).
+- [x] Live fetch: real state changes and counters; timers after 1s.
+- [x] No duplicate nodes; one placement per package, no repeated subtree.
+- [x] Failure freeze, repair card, downstream blocked.
+- [x] Ledger fallback (`g`). No timeline in v1.
+
+Done when a prefetched fixture shows the correct tree, no state is invented,
+the ready frontier is correct for a diamond and two roots, sim 33 proves the
+counts, sim 34 proves the live fetch path, and sim 35 proves the failure
+freeze and the repair card.
+
+T2 slice landed: `progress::collect` scans the real cache and fills
+`PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
+writes.
+
+T2a landed: `src/tui/tree.rs` is the pure forest model and `render.rs` prints it
+bottom-up like nom. It has one row per package, one root per pending package
+with no pending dependent, display-only `?` leaves for dependencies outside the
+pending set, deterministic artifact-rank/name siblings, and cycle/self-edge
+protection. A second pending edge does not duplicate a subtree. The
+`install N packages` total is header context, not a tree row; an unrooted
+cycle is a deterministic error. The frontier is wired in T2b below; the real
+fetch source, the repair card and the ledger remain open.
+
+T2b landed: `src/tui/live.rs` is the pure live view over the forest and
+`frontier::GraphState`. It seeds cached/built artifacts as `NoWork`, records
+`Started`/`Finished`/`Failed` timestamps, derives per-row planned/running/done/
+failed/blocked/skipped state, activity kind (build or download), prerequisite
+waiting counts, and timers above 1 s. `render.rs` maps that to nom's glyphs and
+the ANSI-16 palette, and adds the grouped `Builds`/`Downloads` summary plus the
+host and `Σ`. The live frame is tested at 120x40 and 80x24 for the diamond, two
+roots, the failure freeze, sub-second and above-one-second timers, ASCII and
+NO_COLOR. This slice consumes synthetic observations only; the real fetch byte
+source is still open. The failure freeze and downstream blocking are landed in
+the view; the repair card is not.
+
+T2c landed the bars and the viewport, still on synthetic observations.
+`LiveRow.progress` carries observed `done`/`total` bytes, clamped by
+`Progress::new`; a zero or unknown total clears the reading, so there is no bar
+and no percent without both sizes. `render.rs` draws nom's geometry:
+`left_width = max(60, 1 + widest progress row)`, bar cells
+`width - 2 - left_width - 6`, `%5.1f%%` at a fixed right edge, and `■/◧/□`
+or `#/-/ ` in ASCII. A terminal narrower than one bar cell falls back to the
+normal row. The live viewport keeps roughly `height / 3` tree rows plus the
+summary, marks each clipped run with `⋮`, never hides running, failed or
+blocked rows, and reports the shown root count in the header. Goldens cover
+known and unknown bytes at 120x40 and 80x24, ASCII bars, NO_COLOR, a 40-column
+row and a 200-package forest. `render_live_frame` is still not reachable from
+the real fetch source; the fetch adapter, repair card and ledger remain.
+
+T2d landed: `src/fetch_source.rs` is the real, pure fetch observation source.
+`FetchMonitor::new` seeds `LiveRun::plan`; `poll` reads only `plan.cache_dir`
+and turns a `.part` file into `Started` plus real byte progress against
+`TreeRow.size`, and a vanished `.part` plus a final artifact into `Finished`.
+Cache filenames are matched with `progress::entry_version` against the known
+package names, longest name first, so hyphens and prefix collisions do not
+misplace a file, and unmatched files are ignored. `finish` folds the command
+result: a nonzero code fails running nodes with `exit N` and a stderr excerpt
+so the reducer freezes and blocks dependents; a zero code finishes only a
+running node with a final artifact and leaves the rest running. The monitor
+writes nothing, runs no command, and takes every timestamp from the caller.
+`Live fetch` was still unticked at T2d: T2e had to run the fetch command, call
+`poll`, and redraw.
+
+T2e landed: `F` in the interactive tree runs `fetch` with the existing gates
+and the exact argv. `src/tui/fetch_session.rs` streams the command on a worker,
+polls `FetchMonitor` on the 100 ms tick, redraws only when the visible frame
+changes, and folds the real exit into `FetchMonitor::finish`; the one state
+write is `fetch::record_success`. `Esc`/`q` detach without killing the child
+and without claiming its result. The frontier has an explicit
+`ExecutionMode::Concurrent` for downloads: a pending node may start before its
+prerequisite finishes, while the edges still block dependents after a failure.
+A final artifact standing alone finishes a pending or ready node, so a tiny
+package that renames between polls is never left falsely ready. A nonzero exit
+with no running node is shown in the footer, not turned into a fake frozen
+node. `pacman -Si` fills a download size that `pacman -Qui` does not provide on
+pacman 7.1, so a known total can draw a real bar. Sim 34 drives the real TUI
+under a pty with a paced pacman `XferCommand` and proves the real `.part`
+bytes, the bar, the final artifact, the unchanged `/usr`, the one state write
+and the one allowed escalation. The fetch log remains T3.
+
+T2f landed: a nonzero fetch exit builds one repair card from observed facts
+only: the failed row, `exit N` plus the first stderr line, a hint keyed to that
+evidence, the blocked count, and the fact that no state was written. The card
+replaces the duplicated status line and leaves the frozen tree in place; a
+failure with no running node still gets the card and blames no row. `g` toggles
+the ledger, a flat list of the same rows with no branch connectors, statically
+and during a fetch. The static `--render-once` frame, its goldens and the CLI
+text are unchanged. Sim 35 corrupts the repo artifact behind the paced
+transfer and proves the running row, the real failure, the frozen frontier, the
+card, no install, no state write and the one allowed escalation. T2 is closed.
+
+The nom capture study is [`docs/NOM.md`](docs/NOM.md). It measures a real
+120x40 `nh home switch` run and orders the remaining T2 work: tree model,
+frontier wiring, real progress bars, layout and viewport, ANSI-16 palette,
+live loop, final receipt. The playable comparison is
+[`prototype/nom-study.html`](https://github.com/PremModhaOfficial/aur-prefetch/blob/archive/prototype-studies/prototype/nom-study.html),
+archived on `archive/prototype-studies` to keep the review diff renderable. The
+study is evidence, not implementation.
+
+### T3. Actions
+
+- [x] Fetch tree with the gate checklist and streamed lines.
+- [x] Install gate overlay, news attestation, exact argv.
+- [x] Attached `yay -Syuu`; the tree is plan and result, never a fake live tree.
+- [x] Post-install receipt.
+- [x] Suspend/restore verified in a pty.
+- [x] No clean action in v1; `aur-prefetch clean` stays CLI.
+
+Done when sim 31 (the pty shell restores the terminal), 32 (the gate opens and
+cancels with no change), 34 (the live fetch), and 36 (the attached install
+upgrades and restores the terminal) pass.
+
+T3a landed: the fetch action shows the PRE-FLIGHT checklist from
+`fetch::plan_observed`, so the gates run once and the TUI renders the exact
+gates that ran with their real details: the lock, the pending count and bytes,
+the resolved cache path and the free-space numbers. A failed gate ends the
+list; a later gate is never invented. `l` opens a bounded, sanitized log of
+the real child lines and `Esc` closes it before it can detach. The static
+`--render-once` frame and its goldens are unchanged. Sim 34 proves the
+checklist, a real pacman log line and the existing fetch result. The install
+gate, attached install and post-install block remain open, so T3 is not
+ticked.
+
+T3b landed: `i` opens a read-only install gate overlay. `install::preflight`
+reuses the CLI's own helpers (`effective_uid`, `check_lock`, `collect_lists`,
+`trust_state`, `install_since`) and reports the checks that actually ran: root,
+lock, the real official/AUR counts, the trust allowlist or its missing/empty
+reason, and the news URL with the last-install age. The exact `yay -Syuu`
+command is shown; `space` records a session-only news attestation and no state
+is written. Sim 32 opens the gate, attests, cancels, and proves `/usr`, the
+package DB, the cache, the state file and the sudo log are untouched and `yay
+-Syuu` never ran.
+
+T3c landed: once the news is attested and no gate fails, the overlay arms
+`enter`. Enter suspends the TUI through the existing guard, runs
+`install::run_with` with the CLI's `Options` (`yes: true`, `force: false`,
+`stdin_is_tty: true`, the preflight's effective uid), then restores the
+terminal, re-collects and shows an honest result line. The tree is a plan
+before and a result after; the attached command is never faked as live. Sim 36
+runs the TUI as the sim `installer`, attests, enters, proves the upgrade
+installed, the exact scoped escalation ran, no AUR build happened, the state
+file recorded the install, and the terminal was restored.
+
+T3d landed: a finished install opens the post-install receipt built from
+`post_install::collect`: the real exit, the running kernel against
+`/usr/lib/modules`, the `.pacnew` count, and kernel-based reboot advice. A
+failure also carries a repair line; disk-full is named when the evidence says
+so. It is read-only and closes with enter or esc. Sim 36 proves the success
+receipt alongside the upgrade. The receipt's attached `p` (sudo pacdiff), copy
+and install-log keys from `TUI.md` are not wired; the receipt says to run
+`sudo pacdiff` after closing. T3's checklist is closed; T4 polish is next.
+
+### T4. Polish
+
+- [x] Bootvine's frame grammar: bracketed `[ ]` / `[|]` / `[√]` / `[×]` status
+      markers, a light `├─`/`└─` tree, and a one-line `done · running · waiting ·
+      failed` footer; ASCII uses `[ ]`/`[|]`/`[v]`/`[x]` and keeps the meaning.
+- [ ] `--no-motion`, ASCII, 2,000-package performance pass.
+- [ ] Keymap overrides for the v1 keys.
+- [ ] No mouse, themes, or `tui.conf` in v1.
+
+Done when the frame budget in `TUI.md` holds and ASCII preserves meaning.
+
+### T5. Docs
+
+- [ ] README command table and a TUI section.
+- [ ] `AGENTS.md` layout entry for `src/tui/`.
+- [ ] Tick these boxes in the same commits that change behaviour.
+- [ ] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
+      `tui` needs one.
+
+---
+
+## Phase 8: TUI v2 shell
+
+Only if the tree earns it. The panels are not part of the first release.
+
+- [ ] Dashboard, Updates, Caches, Doctor, Activity, Settings.
+- [ ] Palette from the action registry.
+- [ ] Clean confirm and attached `sudo <current_exe> clean --apply`.
+- [ ] Mouse, themes, `tui.conf`.
+- [ ] Sim 36–38 for the shell.
 
 ---
 

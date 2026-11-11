@@ -18,6 +18,9 @@ pub struct Config {
     pub sudoers_file: PathBuf,
     pub journald_conf: PathBuf,
     pub snapper_config_dir: PathBuf,
+    pub aurto_repo: PathBuf,
+    pub aurbuild_dir: PathBuf,
+    pub archbuild_dir: PathBuf,
     pub user_unit_dir: Option<PathBuf>,
     pub state_file: PathBuf,
     pub min_free_bytes: u64,
@@ -88,6 +91,13 @@ impl Config {
                 "AUR_PREFETCH_SNAPPER_CONFIG_DIR",
                 "/etc/snapper/configs",
             ),
+            aurto_repo: path_or(
+                &lookup,
+                "AUR_PREFETCH_AURTO_REPO",
+                "/var/cache/pacman/aurto",
+            ),
+            aurbuild_dir: path_or(&lookup, "AUR_PREFETCH_AURBUILD_DIR", "/var/lib/aurbuild"),
+            archbuild_dir: path_or(&lookup, "AUR_PREFETCH_ARCHBUILD_DIR", "/var/lib/archbuild"),
             user_unit_dir: non_empty(&lookup, "AUR_PREFETCH_USER_UNIT_DIR")
                 .map(PathBuf::from)
                 .or_else(|| {
@@ -204,6 +214,9 @@ mod tests {
             config.snapper_config_dir,
             PathBuf::from("/etc/snapper/configs")
         );
+        assert_eq!(config.aurto_repo, PathBuf::from("/var/cache/pacman/aurto"));
+        assert_eq!(config.aurbuild_dir, PathBuf::from("/var/lib/aurbuild"));
+        assert_eq!(config.archbuild_dir, PathBuf::from("/var/lib/archbuild"));
         assert_eq!(
             config.user_unit_dir,
             Some(PathBuf::from("/home/user/.config/systemd/user"))
@@ -228,6 +241,9 @@ mod tests {
             ("AUR_PREFETCH_SUDOERS", "/tmp/sudoers"),
             ("AUR_PREFETCH_JOURNALD_CONF", "/tmp/journald.conf"),
             ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", "/tmp/snapper"),
+            ("AUR_PREFETCH_AURTO_REPO", "/tmp/aurto"),
+            ("AUR_PREFETCH_AURBUILD_DIR", "/tmp/aurbuild"),
+            ("AUR_PREFETCH_ARCHBUILD_DIR", "/tmp/archbuild"),
             ("AUR_PREFETCH_SUDOERS", "/tmp/sudoers"),
             ("AUR_PREFETCH_USER_UNIT_DIR", "/tmp/user-units"),
             ("AUR_PREFETCH_STATE", "/tmp/state.json"),
@@ -245,6 +261,9 @@ mod tests {
         assert_eq!(config.sudoers_file, PathBuf::from("/tmp/sudoers"));
         assert_eq!(config.journald_conf, PathBuf::from("/tmp/journald.conf"));
         assert_eq!(config.snapper_config_dir, PathBuf::from("/tmp/snapper"));
+        assert_eq!(config.aurto_repo, PathBuf::from("/tmp/aurto"));
+        assert_eq!(config.aurbuild_dir, PathBuf::from("/tmp/aurbuild"));
+        assert_eq!(config.archbuild_dir, PathBuf::from("/tmp/archbuild"));
         assert_eq!(config.user_unit_dir, Some(PathBuf::from("/tmp/user-units")));
         assert_eq!(config.state_file, PathBuf::from("/tmp/state.json"));
         assert_eq!(config.min_free_bytes, 1_048_576);

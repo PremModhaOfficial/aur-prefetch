@@ -1,0 +1,40 @@
+┌ Install · 1 package ─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ PRE-FLIGHT                                                                                                           │
+│ ✓  root     running as the user, not root                                                                            │
+│ ✓  lock     no lock file, no pacman process                                                                          │
+│ ✓  lists    1 official, 0 AUR update(s) pending                                                                      │
+│ ✓  trust    allowlist · 2 maintainer(s)                                                                              │
+│ ▲  news     cannot be verified; read https://archlinux.org/news/ since 2026-11-01T00:00:00+0000                      │
+│   press space to attest after reading the news                                                                       │
+│                                                                                                                      │
+│ COMMAND   yay -Syuu                                                                                                  │
+│ 1 official update(s).                                                                                                │
+│ Reboot after if the kernel or libraries change.                                                                      │
+│                                                                                                                      │
+│ space attest · esc cancel                                                                                            │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
