@@ -125,9 +125,11 @@ accessible to that user, or downloads fail. Test a moved CacheDir explicitly.
 
 Gates in order: lock, free space, then pacman.
 
-- [x] Lock: `/var/lib/pacman/db.lck` present refuses with exit 1. If
-      `pgrep -x pacman` is alive, say pacman is running; otherwise call the lock
-      stale and leave removal to the user. Never delete the lock.
+- [x] Lock: refuse with exit 1 while `db.lck` exists or while `pacman`, `yay`,
+      `makepkg` or `aurto` is running. One shared gate in `src/lock.rs`, used by
+      `fetch`, `install` and `check`, because a build leaves no lock file and no
+      process named `pacman`. A lock nobody holds is stale and its removal is
+      left to the user. Never delete the lock.
 - [x] Free space: `need = max(2 GiB, 2 * pending_download + 2 GiB)`. Check the
       CacheDir filesystem, and `/` too when they differ. 5 GiB floor if
       snapshots are detected.

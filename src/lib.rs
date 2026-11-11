@@ -4,6 +4,7 @@
 pub mod commands;
 pub mod config;
 pub mod error;
+pub mod lock;
 pub mod runner;
 pub mod state;
 pub mod util;

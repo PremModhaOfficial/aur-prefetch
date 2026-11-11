@@ -3,6 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::lock;
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 
@@ -18,7 +19,7 @@ pub fn run() -> Result<(), Error> {
 /// `pacman -Qui` sits between the lock and the space gate because the size
 /// estimate needs it. It only reads.
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    check_lock(config, runner)?;
+    lock::check(config, runner, "fetch")?;
 
     let pacman = path_str(&config.pacman)?;
     let quiet = runner.run(pacman, &["-Qui"])?;
@@ -82,28 +83,6 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     state.save(&config.state_file)?;
     println!("fetch: ok");
     Ok(())
-}
-
-fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    if !config.pacman_lock.exists() {
-        return Ok(());
-    }
-
-    let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
-    if pgrep.code == 0 {
-        return Err(Error::blocked(format!(
-            "pacman is running; refusing to fetch while {} is held",
-            config.pacman_lock.display()
-        )));
-    }
-
-    // pacman refuses any transaction while the file exists, so proceeding
-    // would only turn this into an opaque pacman failure. Never delete it:
-    // the user has to confirm nothing holds it.
-    Err(Error::blocked(format!(
-        "stale lock {}: no pacman process is running; verify and remove it yourself",
-        config.pacman_lock.display()
-    )))
 }
 
 fn resolve_cache_dir(config: &Config, runner: &dyn CommandRunner) -> Result<PathBuf, Error> {
@@ -230,6 +209,7 @@ mod tests {
     use super::{parse_pending, run_with};
     use crate::config::Config;
     use crate::error::Error;
+    use crate::lock::PATTERN;
     use crate::runner::{CommandOutput, FakeRunner};
     use crate::state::State;
 
@@ -280,6 +260,17 @@ mod tests {
         )
     }
 
+    fn pgrep_call() -> (String, Vec<String>) {
+        call("pgrep", &["-x", "-l", PATTERN])
+    }
+
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
+    }
+
     #[test]
     fn parses_sizes_and_names_from_pacman_qui() {
         let (bytes, names) = parse_pending(QUI);
@@ -296,13 +287,13 @@ mod tests {
         fs::write(&config.pacman_lock, "").expect("lock file");
 
         let runner = FakeRunner::new();
-        runner.push_output(ok("1234\n"));
+        runner.push_output(ok("1234 pacman\n"));
 
         let result = run_with(&config, &runner);
 
         assert!(matches!(result, Err(Error::Blocked(_))));
         assert_eq!(result.unwrap_err().exit_code(), 1);
-        assert_eq!(runner.calls(), vec![call("pgrep", &["-x", "pacman"])]);
+        assert_eq!(runner.calls(), vec![pgrep_call()]);
         assert!(
             config.pacman_lock.exists(),
             "the lock must never be deleted"
@@ -327,7 +318,7 @@ mod tests {
         assert!(matches!(result, Err(Error::Blocked(_))));
         let message = result.unwrap_err().to_string();
         assert!(message.contains("stale lock"), "message was: {message}");
-        assert_eq!(runner.calls(), vec![call("pgrep", &["-x", "pacman"])]);
+        assert_eq!(runner.calls(), vec![pgrep_call()]);
         assert!(config.pacman_lock.exists());
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
@@ -339,6 +330,7 @@ mod tests {
         let config = test_config(&dir);
 
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(QUI));
         runner.push_output(ok("/var/cache/pacman/pkg/\n"));
         runner.push_output(ok(LOW));
@@ -348,7 +340,7 @@ mod tests {
         assert!(matches!(result, Err(Error::Blocked(_))));
         let message = result.unwrap_err().to_string();
         assert!(message.contains("free space"), "message was: {message}");
-        assert_eq!(runner.calls().len(), 3, "no command may run after the gate");
+        assert_eq!(runner.calls().len(), 4, "no command may run after the gate");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -365,6 +357,7 @@ mod tests {
         .expect("seed state");
 
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(QUI));
         runner.push_output(ok("/var/cache/pacman/pkg/\n"));
         runner.push_output(ok(HIGH));
@@ -377,6 +370,7 @@ mod tests {
         assert_eq!(
             runner.calls(),
             vec![
+                pgrep_call(),
                 call("/usr/bin/pacman", &["-Qui"]),
                 call("pacman-conf", &["--config", "/etc/pacman.conf", "CacheDir"]),
                 call("df", &["-B1", "--output=avail", "/var/cache/pacman/pkg/"]),
@@ -404,6 +398,7 @@ mod tests {
         let config = test_config(&dir);
 
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(QUI));
         runner.push_output(ok("/var/cache/pacman/pkg/\n"));
         runner.push_output(ok(HIGH));

@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::lock;
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 use crate::util::{human_bytes, path_str, resolve_cache_dir};
@@ -153,17 +154,17 @@ fn parse_pair(stdout: &str) -> Option<(u64, u64)> {
 }
 
 fn report_lock(config: &Config, runner: &dyn CommandRunner) -> Result<bool, Error> {
+    if let Some(name) = lock::running(runner)? {
+        println!("check: lock: held by {name}");
+        return Ok(true);
+    }
+
     if !config.pacman_lock.exists() {
         println!("check: lock: none");
         return Ok(false);
     }
 
-    let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
-    if pgrep.code == 0 {
-        println!("check: lock: held by pacman");
-    } else {
-        println!("check: lock: stale {}", config.pacman_lock.display());
-    }
+    println!("check: lock: stale {}", config.pacman_lock.display());
     Ok(true)
 }
 
@@ -380,6 +381,13 @@ mod tests {
         }
     }
 
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
+    }
+
     /// Queue one response per external call, in the order `run_with` makes them.
     fn queue(runner: &FakeRunner, dir: &Path, official: &str, available: u64, lock_held: bool) {
         let cache = dir.join("cache");
@@ -396,7 +404,9 @@ mod tests {
         runner.push_output(ok("6553600 3200000\n"));
 
         if lock_held {
-            runner.push_output(ok("4321\n"));
+            runner.push_output(ok("4321 pacman\n"));
+        } else {
+            runner.push_output(none_running());
         }
 
         for _ in 0..5 {
@@ -501,6 +511,7 @@ mod tests {
         runner.push_output(ok(&format!("{}\n", missing.to_string_lossy())));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(none_running());
         for _ in 0..5 {
             runner.push_output(ok("1048576\n"));
         }
@@ -545,6 +556,7 @@ mod tests {
         runner.push_output(ok("6553600 3200000\n"));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(none_running());
         for _ in 0..5 {
             runner.push_output(ok("1048576\n"));
         }
@@ -573,6 +585,7 @@ mod tests {
         runner.push_output(ok("6553600 3200000\n"));
         runner.push_output(ok("107374182400 53687091200\n"));
         runner.push_output(ok("6553600 3200000\n"));
+        runner.push_output(none_running());
 
         let mut unreadable = ok("");
         unreadable.code = 1;

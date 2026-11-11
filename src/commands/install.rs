@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::lock;
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
 use crate::util::path_str;
@@ -43,7 +44,7 @@ pub fn run_with(
         ));
     }
 
-    check_lock(config, runner)?;
+    lock::check(config, runner, "install")?;
 
     let pacman = path_str(&config.pacman)?;
     let official_output = runner.run(pacman, &["-Qu"])?;
@@ -122,30 +123,6 @@ pub fn run_with(
     println!("install: next: uname -r && ls /usr/lib/modules/ && pacman -Q linux");
     println!("install: reboot if the kernel or libraries changed, or if news says so");
     Ok(())
-}
-
-fn check_lock(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
-    if !config.pacman_lock.exists() {
-        return Ok(());
-    }
-
-    let pgrep = runner.run("pgrep", &["-x", "pacman"])?;
-    match pgrep.code {
-        0 => Err(Error::blocked(format!(
-            "pacman is running; refusing to install while {} is held",
-            config.pacman_lock.display()
-        ))),
-        // pgrep exits 1 when no process matched: the lock is stale, but only
-        // the user can confirm that. Never delete it ourselves.
-        1 => Err(Error::blocked(format!(
-            "stale lock {}: no pacman process is running; verify and remove it yourself",
-            config.pacman_lock.display()
-        ))),
-        code => Err(Error::failed(format!(
-            "pgrep -x pacman exited {code}; cannot tell whether pacman is running, so {} must stay",
-            config.pacman_lock.display()
-        ))),
-    }
 }
 
 fn check_trust(config: &Config, options: &Options) -> Result<(), Error> {
@@ -356,8 +333,25 @@ mod tests {
     }
 
     fn queue_lists(runner: &FakeRunner, official: &str) {
+        runner.push_output(none_running());
         runner.push_output(ok(official));
         runner.push_output(ok(""));
+    }
+    /// No pacman, yay, makepkg or aurto is running.
+    fn none_running() -> CommandOutput {
+        let mut output = ok("");
+        output.code = 1;
+        output
+    }
+    fn pgrep_call() -> (String, Vec<String>) {
+        (
+            "pgrep".to_string(),
+            vec![
+                "-x".to_string(),
+                "-l".to_string(),
+                crate::lock::PATTERN.to_string(),
+            ],
+        )
     }
 
     fn ran_yay(runner: &FakeRunner) -> bool {
@@ -515,6 +509,7 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(ok(""));
         runner.push_output(CommandOutput {
             code: 2,
@@ -628,12 +623,12 @@ mod tests {
         let config = test_config(&dir);
         fs::write(&config.pacman_lock, "").expect("lock file");
         let runner = FakeRunner::new();
-        runner.push_output(ok("4321\n"));
+        runner.push_output(ok("4321 pacman\n"));
 
         let result = run_with(&config, &runner, options(true, false, false));
 
         assert!(matches!(result, Err(Error::Blocked(_))));
-        assert_eq!(runner.calls().len(), 1, "only pgrep may run");
+        assert_eq!(runner.calls(), vec![pgrep_call()], "only pgrep may run");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -692,6 +687,7 @@ mod tests {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
+        runner.push_output(none_running());
         runner.push_output(CommandOutput {
             code: 2,
             stdout: String::new(),
@@ -722,6 +718,7 @@ mod tests {
         let runner = FakeRunner::new();
         let mut no_updates = ok("");
         no_updates.code = 1;
+        runner.push_output(none_running());
         runner.push_output(no_updates);
         runner.push_output(ok(""));
         runner.push_interactive(0);
