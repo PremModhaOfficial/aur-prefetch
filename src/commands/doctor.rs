@@ -53,7 +53,7 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
 fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
     match fs::read_to_string(&config.sudoers_file) {
         Ok(text) => match current_user(runner)? {
-            Some(user) if sudoers_rule_ok(&text, &user) => {
+            Some(user) if sudoers_rule_ok(&text, &user, &config.pacman) => {
                 println!("doctor: sudoers: exact rule present for {user}");
                 Ok(0)
             }
@@ -132,7 +132,7 @@ fn report_sudoers_via_sudo(
     source_checked: bool,
 ) -> Result<u32, Error> {
     match runner.run("sudo", &["-n", "-l"]) {
-        Ok(output) if output.code == 0 && sudo_list_ok(&output.stdout) => {
+        Ok(output) if output.code == 0 && sudo_list_ok(&output.stdout, &config.pacman) => {
             if source_checked {
                 println!(
                     "doctor: sudoers: exact rule present (root-owned 0440 file; sudo -l matches)"
@@ -154,8 +154,9 @@ fn report_sudoers_via_sudo(
     }
 }
 
-fn sudo_list_ok(text: &str) -> bool {
-    let rule = "(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm";
+fn sudo_list_ok(text: &str, pacman: &std::path::Path) -> bool {
+    let rule = format!("(root) NOPASSWD: {} -Syuw --noconfirm", pacman.display());
+    let rule = rule.as_str();
     let mut exact = false;
     for line in text.lines().map(str::trim) {
         if line.is_empty() {
@@ -179,8 +180,11 @@ fn sudo_list_ok(text: &str) -> bool {
     exact
 }
 
-fn sudoers_rule_ok(text: &str, user: &str) -> bool {
-    const SUFFIX: &str = " ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm";
+fn sudoers_rule_ok(text: &str, user: &str, pacman: &std::path::Path) -> bool {
+    let suffix = format!(
+        " ALL=(root) NOPASSWD: {} -Syuw --noconfirm",
+        pacman.display()
+    );
 
     let mut rule = None;
     for line in text.lines().map(str::trim) {
@@ -205,7 +209,7 @@ fn sudoers_rule_ok(text: &str, user: &str) -> bool {
     let Some(rule) = rule else {
         return false;
     };
-    let Some(principal) = rule.strip_suffix(SUFFIX) else {
+    let Some(principal) = rule.strip_suffix(suffix.as_str()) else {
         return false;
     };
     principal == user
@@ -995,38 +999,60 @@ mod tests {
 
     #[test]
     fn a_sudoers_file_must_contain_only_the_exact_rule() {
+        let pacman = std::path::Path::new("/usr/bin/pacman");
         assert!(sudoers_rule_ok(
             "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
-            "alice"
+            "alice",
+            pacman
         ));
         assert!(!sudoers_rule_ok(
             "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\nalice ALL=(ALL) NOPASSWD: ALL\n",
-            "alice"
+            "alice",
+            pacman
         ));
         assert!(!sudoers_rule_ok(
             "%wheel ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
-            "alice"
+            "alice",
+            pacman
         ));
         assert!(!sudoers_rule_ok(
             "#include /etc/sudoers.d/other\nalice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
-            "alice"
+            "alice",
+            pacman
         ));
         assert!(!sudoers_rule_ok(
             "alice ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm, /bin/sh\n",
-            "alice"
+            "alice",
+            pacman
+        ));
+        // A configured path must be accepted, and the same rule under the
+        // default path must not be: init writes what doctor verifies.
+        assert!(sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /opt/weird/bin/pacman -Syuw --noconfirm\n",
+            "alice",
+            std::path::Path::new("/opt/weird/bin/pacman")
+        ));
+        assert!(!sudoers_rule_ok(
+            "alice ALL=(root) NOPASSWD: /opt/weird/bin/pacman -Syuw --noconfirm\n",
+            "alice",
+            pacman
         ));
     }
 
     #[test]
     fn sudo_l_output_rejects_wildcard_runas() {
+        let pacman = std::path::Path::new("/usr/bin/pacman");
         assert!(sudo_list_ok(
-            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            pacman
         ));
         assert!(!sudo_list_ok(
-            "    (ALL) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n"
+            "    (ALL) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n",
+            pacman
         ));
         assert!(!sudo_list_ok(
-            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n    (ALL : ALL) ALL\n"
+            "User alice may run the following commands:\n    (root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n    (ALL : ALL) ALL\n",
+            pacman
         ));
     }
 

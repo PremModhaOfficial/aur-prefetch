@@ -117,7 +117,7 @@ pub fn run_with(
     let timer_path = unit_dir.join("aur-prefetch.timer");
     let service = render_service(setup.exe)?;
     let timer = render_timer();
-    let sudoers = render_sudoers(setup.user);
+    let sudoers = render_sudoers(config, setup.user);
 
     if !setup.apply {
         println!("--- {}", service_path.display());
@@ -191,8 +191,11 @@ fn render_timer() -> String {
     "[Timer]\nOnCalendar=daily\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n".to_string()
 }
 
-fn render_sudoers(user: &str) -> String {
-    format!("{user} ALL=(root) NOPASSWD: /usr/bin/pacman -Syuw --noconfirm\n")
+fn render_sudoers(config: &Config, user: &str) -> String {
+    format!(
+        "{user} ALL=(root) NOPASSWD: {} -Syuw --noconfirm\n",
+        config.pacman.display()
+    )
 }
 
 fn install_sudoers(
@@ -410,6 +413,10 @@ mod tests {
     }
 
     fn test_config(dir: &Path) -> Config {
+        test_config_with_pacman(dir, None)
+    }
+
+    fn test_config_with_pacman(dir: &Path, pacman: Option<&str>) -> Config {
         let mut map: HashMap<String, String> = HashMap::new();
         for (key, value) in [
             ("HOME", dir.join("home")),
@@ -418,6 +425,9 @@ mod tests {
             ("AUR_PREFETCH_USER_UNIT_DIR", dir.join("units")),
         ] {
             map.insert(key.to_string(), value.to_string_lossy().into_owned());
+        }
+        if let Some(pacman) = pacman {
+            map.insert("AUR_PREFETCH_PACMAN".to_string(), pacman.to_string());
         }
         Config::from_lookup(move |name| map.get(name).cloned()).expect("config")
     }
@@ -459,6 +469,24 @@ mod tests {
         fn run_interactive(&self, program: &str, _args: &[&str]) -> Result<i32, Error> {
             Err(Error::failed(format!("cannot run {program}")))
         }
+    }
+
+    /// The sudoers rule must name the pacman this machine actually uses.
+    /// A hardcoded path lets `init` write a rule that `doctor` then rejects.
+    #[test]
+    fn a_configured_pacman_path_becomes_the_sudoers_rule() {
+        let dir = temp_dir();
+        let config = test_config_with_pacman(&dir, Some("/opt/weird/bin/pacman"));
+        let runner = FakeRunner::new();
+        queue_apply(&runner, true);
+
+        run_with(&config, &runner, setup(true)).expect("init");
+
+        let sudoers = fs::read_to_string(&config.sudoers_file).expect("sudoers file");
+        assert!(
+            sudoers.contains("alice ALL=(root) NOPASSWD: /opt/weird/bin/pacman -Syuw --noconfirm"),
+            "sudoers rule must name the configured pacman, got: {sudoers}"
+        );
     }
 
     #[test]
