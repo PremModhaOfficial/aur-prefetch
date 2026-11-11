@@ -1067,12 +1067,19 @@ fn header_lines(
     let separator = if ascii { "|" } else { "·" };
     if snapshot.fatal.is_some() {
         // The body is the error. A graph title here would name roots the
-        // error frame does not draw.
-        let pending = pending_count(snapshot);
-        let header = format!(
-            "aur-prefetch {separator} {pending} pending {separator} {} action(s)",
-            snapshot.actionable
-        );
+        // error frame does not draw, and a count derived from sections the
+        // fatal error stopped before collecting would invent `0 pending`.
+        let header = match (snapshot.official.data(), snapshot.aur.data()) {
+            (Some(official), Some(aur)) => format!(
+                "aur-prefetch {separator} {} pending {separator} {} action(s)",
+                official.len() + aur.len(),
+                snapshot.actionable
+            ),
+            _ => format!(
+                "aur-prefetch {separator} unknown pending {separator} {} action(s)",
+                snapshot.actionable
+            ),
+        };
         return vec![Line::styled(cell_text(&header, width, ascii), bold())];
     }
     let Some(report) = snapshot.prefetch.data() else {
@@ -3040,6 +3047,14 @@ mod tests {
         assert!(
             !frame.contains("Dependency Graph"),
             "a fatal frame claims no graph:\n{frame}"
+        );
+        assert!(
+            frame.contains("unknown pending"),
+            "a fatal frame does not invent a zero pending count:\n{frame}"
+        );
+        assert!(
+            !frame.contains("0 pending"),
+            "no pending count is invented from uncollected sections:\n{frame}"
         );
     }
 

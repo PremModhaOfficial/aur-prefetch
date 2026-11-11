@@ -280,3 +280,4 @@ tables above. Accepted and fixed, one commit each:
 | Defect | Severity | Fixed in |
 |---|---|---|
 | a nonzero fetch exit failed only the alphabetically-first running node; the rest stayed `Running` in a frozen graph | should | (this commit) |
+| a fatal snapshot header printed `0 pending` derived from uncollected `official`/`aur` sections | should | (this commit) |
