@@ -21,7 +21,19 @@ From the AUR:
 yay -S aur-prefetch
 ```
 
-The package installs `/usr/bin/aur-prefetch` and the two user units in
+With cargo, if you would rather have the binary in `~/.cargo/bin`:
+
+```bash
+cargo install --git https://github.com/PremModhaOfficial/aur-prefetch --locked
+```
+
+Rust 1.85 or newer. `--locked` builds the exact dependency set in the committed
+`Cargo.lock`, and the `sim-hooks` feature stays off. This route installs only
+the binary; `aur-prefetch init --apply` then writes the user units with
+`ExecStart` pointing at that binary, because the unit generator uses the
+running executable's own path, and installs the sudoers rule.
+
+The AUR package installs `/usr/bin/aur-prefetch` and the two user units in
 `/usr/lib/systemd/user`. Enabling the timer is your call:
 
 ```bash
@@ -29,10 +41,10 @@ systemctl --user daemon-reload
 systemctl --user enable --now aur-prefetch.timer
 ```
 
-`pacman` is required; `aurto` and `yay` are optional and only used by the paths
-that need them. `aur-prefetch init --apply` is still the command that installs
-the exact `pacman -Syuw` sudoers rule through `visudo -c`. The `PKGBUILD` and
-its units live at the repo root and in `packaging/`.
+`pacman` is required either way; `aurto` and `yay` are optional and only used
+by the paths that need them. `aur-prefetch init --apply` is the command that
+installs the exact `pacman -Syuw` sudoers rule through `visudo -c`. The
+`PKGBUILD` and its units live at the repo root and in `packaging/`.
 
 ## Start here
 
