@@ -22,25 +22,11 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     lock::check(config, runner, "fetch")?;
 
     let pacman = path_str(&config.pacman)?;
-    let quiet = runner.run(pacman, &["-Qui"])?;
-    let (pending_bytes, pending_names) = if quiet.code == 0 {
-        parse_pending(&quiet.stdout)
-    } else {
-        eprintln!(
-            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
-            quiet.code
-        );
-        (0, Vec::new())
-    };
+    let (pending_bytes, pending_names) = pending_download(pacman, runner)?;
     let pending_count = pending_names.len() as u64;
 
     let cache_dir = resolve_cache_dir(config, runner)?;
-    let floor = if config.snapper_config_dir.is_dir() {
-        config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
-    } else {
-        config.min_free_bytes
-    };
-    let need = floor.saturating_add(pending_bytes.saturating_mul(2));
+    let need = space_floor(config, pending_bytes);
     check_space(runner, &cache_dir, need)?;
     if cache_dir != PathBuf::from("/") {
         check_space(runner, Path::new("/"), need)?;
@@ -83,6 +69,36 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
     state.save(&config.state_file)?;
     println!("fetch: ok");
     Ok(())
+}
+
+/// The free-space floor `fetch` and `check` both compare against, so the two
+/// commands cannot disagree about whether the next fetch will work. Snapshot
+/// configs raise the floor to 5 GiB, and the pending download is provisioned
+/// twice (download plus install).
+pub(crate) fn space_floor(config: &Config, pending_bytes: u64) -> u64 {
+    let floor = if config.snapper_config_dir.is_dir() {
+        config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
+    } else {
+        config.min_free_bytes
+    };
+    floor.saturating_add(pending_bytes.saturating_mul(2))
+}
+
+/// Pending download size and the names behind it. A query that cannot answer
+/// is a warning and the minimum floor, never a silent zero.
+pub(crate) fn pending_download(
+    pacman: &str,
+    runner: &dyn CommandRunner,
+) -> Result<(u64, Vec<String>), Error> {
+    let quiet = runner.run(pacman, &["-Qui"])?;
+    if quiet.code != 0 {
+        eprintln!(
+            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
+            quiet.code
+        );
+        return Ok((0, Vec::new()));
+    }
+    Ok(parse_pending(&quiet.stdout))
 }
 
 fn resolve_cache_dir(config: &Config, runner: &dyn CommandRunner) -> Result<PathBuf, Error> {
@@ -206,7 +222,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{parse_pending, run_with};
+    use super::{parse_pending, pending_download, run_with, space_floor};
     use crate::config::Config;
     use crate::error::Error;
     use crate::lock::PATTERN;
@@ -278,6 +294,53 @@ mod tests {
         assert_eq!(names, vec!["bash".to_string(), "linux".to_string()]);
         assert!(bytes > 140 * 1024 * 1024, "expected more than 140 MiB");
         assert!(bytes < 145 * 1024 * 1024, "expected less than 145 MiB");
+    }
+
+    #[test]
+    fn the_space_floor_raises_to_the_snapshot_floor_and_doubles_the_download() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        const MIB: u64 = 1024 * 1024;
+        const GIB: u64 = 1024 * MIB;
+
+        assert_eq!(space_floor(&config, 0), MIB, "no snapshots: the floor");
+        assert_eq!(space_floor(&config, 1000), MIB + 2000, "download twice");
+
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
+        assert_eq!(space_floor(&config, 0), 5 * GIB, "snapshots: 5 GiB");
+        assert_eq!(space_floor(&config, 1000), 5 * GIB + 2000);
+
+        assert_eq!(space_floor(&config, u64::MAX), u64::MAX, "never overflows");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_configured_floor_above_the_snapshot_floor_wins() {
+        let dir = temp_dir();
+        let mut config = test_config(&dir);
+        let eight_gib = 8 * 1024 * 1024 * 1024;
+        config.min_free_bytes = eight_gib;
+        fs::create_dir_all(&config.snapper_config_dir).expect("snapper config dir");
+
+        assert_eq!(space_floor(&config, 0), eight_gib);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unanswerable_qui_falls_back_to_the_floor_not_to_a_guess() {
+        let runner = FakeRunner::new();
+        let mut failed = ok("");
+        failed.code = 1;
+        runner.push_output(failed);
+
+        let (bytes, names) = pending_download("/usr/bin/pacman", &runner).expect("warning only");
+
+        assert_eq!(bytes, 0);
+        assert!(names.is_empty());
+
+        assert_eq!(runner.calls(), vec![call("/usr/bin/pacman", &["-Qui"])]);
     }
 
     #[test]
