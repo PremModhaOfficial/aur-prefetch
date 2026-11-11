@@ -1,6 +1,7 @@
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::Error;
 
@@ -63,12 +64,17 @@ impl State {
     }
 }
 
+/// A sibling temp name that belongs to this writer alone. The daily timer's
+/// `fetch` and a manual one can overlap; with one shared name the first rename
+/// wins and the second fails on a file that is already gone.
 fn temp_path(path: &Path) -> PathBuf {
+    static WRITERS: AtomicU64 = AtomicU64::new(0);
+    let id = WRITERS.fetch_add(1, Ordering::Relaxed);
     let mut name = path
         .file_name()
         .map(|name| name.to_os_string())
         .unwrap_or_else(|| "state.json".into());
-    name.push(".tmp");
+    name.push(format!(".{}.{id}.tmp", std::process::id()));
     path.with_file_name(name)
 }
 
@@ -104,10 +110,11 @@ fn json_number(value: Option<u64>) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Barrier};
 
-    use super::State;
+    use super::{State, temp_path};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -183,6 +190,53 @@ mod tests {
             .map(|entry| entry.expect("entry").file_name())
             .collect();
         assert_eq!(names, vec![std::ffi::OsString::from("state.json")]);
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn two_writes_never_share_a_temp_name() {
+        let path = Path::new("/tmp/state.json");
+
+        assert_ne!(temp_path(path), temp_path(path));
+    }
+
+    #[test]
+    fn two_writers_can_save_the_same_path_at_once() {
+        let dir = temp_dir();
+        let target = dir.join("state.json");
+        let barrier = Arc::new(Barrier::new(2));
+
+        let writers: Vec<_> = (0..2)
+            .map(|n| {
+                let target = target.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..200 {
+                        State {
+                            last_fetch_unix: Some(n + 1),
+                            ..State::default()
+                        }
+                        .save(&target)
+                        .expect("a concurrent writer must not fail");
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().expect("writer thread");
+        }
+
+        let names: Vec<_> = fs::read_dir(&dir)
+            .expect("read dir")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("state.json")]);
+        assert!(
+            State::load(&target).is_ok(),
+            "the target must stay readable"
+        );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

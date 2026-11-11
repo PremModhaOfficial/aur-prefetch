@@ -64,11 +64,39 @@ pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error
         )));
     }
 
-    state.last_fetch_unix = Some(now_unix()?);
-    state.last_fetch_pending = Some(pending_count);
-    state.save(&config.state_file)?;
+    if let Some(warning) = record_success(&mut state, config, pending_count, now_unix()) {
+        eprintln!("fetch: warning: {warning}");
+    }
     println!("fetch: ok");
     Ok(())
+}
+
+/// Record a completed fetch. Returns a warning instead of failing the command:
+/// the packages downloaded, so an unwritable state file must not turn a success
+/// into exit 2. `install` makes the same call for the same reason.
+fn record_success(
+    state: &mut State,
+    config: &Config,
+    pending_count: u64,
+    now: Result<u64, Error>,
+) -> Option<String> {
+    let time = match now {
+        Ok(time) => time,
+        Err(err) => {
+            return Some(format!(
+                "the download finished but the fetch time was not recorded: {err}"
+            ));
+        }
+    };
+
+    state.last_fetch_unix = Some(time);
+    state.last_fetch_pending = Some(pending_count);
+    state.save(&config.state_file).err().map(|err| {
+        format!(
+            "the download finished but {} was not updated: {err}",
+            config.state_file.display()
+        )
+    })
 }
 
 /// The free-space floor `fetch` and `check` both compare against, so the two
@@ -222,7 +250,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use super::{parse_pending, pending_download, run_with, space_floor};
+    use super::{parse_pending, pending_download, record_success, run_with, space_floor};
     use crate::config::Config;
     use crate::error::Error;
     use crate::lock::PATTERN;
@@ -476,6 +504,66 @@ mod tests {
             calls.last(),
             Some(&call("/usr/bin/pacman", &["-Syuw", "--noconfirm"]))
         );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_state_save_failure_does_not_turn_a_successful_fetch_into_an_error() {
+        let dir = temp_dir();
+        let mut config = test_config(&dir);
+        // /proc/self accepts reads but not file creation, so load sees a
+        // missing state and save fails without relying on test permissions.
+        config.state_file = PathBuf::from("/proc/self/aur-prefetch-state.json");
+        let runner = FakeRunner::new();
+        runner.push_output(none_running());
+        runner.push_output(ok(QUI));
+        runner.push_output(ok("/var/cache/pacman/pkg/\n"));
+        runner.push_output(ok(HIGH));
+        runner.push_output(ok(HIGH));
+        runner.push_output(ok("1000\n"));
+        runner.push_output(ok(""));
+
+        run_with(&config, &runner)
+            .expect("a completed download must succeed even if state cannot be saved");
+        assert_eq!(runner.calls().len(), 7, "the download still ran");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn record_success_names_the_state_path_when_saving_fails() {
+        let dir = temp_dir();
+        let mut config = test_config(&dir);
+        config.state_file = PathBuf::from("/proc/self/aur-prefetch-state.json");
+        let mut state = State::default();
+
+        let warning = record_success(&mut state, &config, 2, Ok(42))
+            .expect("the save error must become a warning");
+
+        assert!(warning.contains("not updated"), "warning was: {warning}");
+        assert_eq!(state.last_fetch_unix, Some(42));
+        assert_eq!(state.last_fetch_pending, Some(2));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_clock_error_after_fetch_is_a_warning_not_an_error() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let mut state = State::default();
+
+        let warning = record_success(
+            &mut state,
+            &config,
+            2,
+            Err(Error::failed("system clock is before the epoch")),
+        )
+        .expect("the clock error must become a warning");
+
+        assert!(warning.contains("not recorded"), "warning was: {warning}");
+        assert_eq!(state.last_fetch_unix, None);
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
