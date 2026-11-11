@@ -1070,6 +1070,13 @@ fn header_lines(
         ),
     };
 
+    // A tree that failed to build (an unrooted cycle) draws only the error
+    // line in the body. No graph title here, for the same reason the fatal
+    // path skips one: it would name a graph the frame does not draw.
+    if matches!(tree, Some(Err(_))) {
+        return vec![Line::styled(cell_text(&header, width, ascii), bold())];
+    }
+
     let (shown_roots, total_roots, hidden) = match window {
         Some(window) => (window.shown_roots, window.total_roots, window.hidden),
         None => {
@@ -5489,6 +5496,10 @@ mod tests {
         assert!(
             !frame.contains("┌─"),
             "no tree is drawn for a cycle\n{frame}"
+        );
+        assert!(
+            !frame.contains("Dependency Graph"),
+            "a cycle frame claims no graph:\n{frame}"
         );
     }
 
