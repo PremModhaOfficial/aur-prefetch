@@ -282,3 +282,4 @@ tables above. Accepted and fixed, one commit each:
 | a nonzero fetch exit failed only the alphabetically-first running node; the rest stayed `Running` in a frozen graph | should | (this commit) |
 | a fatal snapshot header printed `0 pending` derived from uncollected `official`/`aur` sections | should | (this commit) |
 | `draw_with` kept a second clipping pass that re-derived the body budget independently of `plan_frame` | should | (this commit) |
+| `tree_row_budget` was dead in production, referenced only by its own test | nit | (this commit) |

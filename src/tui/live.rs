@@ -23,13 +23,6 @@ use super::tree::{RowId, Tree, TreeRow, TreeRowKind};
 /// Nom shows `⏱` only after this point; exactly one second stays hidden.
 pub const TIMER_FLOOR: Duration = Duration::from_secs(1);
 
-/// Nom's tree viewport: roughly a third of the terminal, never zero. The
-/// header and footer are outside this budget, and the summary is added after
-/// it.
-pub fn tree_row_budget(height: u16) -> usize {
-    (height as usize / 3).max(1)
-}
-
 /// What a running node is doing. Missing means the observation did not prove
 /// it; the row then stays a plain active glyph instead of claiming a kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1024,7 +1017,7 @@ mod tests {
 
     use super::{
         Activity, GroupCounts, LiveRun, LiveState, LiveView, Progress, Selection, Waiting,
-        WindowSlot, timer_label, tree_row_budget,
+        WindowSlot, timer_label,
     };
     use crate::frontier::{NodeState, Observed};
     use crate::report::{ArtifactState, PackageView, Repo};
@@ -2054,12 +2047,5 @@ mod tests {
         assert_eq!(names.len(), 3, "mandatory rows alone filled the budget");
         assert_eq!(window.shown_roots, 1, "only a-top is a shown root");
         assert_eq!(window.total_roots, 12);
-    }
-
-    #[test]
-    fn the_tree_budget_is_a_third_of_the_screen() {
-        assert_eq!(tree_row_budget(40), 13);
-        assert_eq!(tree_row_budget(24), 8);
-        assert_eq!(tree_row_budget(0), 1);
     }
 }
