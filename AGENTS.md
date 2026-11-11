@@ -52,6 +52,26 @@ state and the first concrete move.
 - `README.md` updated when a command, flag, or path changes.
 - The matching `NEXT.md` checkbox is ticked in the same commit.
 
+## Agent non-interactive rules
+
+A command waiting for input hangs a session that has no keyboard, and the hang is
+silent: no output, no error, no exit. Three hours have been lost to this twice.
+
+1. Source `scripts/agent-env.sh` before any command that could open an editor or
+   a pager: `GIT_EDITOR=true`, `GIT_SEQUENCE_EDITOR=true`,
+   `GIT_TERMINAL_PROMPT=0`, `PAGER=cat` and friends.
+2. Close stdin: `command </dev/null`. A heredoc whose terminator is missing then
+   fails at once instead of reading forever.
+3. Put a timeout on anything that can block: `timeout 600 <command>`.
+4. Never open a heredoc (`cat > f <<EOF`) unless the terminator is in the same
+   command you send. Prefer the file-write tool.
+5. Commit as soon as something passes. An uncommitted hour disappears with the
+   hang.
+6. Prefer a merge over an interactive rebase: one conflict resolution, no editor
+   per commit.
+7. A delegate whose last activity is more than 15 minutes old is hung, not
+   thinking. Check it; do not wait longer.
+
 ## Honesty rules
 
 - Never turn a gate into a silent skip that still prints success. If a check
