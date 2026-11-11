@@ -673,6 +673,7 @@ mod tests {
             ("AUR_PREFETCH_PACMAN_LOG", dir.join("pacman.log")),
             ("AUR_PREFETCH_YAY_CACHE_DIR", dir.join("yay")),
             ("AUR_PREFETCH_TRUSTED_USERS", dir.join("trusted-users")),
+            ("AUR_PREFETCH_SNAPPER_CONFIG_DIR", dir.join("snapper")),
         ] {
             map.insert(key.to_string(), value.to_string_lossy().into_owned());
         }
