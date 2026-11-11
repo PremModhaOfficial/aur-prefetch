@@ -1,86 +1,189 @@
+use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::config::Config;
 use crate::error::Error;
+use crate::report::{Check, DoctorReport, Verdict};
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::util::{human_bytes, resolve_cache_dir};
 
-pub fn run() -> Result<(), Error> {
+pub fn run(json: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
-    run_with(&config, &SystemRunner)
+    run_with_options(&config, &SystemRunner, json)
 }
 
 /// Read-only setup audit.
 pub fn run_with(config: &Config, runner: &dyn CommandRunner) -> Result<(), Error> {
+    run_with_options(config, runner, false)
+}
+
+pub fn run_with_options(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    json: bool,
+) -> Result<(), Error> {
+    let mut report = DoctorReport::default();
     let mut problems = 0u32;
+    let outcome = collect(config, runner, &mut report, &mut problems);
 
-    let timers = runner.run("systemctl", &["--user", "list-timers"])?;
-    let timer_scheduled =
-        timers.code == 0 && timer_is_scheduled(&timers.stdout, "aur-prefetch.timer");
-    if timer_scheduled {
-        println!("doctor: timer: scheduled");
+    if json {
+        let error = outcome.as_ref().err().map(ToString::to_string);
+        println!(
+            "{}",
+            crate::json::doctor(&report, problems, error.as_deref())?
+        );
     } else {
-        println!("doctor: timer: not scheduled");
-        problems += 1;
+        // A collection error keeps every line collected before it, exactly as
+        // the per-line printing did.
+        let mut text = render_text(&report);
+        if outcome.is_ok() {
+            text.push_str(&render_summary(problems));
+        }
+        print!("{text}");
     }
 
-    problems += report_sudoers(config, runner)?;
-    problems += report_trust(config)?;
-    problems += report_repo(config)?;
-    let cache_dir = resolve_cache_dir(config, runner)?;
-    problems += report_cache_dir(runner, &cache_dir)?;
-    problems += report_journald(config)?;
-    problems += report_snapper(config, runner)?;
-    if cache_dir.exists() {
-        problems += report_disk(runner, &cache_dir, config.min_free_bytes)?;
-    }
-    // The root floor still matters when the configured CacheDir is missing.
-    if cache_dir != PathBuf::from("/") {
-        problems += report_disk(runner, Path::new("/"), config.min_free_bytes)?;
-    }
-
-    if problems == 0 {
-        println!("doctor: ok");
-        Ok(())
-    } else {
-        println!("doctor: action needed ({problems} problem(s))");
-        Err(Error::blocked(format!("{problems} setup problem(s)")))
+    match outcome {
+        Ok(()) if problems == 0 => Ok(()),
+        Ok(()) => Err(Error::blocked(format!("{problems} setup problem(s)"))),
+        Err(error) => Err(error),
     }
 }
 
-fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
+fn collect(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    report: &mut DoctorReport,
+    problems: &mut u32,
+) -> Result<(), Error> {
+    let timers = runner.run("systemctl", &["--user", "list-timers"])?;
+    if timers.code == 0 && timer_is_scheduled(&timers.stdout, "aur-prefetch.timer") {
+        record(report, "timer", Verdict::Ok, "scheduled".to_string());
+    } else {
+        record(
+            report,
+            "timer",
+            Verdict::Blocked,
+            "not scheduled".to_string(),
+        );
+        *problems += 1;
+    }
+
+    *problems += report_sudoers(config, runner, report)?;
+    *problems += report_trust(config, report)?;
+    *problems += report_repo(config, report)?;
+    let cache_dir = resolve_cache_dir(config, runner)?;
+    *problems += report_cache_dir(runner, &cache_dir, report)?;
+    *problems += report_journald(config, report)?;
+    *problems += report_snapper(config, runner, report)?;
+    if cache_dir.exists() {
+        *problems += report_disk(runner, &cache_dir, config.min_free_bytes, report)?;
+    }
+    // The root floor still matters when the configured CacheDir is missing.
+    if cache_dir != PathBuf::from("/") {
+        *problems += report_disk(runner, Path::new("/"), config.min_free_bytes, report)?;
+    }
+    Ok(())
+}
+
+fn record(report: &mut DoctorReport, id: &'static str, verdict: Verdict, detail: String) {
+    report.checks.push(Check {
+        id,
+        label: id.to_string(),
+        verdict,
+        detail,
+        fix: None,
+    });
+}
+
+/// Every text line is `doctor: {label}: {detail}`, so a label wider than the
+/// id (a disk path) still renders from the same record.
+fn record_label(
+    report: &mut DoctorReport,
+    id: &'static str,
+    label: String,
+    verdict: Verdict,
+    detail: String,
+) {
+    report.checks.push(Check {
+        id,
+        label,
+        verdict,
+        detail,
+        fix: None,
+    });
+}
+
+pub fn render_text(report: &DoctorReport) -> String {
+    let mut out = String::new();
+    for check in &report.checks {
+        writeln!(out, "doctor: {}: {}", check.label, check.detail)
+            .expect("writing to a String cannot fail");
+    }
+    out
+}
+
+fn render_summary(problems: u32) -> String {
+    if problems == 0 {
+        "doctor: ok\n".to_string()
+    } else {
+        format!("doctor: action needed ({problems} problem(s))\n")
+    }
+}
+
+fn report_sudoers(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    report: &mut DoctorReport,
+) -> Result<u32, Error> {
     match fs::read_to_string(&config.sudoers_file) {
         Ok(text) => match current_user(runner)? {
             Some(user) if sudoers_rule_ok(&text, &user, &config.pacman) => {
-                println!("doctor: sudoers: exact rule present for {user}");
+                record(
+                    report,
+                    "sudoers",
+                    Verdict::Ok,
+                    format!("exact rule present for {user}"),
+                );
                 Ok(0)
             }
             Some(user) => {
-                println!(
-                    "doctor: sudoers: {} has no exact pacman -Syuw rule for {user}",
-                    config.sudoers_file.display()
+                record(
+                    report,
+                    "sudoers",
+                    Verdict::Blocked,
+                    format!(
+                        "{} has no exact pacman -Syuw rule for {user}",
+                        config.sudoers_file.display()
+                    ),
                 );
                 Ok(1)
             }
             None => {
-                println!(
-                    "doctor: sudoers: cannot determine the current user to verify {}",
-                    config.sudoers_file.display()
+                record(
+                    report,
+                    "sudoers",
+                    Verdict::Blocked,
+                    format!(
+                        "cannot determine the current user to verify {}",
+                        config.sudoers_file.display()
+                    ),
                 );
                 Ok(1)
             }
         },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!(
-                "doctor: sudoers: {} is missing",
-                config.sudoers_file.display()
+            record(
+                report,
+                "sudoers",
+                Verdict::Blocked,
+                format!("{} is missing", config.sudoers_file.display()),
             );
             Ok(1)
         }
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-            report_sudoers_unreadable(config, runner)
+            report_sudoers_unreadable(config, runner, report)
         }
         Err(err) => Err(Error::failed(format!(
             "cannot read {}: {err}",
@@ -89,22 +192,28 @@ fn report_sudoers(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
     }
 }
 
-fn report_sudoers_unreadable(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
+fn report_sudoers_unreadable(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    report: &mut DoctorReport,
+) -> Result<u32, Error> {
     // A correct rule is a root-owned 0440 file. Check the file's shape before
     // trusting `sudo -l`, which cannot say which file granted the command.
     let meta = match fs::metadata(&config.sudoers_file) {
         Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!(
-                "doctor: sudoers: {} is missing",
-                config.sudoers_file.display()
+            record(
+                report,
+                "sudoers",
+                Verdict::Blocked,
+                format!("{} is missing", config.sudoers_file.display()),
             );
             return Ok(1);
         }
         Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
             // The parent directory is root-only, so even stat is unavailable.
             // sudo -l is the only signal left; do not claim the source.
-            return report_sudoers_via_sudo(config, runner, false);
+            return report_sudoers_via_sudo(config, runner, report, false);
         }
         Err(err) => {
             return Err(Error::failed(format!(
@@ -115,39 +224,56 @@ fn report_sudoers_unreadable(config: &Config, runner: &dyn CommandRunner) -> Res
     };
     let mode = meta.permissions().mode() & 0o777;
     if !meta.is_file() || meta.uid() != 0 || mode != 0o440 {
-        println!(
-            "doctor: sudoers: {} is not a root-owned 0440 file (mode {mode:o}, uid {})",
-            config.sudoers_file.display(),
-            meta.uid()
+        record(
+            report,
+            "sudoers",
+            Verdict::Blocked,
+            format!(
+                "{} is not a root-owned 0440 file (mode {mode:o}, uid {})",
+                config.sudoers_file.display(),
+                meta.uid()
+            ),
         );
         return Ok(1);
     }
 
-    report_sudoers_via_sudo(config, runner, true)
+    report_sudoers_via_sudo(config, runner, report, true)
 }
 
 fn report_sudoers_via_sudo(
     config: &Config,
     runner: &dyn CommandRunner,
+    report: &mut DoctorReport,
     source_checked: bool,
 ) -> Result<u32, Error> {
     match runner.run("sudo", &["-n", "-l"]) {
         Ok(output) if output.code == 0 && sudo_list_ok(&output.stdout, &config.pacman) => {
             if source_checked {
-                println!(
-                    "doctor: sudoers: exact rule present (root-owned 0440 file; sudo -l matches)"
+                record(
+                    report,
+                    "sudoers",
+                    Verdict::Ok,
+                    "exact rule present (root-owned 0440 file; sudo -l matches)".to_string(),
                 );
             } else {
-                println!(
-                    "doctor: sudoers: exact rule present (sudo -l matches; file source unverified)"
+                record(
+                    report,
+                    "sudoers",
+                    Verdict::Ok,
+                    "exact rule present (sudo -l matches; file source unverified)".to_string(),
                 );
             }
             Ok(0)
         }
         _ => {
-            println!(
-                "doctor: sudoers: {} is unreadable and sudo -l could not verify it",
-                config.sudoers_file.display()
+            record(
+                report,
+                "sudoers",
+                Verdict::Blocked,
+                format!(
+                    "{} is unreadable and sudo -l could not verify it",
+                    config.sudoers_file.display()
+                ),
             );
             Ok(1)
         }
@@ -228,7 +354,7 @@ fn current_user(runner: &dyn CommandRunner) -> Result<Option<String>, Error> {
     }
 }
 
-fn report_trust(config: &Config) -> Result<u32, Error> {
+fn report_trust(config: &Config, report: &mut DoctorReport) -> Result<u32, Error> {
     match fs::read_to_string(&config.trusted_users) {
         Ok(text) => {
             let count = text
@@ -239,15 +365,30 @@ fn report_trust(config: &Config) -> Result<u32, Error> {
                 })
                 .count();
             if count == 0 {
-                println!("doctor: trust: empty (trusts no one)");
+                record(
+                    report,
+                    "trust",
+                    Verdict::Blocked,
+                    "empty (trusts no one)".to_string(),
+                );
                 Ok(1)
             } else {
-                println!("doctor: trust: {count} maintainer(s)");
+                record(
+                    report,
+                    "trust",
+                    Verdict::Ok,
+                    format!("{count} maintainer(s)"),
+                );
                 Ok(0)
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!("doctor: trust: missing (aurto trusts everyone)");
+            record(
+                report,
+                "trust",
+                Verdict::Blocked,
+                "missing (aurto trusts everyone)".to_string(),
+            );
             Ok(1)
         }
         Err(err) => Err(Error::failed(format!(
@@ -257,7 +398,7 @@ fn report_trust(config: &Config) -> Result<u32, Error> {
     }
 }
 
-fn report_repo(config: &Config) -> Result<u32, Error> {
+fn report_repo(config: &Config, report: &mut DoctorReport) -> Result<u32, Error> {
     match fs::read_to_string(&config.pacman_conf) {
         Ok(text) => {
             let include = text.lines().find_map(|line| {
@@ -269,25 +410,45 @@ fn report_repo(config: &Config) -> Result<u32, Error> {
                 (path.file_name() == Some(std::ffi::OsStr::new("aurto"))).then_some(path)
             });
             let Some(include) = include else {
-                println!(
-                    "doctor: repo: {} does not include an aurto file",
-                    config.pacman_conf.display()
+                record(
+                    report,
+                    "repo",
+                    Verdict::Blocked,
+                    format!(
+                        "{} does not include an aurto file",
+                        config.pacman_conf.display()
+                    ),
                 );
                 return Ok(1);
             };
 
             match fs::metadata(&include) {
                 Ok(meta) if !meta.is_file() => {
-                    println!("doctor: repo: {} is not a file", include.display());
+                    record(
+                        report,
+                        "repo",
+                        Verdict::Blocked,
+                        format!("{} is not a file", include.display()),
+                    );
                     Ok(1)
                 }
                 Ok(_) => match fs::File::open(&include) {
                     Ok(_) => {
-                        println!("doctor: repo: aurto include present");
+                        record(
+                            report,
+                            "repo",
+                            Verdict::Ok,
+                            "aurto include present".to_string(),
+                        );
                         Ok(0)
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
-                        println!("doctor: repo: {} is not readable", include.display());
+                        record(
+                            report,
+                            "repo",
+                            Verdict::Blocked,
+                            format!("{} is not readable", include.display()),
+                        );
                         Ok(1)
                     }
                     Err(err) => Err(Error::failed(format!(
@@ -296,10 +457,15 @@ fn report_repo(config: &Config) -> Result<u32, Error> {
                     ))),
                 },
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    println!(
-                        "doctor: repo: {} is missing (included by {})",
-                        include.display(),
-                        config.pacman_conf.display()
+                    record(
+                        report,
+                        "repo",
+                        Verdict::Blocked,
+                        format!(
+                            "{} is missing (included by {})",
+                            include.display(),
+                            config.pacman_conf.display()
+                        ),
                     );
                     Ok(1)
                 }
@@ -310,7 +476,12 @@ fn report_repo(config: &Config) -> Result<u32, Error> {
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!("doctor: repo: {} is missing", config.pacman_conf.display());
+            record(
+                report,
+                "repo",
+                Verdict::Blocked,
+                format!("{} is missing", config.pacman_conf.display()),
+            );
             Ok(1)
         }
         Err(err) => Err(Error::failed(format!(
@@ -320,15 +491,29 @@ fn report_repo(config: &Config) -> Result<u32, Error> {
     }
 }
 
-fn report_cache_dir(runner: &dyn CommandRunner, cache: &Path) -> Result<u32, Error> {
+fn report_cache_dir(
+    runner: &dyn CommandRunner,
+    cache: &Path,
+    report: &mut DoctorReport,
+) -> Result<u32, Error> {
     let meta = match fs::metadata(cache) {
         Ok(meta) if meta.is_dir() => meta,
         Ok(_) => {
-            println!("doctor: cache: {} is not a directory", cache.display());
+            record(
+                report,
+                "cache",
+                Verdict::Blocked,
+                format!("{} is not a directory", cache.display()),
+            );
             return Ok(1);
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!("doctor: cache: {} is missing", cache.display());
+            record(
+                report,
+                "cache",
+                Verdict::Blocked,
+                format!("{} is missing", cache.display()),
+            );
             return Ok(1);
         }
         Err(err) => {
@@ -341,9 +526,11 @@ fn report_cache_dir(runner: &dyn CommandRunner, cache: &Path) -> Result<u32, Err
 
     let mode = meta.permissions().mode() & 0o777;
     if mode & 0o222 == 0 {
-        println!(
-            "doctor: cache: {} has mode {mode:o} and no write bit",
-            cache.display()
+        record(
+            report,
+            "cache",
+            Verdict::Blocked,
+            format!("{} has mode {mode:o} and no write bit", cache.display()),
         );
         return Ok(1);
     }
@@ -351,23 +538,35 @@ fn report_cache_dir(runner: &dyn CommandRunner, cache: &Path) -> Result<u32, Err
     match alpm_identity(runner)? {
         Some((uid, gids)) => {
             if cache_writable_by(cache, uid, &gids)? {
-                println!(
-                    "doctor: cache: {} is writable by alpm (mode {mode:o})",
-                    cache.display()
+                record(
+                    report,
+                    "cache",
+                    Verdict::Ok,
+                    format!("{} is writable by alpm (mode {mode:o})", cache.display()),
                 );
                 Ok(0)
             } else {
-                println!(
-                    "doctor: cache: {} is not writable by alpm (mode {mode:o})",
-                    cache.display()
+                record(
+                    report,
+                    "cache",
+                    Verdict::Blocked,
+                    format!(
+                        "{} is not writable by alpm (mode {mode:o})",
+                        cache.display()
+                    ),
                 );
                 Ok(1)
             }
         }
         None => {
-            println!(
-                "doctor: cache: {} exists (mode {mode:o}); no alpm user to verify writability",
-                cache.display()
+            record(
+                report,
+                "cache",
+                Verdict::Blocked,
+                format!(
+                    "{} exists (mode {mode:o}); no alpm user to verify writability",
+                    cache.display()
+                ),
             );
             Ok(1)
         }
@@ -437,12 +636,14 @@ fn identity_can(
     bits & needed == needed
 }
 
-fn report_journald(config: &Config) -> Result<u32, Error> {
+fn report_journald(config: &Config, report: &mut DoctorReport) -> Result<u32, Error> {
     let files = journald_files(&config.journald_conf)?;
     if files.is_empty() {
-        println!(
-            "doctor: journald: {} is missing",
-            config.journald_conf.display()
+        record(
+            report,
+            "journald",
+            Verdict::Blocked,
+            format!("{} is missing", config.journald_conf.display()),
         );
         return Ok(1);
     }
@@ -454,15 +655,35 @@ fn report_journald(config: &Config) -> Result<u32, Error> {
 
     let mut problems = 0;
     if settings.persistent() {
-        println!("doctor: journald: Storage=persistent");
+        record(
+            report,
+            "journald",
+            Verdict::Ok,
+            "Storage=persistent".to_string(),
+        );
     } else {
-        println!("doctor: journald: Storage is not persistent");
+        record(
+            report,
+            "journald",
+            Verdict::Blocked,
+            "Storage is not persistent".to_string(),
+        );
         problems += 1;
     }
     if settings.capped() {
-        println!("doctor: journald: a size cap is set");
+        record(
+            report,
+            "journald",
+            Verdict::Ok,
+            "a size cap is set".to_string(),
+        );
     } else {
-        println!("doctor: journald: no size cap");
+        record(
+            report,
+            "journald",
+            Verdict::Blocked,
+            "no size cap".to_string(),
+        );
         problems += 1;
     }
     Ok(problems)
@@ -559,10 +780,19 @@ impl JournaldSettings {
     }
 }
 
-fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Error> {
+fn report_snapper(
+    config: &Config,
+    runner: &dyn CommandRunner,
+    report: &mut DoctorReport,
+) -> Result<u32, Error> {
     let installed = matches!(runner.run("snapper", &["--version"]), Ok(output) if output.code == 0);
     if !installed {
-        println!("doctor: snapper: not installed");
+        record(
+            report,
+            "snapper",
+            Verdict::Skipped,
+            "not installed".to_string(),
+        );
         return Ok(0);
     }
 
@@ -572,9 +802,19 @@ fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
         .iter()
         .all(|name| timer_is_scheduled(&system_timers.stdout, name));
     if timers_ok {
-        println!("doctor: snapper: timers scheduled");
+        record(
+            report,
+            "snapper",
+            Verdict::Ok,
+            "timers scheduled".to_string(),
+        );
     } else {
-        println!("doctor: snapper: timers missing");
+        record(
+            report,
+            "snapper",
+            Verdict::Blocked,
+            "timers missing".to_string(),
+        );
         problems += 1;
     }
 
@@ -585,14 +825,29 @@ fn report_snapper(config: &Config, runner: &dyn CommandRunner) -> Result<u32, Er
                 .iter()
                 .all(|key| snapper_limit_is_range(&text, key));
             if ranges {
-                println!("doctor: snapper: limits are ranges");
+                record(
+                    report,
+                    "snapper",
+                    Verdict::Ok,
+                    "limits are ranges".to_string(),
+                );
             } else {
-                println!("doctor: snapper: SPACE_LIMIT and FREE_LIMIT must be ranges");
+                record(
+                    report,
+                    "snapper",
+                    Verdict::Blocked,
+                    "SPACE_LIMIT and FREE_LIMIT must be ranges".to_string(),
+                );
                 problems += 1;
             }
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!("doctor: snapper: {} is missing", root.display());
+            record(
+                report,
+                "snapper",
+                Verdict::Blocked,
+                format!("{} is missing", root.display()),
+            );
             problems += 1;
         }
         Err(err) => {
@@ -623,7 +878,12 @@ fn timer_is_scheduled(text: &str, name: &str) -> bool {
     })
 }
 
-fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<u32, Error> {
+fn report_disk(
+    runner: &dyn CommandRunner,
+    path: &Path,
+    floor: u64,
+    report: &mut DoctorReport,
+) -> Result<u32, Error> {
     let label = crate::util::path_str(path)?;
     let output = runner.run("df", &["-B1", "--output=avail", label])?;
     if output.code != 0 {
@@ -640,15 +900,28 @@ fn report_disk(runner: &dyn CommandRunner, path: &Path, floor: u64) -> Result<u3
         .find_map(|line| line.trim().parse::<u64>().ok())
         .ok_or_else(|| Error::failed(format!("cannot parse df output for {label}")))?;
 
+    let display = format!("disk {label}");
     if available < floor {
-        println!(
-            "doctor: disk {label}: {} free, below the {} floor",
-            human_bytes(available),
-            human_bytes(floor)
+        record_label(
+            report,
+            "disk",
+            display,
+            Verdict::Blocked,
+            format!(
+                "{} free, below the {} floor",
+                human_bytes(available),
+                human_bytes(floor)
+            ),
         );
         Ok(1)
     } else {
-        println!("doctor: disk {label}: {} free", human_bytes(available));
+        record_label(
+            report,
+            "disk",
+            display,
+            Verdict::Ok,
+            format!("{} free", human_bytes(available)),
+        );
         Ok(0)
     }
 }
@@ -662,12 +935,13 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        JournaldSettings, cache_writable_by, identity_can, report_journald, report_snapper,
-        report_sudoers_via_sudo, run_with, snapper_limit_is_range, sudo_list_ok, sudoers_rule_ok,
-        timer_is_scheduled,
+        JournaldSettings, cache_writable_by, identity_can, render_summary, render_text,
+        report_journald, report_snapper, report_sudoers_via_sudo, run_with, snapper_limit_is_range,
+        sudo_list_ok, sudoers_rule_ok, timer_is_scheduled,
     };
     use crate::config::Config;
     use crate::error::Error;
+    use crate::report::DoctorReport;
     use crate::runner::{CommandOutput, FakeRunner};
 
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -883,7 +1157,8 @@ mod tests {
         ));
 
         assert_eq!(
-            report_sudoers_via_sudo(&config, &runner, false).expect("sudo fallback"),
+            report_sudoers_via_sudo(&config, &runner, &mut DoctorReport::default(), false)
+                .expect("sudo fallback"),
             0
         );
 
@@ -1112,7 +1387,7 @@ mod tests {
             "n/a n/a snapper-timeline.timer\nn/a n/a snapper-cleanup.timer\n",
         ));
         assert_eq!(
-            report_snapper(&config, &runner).expect("snapper"),
+            report_snapper(&config, &runner, &mut DoctorReport::default()).expect("snapper"),
             1,
             "inactive snapper timers must not pass"
         );
@@ -1123,7 +1398,7 @@ mod tests {
             "Tue 2026-11-11 00:00:00 UTC snapper-timeline.timer\nTue 2026-11-11 00:00:00 UTC snapper-cleanup.timer\n",
         ));
         assert_eq!(
-            report_snapper(&config, &runner).expect("snapper"),
+            report_snapper(&config, &runner, &mut DoctorReport::default()).expect("snapper"),
             0,
             "active snapper timers pass"
         );
@@ -1139,7 +1414,7 @@ mod tests {
         let runner = FakeRunner::new();
 
         assert!(matches!(
-            report_snapper(&config, &runner),
+            report_snapper(&config, &runner, &mut DoctorReport::default()),
             Err(Error::Failed(_))
         ));
 
@@ -1164,7 +1439,7 @@ mod tests {
         .expect("drop-in");
 
         assert_eq!(
-            report_journald(&config).expect("journald"),
+            report_journald(&config, &mut DoctorReport::default()).expect("journald"),
             0,
             "the drop-in sets persistence and the cap"
         );
@@ -1209,5 +1484,103 @@ mod tests {
         assert!(identity_can(0o775, 979, 979, 979, &[979], true));
         // 0757, alpm reaches it through other.
         assert!(identity_can(0o757, 0, 0, 979, &[979], true));
+    }
+
+    fn doctor_text(config: &Config, runner: &FakeRunner, dir: &Path) -> String {
+        let mut report = DoctorReport::default();
+        let mut problems = 0;
+        super::collect(config, runner, &mut report, &mut problems).expect("collect");
+        format!("{}{}", render_text(&report), render_summary(problems))
+            .replace(&dir.to_string_lossy().into_owned(), "DIR")
+    }
+
+    #[test]
+    fn complete_setup_text_is_frozen() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+        let runner = FakeRunner::new();
+        queue_happy(&runner, &dir, "alice", "10737418240\n");
+
+        assert_eq!(
+            doctor_text(&config, &runner, &dir),
+            "\
+doctor: timer: scheduled
+doctor: sudoers: exact rule present for alice
+doctor: trust: 1 maintainer(s)
+doctor: repo: aurto include present
+doctor: cache: DIR/cache is writable by alpm (mode 755)
+doctor: journald: Storage=persistent
+doctor: journald: a size cap is set
+doctor: snapper: not installed
+doctor: disk DIR/cache: 10.0 GiB free
+doctor: disk /: 10.0 GiB free
+doctor: ok
+"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn an_unconfigured_setup_text_is_frozen() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let runner = FakeRunner::new();
+        runner.push_output(ok(""));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        let mut not_installed = ok("");
+        not_installed.code = 1;
+        runner.push_output(not_installed);
+        runner.push_output(ok("10737418240\n"));
+        runner.push_output(ok("10737418240\n"));
+
+        assert_eq!(
+            doctor_text(&config, &runner, &dir),
+            "\
+doctor: timer: not scheduled
+doctor: sudoers: DIR/sudoers is missing
+doctor: trust: missing (aurto trusts everyone)
+doctor: repo: DIR/pacman.conf is missing
+doctor: cache: DIR/cache is missing
+doctor: journald: DIR/journald.conf is missing
+doctor: snapper: not installed
+doctor: disk /: 10.0 GiB free
+doctor: action needed (6 problem(s))
+"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_collection_error_keeps_the_lines_collected_before_it() {
+        // The snapper root config is a directory, so the read fails after the
+        // timer, sudoers, trust, repo, cache and journald lines.
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        fs::create_dir_all(config.snapper_config_dir.join("root")).expect("root dir");
+        let runner = FakeRunner::new();
+        runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
+        runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
+        runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(
+            "Tue 2026-11-11 00:00:00 UTC snapper-timeline.timer\nTue 2026-11-11 00:00:00 UTC snapper-cleanup.timer\n",
+        ));
+
+        let mut report = DoctorReport::default();
+        let mut problems = 0;
+        let result = super::collect(&config, &runner, &mut report, &mut problems);
+
+        assert!(matches!(result, Err(Error::Failed(_))));
+        let text = render_text(&report);
+        assert!(text.contains("doctor: timer: scheduled"), "{text}");
+        assert!(text.contains("doctor: snapper: timers scheduled"), "{text}");
+        assert!(
+            !text.contains("action needed"),
+            "an execution error must not print a verdict: {text}"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 }

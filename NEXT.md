@@ -265,11 +265,11 @@ A container cannot test snapshots or boot.
 
 ## Phase 6: packaging and release
 
-- [ ] `PKGBUILD` for the AUR, depends on `pacman`, optional `aurto`, `yay`.
-- [ ] Install the binary to `/usr/bin`, units to `/usr/lib/systemd/user`.
-- [ ] `cargo install` path documented.
-- [ ] `--json` output for `check` and `doctor`.
-- [ ] Release workflow with `cargo publish --dry-run`.
+- [x] `PKGBUILD` for the AUR, depends on `pacman`, optional `aurto`, `yay`.
+- [x] Install the binary to `/usr/bin`, units to `/usr/lib/systemd/user`.
+- [x] `cargo install` path documented.
+- [x] `--json` output for `check` and `doctor`.
+- [x] Release workflow with `cargo publish --dry-run`.
 
 ---
 

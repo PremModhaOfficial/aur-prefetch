@@ -29,3 +29,16 @@ fn tui_help_lists_the_safe_flags() {
     assert!(text.contains("--render-once"));
     assert!(text.contains("--ascii"));
 }
+
+#[test]
+fn check_and_doctor_offer_json() {
+    for command in ["check", "doctor"] {
+        let output = binary()
+            .args([command, "--help"])
+            .output()
+            .expect("run --help");
+        assert!(output.status.success(), "{command} --help failed");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("--json"), "{command} help is missing --json");
+    }
+}

@@ -91,6 +91,15 @@ jobs:
           tool: cargo-deny@0.20.2
       - name: Run CI script
         run: bash ci.sh
+      # Phase 6 — a release must be packageable. This builds the exact .crate
+      # tarball (files listed by `cargo package --list`) and verifies it
+      # compiles, then stops before upload. It uses NO registry token and
+      # needs none, so there is nothing here that could skip itself and still
+      # report green: a missing file, a broken manifest, or a crate that only
+      # builds in a dirty checkout fails this step. The real `cargo publish`
+      # stays a deliberate manual command by a maintainer.
+      - name: Package (cargo publish --dry-run)
+        run: cargo publish --dry-run --locked
 
   # F09 (tip) — Modern-toolchain signal. The msrv and ci jobs both pin 1.85,
   # so a dependency that raises its rust-version (via the monthly Dependabot

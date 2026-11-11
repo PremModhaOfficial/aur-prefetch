@@ -118,6 +118,7 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 | `context.md` | Implementation notes and edge cases |
 | `src/main.rs` | CLI surface (subcommands) |
 | `src/tui/` | Terminal UI: shell, forest, live view, fetch session, renderer |
+| `PKGBUILD` / `packaging/` | AUR package: binary to `/usr/bin`, user units to `/usr/lib/systemd/user` |
 | `ci.sh` | Local mirror of the GitHub checks |
 | `sim/` | Arch simulation harness (see `sim/README.md`) |
 | `.github/workflows/ci.yml` | Build, lint, test, audit |

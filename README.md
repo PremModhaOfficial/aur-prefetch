@@ -13,6 +13,39 @@ Early. All six commands are implemented and proven in `sim/`. Nothing here has
 been run against a real Arch system yet. `AGENTS.md` lists the rules that apply
 while implementing, and `sim/` is where behaviour gets proven.
 
+## Install
+
+From the AUR:
+
+```bash
+yay -S aur-prefetch
+```
+
+With cargo, if you would rather have the binary in `~/.cargo/bin`:
+
+```bash
+cargo install --git https://github.com/PremModhaOfficial/aur-prefetch --locked
+```
+
+Rust 1.85 or newer. `--locked` builds the exact dependency set in the committed
+`Cargo.lock`, and the `sim-hooks` feature stays off. This route installs only
+the binary; `aur-prefetch init --apply` then writes the user units with
+`ExecStart` pointing at that binary, because the unit generator uses the
+running executable's own path, and installs the sudoers rule.
+
+The AUR package installs `/usr/bin/aur-prefetch` and the two user units in
+`/usr/lib/systemd/user`. Enabling the timer is your call:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now aur-prefetch.timer
+```
+
+`pacman` is required either way; `aurto` and `yay` are optional and only used
+by the paths that need them. `aur-prefetch init --apply` is the command that
+installs the exact `pacman -Syuw` sudoers rule through `visudo -c`. The
+`PKGBUILD` and its units live at the repo root and in `packaging/`.
+
 ## Start here
 
 The working plan is **[`NEXT.md`](NEXT.md)**. Read it before touching
@@ -32,11 +65,11 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 ## Commands
 
 - `aur-prefetch init [--apply]` — print, or with `--apply` write, the user service, timer, and exact sudoers rule. Run it as your user; it prompts for sudo only to install the rule, and never runs `aurto`
-- `aur-prefetch check` — pending updates, disk, lock, caches, timer status
+- `aur-prefetch check [--json]` — pending updates, disk, lock, caches, timer status
 - `aur-prefetch fetch` — free-space gate, `pacman -Syuw` only
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
 - `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
-- `aur-prefetch doctor` — verify timers, limits, repo, journald
+- `aur-prefetch doctor [--json]` — verify timers, limits, repo, journald
 - `aur-prefetch tui [--render-once] [--ascii]` - dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
 
 ### `tui`
@@ -82,6 +115,19 @@ not fail a healthy system; unreadable user caches do.
 Exit codes: `0` when clean, `1` when one or more checks need attention, `2`
 when a check could not run (for example `pacman -Qu` failed).
 
+### `--json`
+
+`check --json` and `doctor --json` print one JSON object instead of the text
+report, for a script or a dashboard. Field names are the report field names, so
+the text output and the JSON cannot disagree: a section is
+`{"state":"ready","data":…,"at":<unix seconds>}`, `{"state":"failed","error":…}`,
+or `{"state":"not_collected"}`, and a section a command did not collect says so
+instead of guessing. `verdict` is `clean`/`ok`, `action_needed`, or `error` when
+collection stopped; `check` also carries `actionable`, `doctor` carries
+`problems`. `check`'s `fatal` and `doctor`'s `error` are `null` on a normal run.
+The exit code is the same as the text form, and there is no colour or glyph in
+the JSON.
+
 ## Environment overrides
 
 Every path can be overridden, which the tests and the simulation harness use.
@@ -124,7 +170,10 @@ cargo build --release
 ```
 
 `ci.sh` is the local mirror of the GitHub checks. It cannot see pacman side
-effects. `sim/` can: it boots an Arch container with a local package repo,
+effects. The `CI` workflow also runs `cargo publish --dry-run`, which packages
+the crate and verifies it builds without uploading anything; it needs no
+registry token, so a broken package fails the check instead of passing quietly.
+Publishing is a manual `cargo publish` by a maintainer. `sim/` can: it boots an Arch container with a local package repo,
 runs the binary, and asserts on `/usr`, the download cache, and the fake AUR
 helper's log. The development machine is never a test machine.
 

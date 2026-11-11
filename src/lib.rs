@@ -7,6 +7,7 @@ pub mod error;
 pub mod fetch_source;
 pub mod frontier;
 pub mod gate;
+pub mod json;
 pub mod lock;
 pub mod post_install;
 pub mod progress;

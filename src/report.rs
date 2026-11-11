@@ -5,7 +5,9 @@
 //! different facts.
 
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
 
 use crate::error::Error;
 
@@ -13,10 +15,19 @@ use crate::error::Error;
 ///
 /// A section is exactly one of these states. There is no "data and an error",
 /// and a section that was never collected is not a timestamp with empty data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum Section<T> {
-    Ready { data: T, at: SystemTime },
-    Failed { error: String, at: SystemTime },
+    Ready {
+        data: T,
+        #[serde(serialize_with = "unix_seconds")]
+        at: SystemTime,
+    },
+    Failed {
+        error: String,
+        #[serde(serialize_with = "unix_seconds")]
+        at: SystemTime,
+    },
     NotCollected,
 }
 
@@ -68,9 +79,10 @@ impl<T> Default for Section<T> {
 ///
 /// `raw` is the exact line the package tool printed. Text rendering uses it so
 /// the CLI does not have to reconstruct a format it did not choose.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Update {
     pub name: String,
+    #[serde(serialize_with = "repo_name")]
     pub repo: Repo,
     pub installed: String,
     pub available: String,
@@ -91,7 +103,8 @@ pub enum Repo {
     Other(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Cached {
     Yes,
     No,
@@ -102,7 +115,8 @@ pub enum Cached {
 ///
 /// `Cached` and `Built` are ready. `Stale` and `Partial` are not. `Unknown`
 /// is a value, not a missing zero.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ArtifactState {
     Cached,
     Built,
@@ -131,9 +145,10 @@ impl ArtifactState {
 }
 
 /// One package in the prefetch tree, before tree placement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageView {
     pub name: String,
+    #[serde(serialize_with = "repo_name")]
     pub repo: Repo,
     pub installed: String,
     pub available: String,
@@ -146,7 +161,7 @@ pub struct PackageView {
 }
 
 /// Counts derived from the packages, never typed independently.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Counts {
     pub cached: usize,
     pub built: usize,
@@ -195,7 +210,7 @@ impl Counts {
 }
 
 /// What the prefetch view needs, all from read-only collection.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PrefetchReport {
     pub packages: Vec<PackageView>,
     pub counts: Counts,
@@ -217,7 +232,7 @@ impl PrefetchReport {
 }
 
 /// One filesystem with a space and inode measurement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiskUsage {
     pub path: PathBuf,
     pub total: u64,
@@ -229,14 +244,15 @@ pub struct DiskUsage {
     pub below_floor: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DiskStatus {
     Measured,
     NotChecked(String),
 }
 
 /// One cache directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CacheUsage {
     pub label: String,
     pub path: PathBuf,
@@ -247,14 +263,15 @@ pub struct CacheUsage {
     pub actionable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Policy {
     KeepOne,
     OlderThan30DaysInstalledOnly,
     ReportOnly,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TimerState {
     pub available: bool,
     pub next: Option<String>,
@@ -262,7 +279,7 @@ pub struct TimerState {
     pub actionable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StateInfo {
     pub last_fetch_unix: Option<u64>,
     pub last_fetch_pending: Option<u64>,
@@ -271,40 +288,42 @@ pub struct StateInfo {
     pub fallback: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LockState {
     None,
     HeldBy(String),
     Stale(PathBuf),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TrustState {
     Missing,
     Empty,
     Allowlist(usize),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct FetchState {
     pub last_run: Option<SystemTime>,
     pub lines: Vec<String>,
     pub running: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct NewsState {
     pub url: String,
     pub last_install: Option<SystemTime>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct JournalTail {
     pub lines: Vec<String>,
     pub at: Option<SystemTime>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PostInstall {
     pub exit_code: i32,
     pub kernel_running: String,
@@ -314,12 +333,12 @@ pub struct PostInstall {
     pub news_url: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct DoctorReport {
     pub checks: Vec<Check>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Check {
     pub id: &'static str,
     pub label: String,
@@ -328,7 +347,8 @@ pub struct Check {
     pub fix: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     Ok,
     Warn,
@@ -337,14 +357,15 @@ pub enum Verdict {
     Skipped,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Drift {
     pub last_fetch: Option<u64>,
     pub last_install: Option<u64>,
     pub partial_upgrade: PartialUpgrade,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PartialUpgrade {
     #[default]
     None,
@@ -357,7 +378,7 @@ pub enum PartialUpgrade {
 /// `actionable` is the count the CLI already uses for its exit verdict. It is
 /// part of the snapshot because the TUI needs the same answer, not a second
 /// calculation that can drift.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Snapshot {
     pub official: Section<Vec<Update>>,
     pub aur: Section<Vec<Update>>,
@@ -377,5 +398,35 @@ pub struct Snapshot {
     pub actionable: u32,
     /// A command-level failure that stopped collection. The text renderer
     /// prints the sections collected before it, then the caller returns this.
+    /// JSON carries it as a top-level `fatal` string instead, because `Error`
+    /// is a command outcome, not part of the snapshot.
+    #[serde(skip)]
     pub fatal: Option<Error>,
+}
+
+impl Repo {
+    /// The stable name used by the JSON surface.
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Core => "core",
+            Self::Extra => "extra",
+            Self::Multilib => "multilib",
+            Self::Aur => "aur",
+            Self::Local => "local",
+            Self::Unknown => "unknown",
+            Self::Other(name) => name,
+        }
+    }
+}
+
+fn repo_name<S: serde::Serializer>(repo: &Repo, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(repo.name())
+}
+
+fn unix_seconds<S: serde::Serializer>(time: &SystemTime, serializer: S) -> Result<S::Ok, S::Error> {
+    let seconds = time
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    serializer.serialize_u64(seconds)
 }
