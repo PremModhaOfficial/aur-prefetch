@@ -170,7 +170,10 @@ cargo build --release
 ```
 
 `ci.sh` is the local mirror of the GitHub checks. It cannot see pacman side
-effects. `sim/` can: it boots an Arch container with a local package repo,
+effects. The `CI` workflow also runs `cargo publish --dry-run`, which packages
+the crate and verifies it builds without uploading anything; it needs no
+registry token, so a broken package fails the check instead of passing quietly.
+Publishing is a manual `cargo publish` by a maintainer. `sim/` can: it boots an Arch container with a local package repo,
 runs the binary, and asserts on `/usr`, the download cache, and the fake AUR
 helper's log. The development machine is never a test machine.
 

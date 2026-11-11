@@ -269,7 +269,7 @@ A container cannot test snapshots or boot.
 - [x] Install the binary to `/usr/bin`, units to `/usr/lib/systemd/user`.
 - [x] `cargo install` path documented.
 - [x] `--json` output for `check` and `doctor`.
-- [ ] Release workflow with `cargo publish --dry-run`.
+- [x] Release workflow with `cargo publish --dry-run`.
 
 ---
 
