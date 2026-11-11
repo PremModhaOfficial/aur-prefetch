@@ -16,6 +16,16 @@ touching your machine.
 
 Requires Docker or Podman. The container runs with `--network none`.
 
+After any source change, rebuild the image without the cache before running:
+
+```bash
+docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .
+```
+
+The classic docker builder caches `COPY --from=builder`, so a plain
+`./sim/run.sh` can silently test the previous binary. There is no buildx on the
+current host, so `--no-cache` is the only reliable way to get a fresh image.
+
 ## What the image contains
 
 - `archlinux:base-devel`

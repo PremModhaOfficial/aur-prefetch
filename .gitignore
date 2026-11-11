@@ -1,2 +1,5 @@
 /target
 /.gpg/
+# This host's global excludes file has `lock*`, which silently drops src/lock.rs
+# from `git add`; a repo rule outranks it and a clean clone then still builds.
+!src/lock.rs
