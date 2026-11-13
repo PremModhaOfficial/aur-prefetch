@@ -49,13 +49,13 @@ Private helpers with contract weight:
 - Exit codes come from the error type, not from the command:
   `Error::Blocked` is 1, `Error::Failed` is 2, `Error::Interrupted` is 130
   [error.rs:exit_code].
-- `fetch` reports its gates in a fixed order: `lists` (a warning when the
-  read-only `pacman -Qui` estimate cannot answer), `cache` (the resolved cache
-  directory), `space` twice (the cache filesystem, then `/`, because a
-  symlinked cache can land on another device), then `state`. The first failing
-  gate ends the sequence; later gates neither run nor get reported, so a
-  rendered checklist only ever shows rows that were reached
-  [fetch.rs:plan_observed].
+- `fetch` reports six gates in this order: `lock` (`lock::check`), `lists` (a
+  warning when the read-only `pacman -Qui` estimate cannot answer), `cache` (the
+  resolved cache directory), `space` twice (the cache filesystem, then `/`,
+  because a symlinked cache can land on another device), then `state`. The first
+  blocking gate returns its error and ends the sequence; later gates neither run
+  nor get reported, so a rendered checklist only ever shows rows that were
+  reached [fetch.rs:plan_observed].
 - The free-space floor is
   `max(min_free_bytes, 5 GiB when snapper_config_dir is a directory) + 2 x
   pending_bytes`, and `check` reuses it rather than recomputing
