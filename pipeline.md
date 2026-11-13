@@ -48,27 +48,27 @@ are the build gate and the packaging recipes:
 - `ci.sh` — the local mirror of the GitHub checks: `cargo clippy --all-targets
   --all-features --locked -- -D warnings`, `cargo test --all-targets
   --all-features --locked`, `cargo fmt --all --check`, then `cargo deny
-  --all-features check` [ci.sh].
+  --all-features check` [ci.sh:ALLOW_AUDIT_SKIP].
 - `ci.sh` invariants: it runs under `set -euo pipefail`; a missing `deny.toml`
   fails the run rather than auditing with defaults; a missing `cargo-deny` fails
   the run in CI and locally unless `ALLOW_AUDIT_SKIP=1` is set. The gate never
-  degrades to a silent skip that still prints success [ci.sh].
+  degrades to a silent skip that still prints success [ci.sh:ALLOW_AUDIT_SKIP].
 - `Cargo.toml` — package manifest for the `aur-prefetch` binary and library.
   Edition 2024 with `rust-version = "1.85"` declared so Cargo reports the floor
   instead of a parse error. Dependencies: `clap`, `crossterm`, `ratatui`,
   `serde`, `serde_json`, `signal-hook`, `unicode-width`. The `sim-hooks` feature
-  is test-only and must not be enabled in a packaged build [Cargo.toml].
+  is test-only and must not be enabled in a packaged build [Cargo.toml:sim-hooks].
 - `PKGBUILD` — AUR recipe. It builds with `cargo build --release --locked`,
   installs the binary to `/usr/bin/aur-prefetch`, and installs
   `packaging/aur-prefetch.service` and `packaging/aur-prefetch.timer` into
   `/usr/lib/systemd/user`, so a fresh account already has the units and only
-  enables them [PKGBUILD].
+  enables them [PKGBUILD:pkgname].
 - `packaging/aur-prefetch.timer` fires `OnCalendar=daily` with
   `Persistent=true`; the service is `Type=oneshot` and runs
   `"/usr/bin/aur-prefetch" fetch` — the prefetch, never the install
   [packaging/aur-prefetch.timer] [packaging/aur-prefetch.service].
 - `deny.toml` holds the license and advisory policy that `ci.sh` enforces
-  [deny.toml].
+  [deny.toml:deny].
 
 ## Subdirectories & System Boundaries
 
@@ -117,10 +117,12 @@ not by convention alone.
   effective uid is 0 before it does anything else, and `init --apply` refuses to
   run under sudo for a different user [install.rs:run_with_status]
   [init.rs:run].
-- **One lock gate, shared.** `fetch`, `install` and `check` all call
-  `lock::check`, which looks at the process list (`pacman|yay|makepkg|aurto`)
-  and then at `db.lck`. A lock nobody holds is refused and never deleted
-  [lock.rs:check] [lock.rs:PATTERN].
+- **One lock rule, shared.** `fetch` and `install` call `lock::check`, which
+  looks at the process list (`pacman|yay|makepkg|aurto`) and then at `db.lck`;
+  `check` reads the same process list through `lock::running` and re-tests the
+  lock file itself, so the report and the gates agree. A lock nobody holds is
+  refused and never deleted [lock.rs:check] [lock.rs:running]
+  [check.rs:collect_lock].
 - **One free-space floor, shared.** `fetch` and `check` compare against the same
   `space_floor`, so the report cannot promise a fetch that the gate then refuses
   [fetch.rs:space_floor].
@@ -133,13 +135,13 @@ not by convention alone.
   warning, not a failure [state.rs:save] [fetch.rs:record_success].
 - **Exit codes are a contract, identical for every command:** 0 healthy or done,
   1 action needed or gated, 2 execution error, 130 Ctrl-C in the interactive TUI
-  only [error.rs:exit_code] [main.rs].
+  only [error.rs:exit_code] [main.rs:Commands].
 - **A gate after a failure is absent, not passed.** `GateState::Fail` ends the
   sequence, so a rendered checklist only ever shows the gates that actually ran
-  [gate.rs] [fetch.rs:plan_observed].
+  [gate.rs:GateState] [fetch.rs:plan_observed].
 - **The UI cannot invent a fact.** Renderers read the report layer; strings that
   reach a cell are sanitized; a tick may advance an elapsed label but never a
-  state, a byte or a success [report.rs] [sanitize.rs] [fetch_session.rs].
+  state, a byte or a success [report.rs:Snapshot] [sanitize.rs:sanitize_cell] [fetch_session.rs:FetchSession].
 - **The development host is not a test machine.** Runtime behaviour is proven
   only in `sim/`, in a fresh container with `--network none`
   [sim/run.sh:--network none] (`AGENTS.md`).
@@ -173,7 +175,8 @@ themselves touch it, change only through `yay -Syuu` in `install`, run as the
 - **The terminal itself:** raw mode and the alternate screen, always restored on
   every exit path including panic [guard.rs:Guard] [guard.rs:install_panic_hook].
 - **Container runtime:** the harness builds an image and runs disposable
-  containers; it writes nothing to the host [sim/run.sh:build_image].
+  containers; it writes nothing into the checkout. The image and its layers
+  stay in the container runtime's own store [sim/run.sh:build_image].
 - No component opens a network connection of its own. Remote facts arrive as
   another program's stdout, and the Arch news URL is printed for the user to
   read rather than fetched [install.rs:NEWS_URL].

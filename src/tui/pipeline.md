@@ -62,26 +62,26 @@ attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
 ## Invariants
 
 - Every path out of the TUI restores the terminal: the `Guard` covers normal
-  returns and errors, the panic hook covers a panic [guard.rs].
+  returns and errors, the panic hook covers a panic [guard.rs:Guard].
 - `--render-once` works without a tty and falls back to 80x24 when the terminal
   cannot report a size; the interactive path refuses a non-tty instead
   [mod.rs:run] [mod.rs:ensure_interactive].
 - `--ascii` is also a no-colour mode: `use_color(ascii, no_color)` is false for
   either [mod.rs:use_color].
 - `render.rs` only lays text out: it never shells out and never collects
-  [render.rs].
+  [render.rs:render_frame].
 - `tree.rs` and `live.rs` are pure: no I/O, no clock of their own, `at` is
-  always a caller-supplied observation timestamp [tree.rs] [live.rs].
+  always a caller-supplied observation timestamp [tree.rs:Tree] [live.rs:LiveRun].
 - A package is printed once. A dependency outside the pending set is a
   display-only `?` leaf that is never expanded, and a cycle component with no
-  incoming root is a deterministic error, not an invented root [tree.rs].
+  incoming root is a deterministic error, not an invented root [tree.rs:Tree].
 - A node changes only because an observation moved it; a tick may advance an
   elapsed label but never invents a state, a byte or a success
-  [live.rs] [fetch_session.rs].
+  [live.rs:LiveRun] [fetch_session.rs:FetchSession].
 - Timers never show below one second, and no estimate is produced without local
   history (`TIMER_FLOOR`) [live.rs:TIMER_FLOOR].
 - Detaching does not kill the child and does not claim its result
-  [fetch_session.rs].
+  [fetch_session.rs:FetchSession].
 - Only one fetch runs at a time; a second `F` is refused with a notice instead
   of starting a second child [mod.rs:KeyCode::Char('F')].
 - `r` is deferred while a fetch runs, because the live poll owns refresh then
@@ -91,9 +91,10 @@ attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
   `pacdiff` [runner.rs:run_streaming].
 - Every string that can reach a cell goes through `sanitize.rs` first: escape
   sequences can move the cursor or write the clipboard, and bidi controls can
-  reorder a path [sanitize.rs].
-- `plan_frame` is the single owner of body layout arithmetic; nothing else
-  computes a row budget [render.rs:plan_frame].
+  reorder a path [sanitize.rs:sanitize_cell].
+- `plan_frame` owns the frame plan and is the only place a frame's row budget is
+  decided; it delegates the body split and the visible window to `live.rs`
+  instead of recomputing them [render.rs:plan_frame] [live.rs:BodySplit].
 
 ## Side Effects
 
@@ -104,12 +105,13 @@ attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
   `sudo -n pacman -Syuw --noconfirm`) on a worker thread through
   `CommandRunner::run_streaming`, and polls `FetchMonitor` on the UI tick
   [fetch_session.rs:start] [fetch_session.rs:tick].
-- The only file this module writes is the state file, through
-  `fetch::record_success`, called once when the fetch exits zero
-  [fetch_session.rs:tick] [fetch.rs:record_success].
+- The state file is written on exactly two paths: `fetch::record_success`, once
+  when the fetch exits zero [fetch_session.rs:tick] [fetch.rs:record_success],
+  and the attached install, which records the install time
+  [install.rs:run_with_status].
 - The install gate itself is read-only: `install::preflight` runs no
   transaction, and `space` records a session-only attestation without writing
-  state [mod.rs].
+  state [mod.rs:run].
 - `enter` on an armed gate runs the attached install, and that is the second
   way the TUI mutates the system. It is armed only when the news is attested,
   `preflight` is not blocked, and `preflight.euid` is known. Then the TUI drops
@@ -118,17 +120,19 @@ attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
   attached, as the user), collects a `post_install::Receipt`, re-enters the
   alternate screen, clears it and re-collects the snapshot
   [mod.rs:KeyCode::Enter] [install.rs:run_with_status].
-- That install path changes `/usr` through `yay` and records the install time in
-  the state file, so the fetch is not the only mutation the TUI can start
+- That install path changes `/usr` through `yay`, and it is the only mutation
+  the TUI can start apart from the fetch
   [install.rs:run_with_status] [mod.rs:install::run_with_status].
 - Nothing here opens a network connection; every fact comes from the report
-  layer or an external program's output [render.rs].
+  layer or an external program's output [render.rs:render_frame].
 
 ## Verification
 
 - Run: `cargo test`
 - Golden frames live in `tests/golden/` and are compared at 80x24 and 120x40,
-  including ASCII and `NO_COLOR` variants.
+  including ASCII variants. `NO_COLOR` is covered by unit assertions on the
+  rendered text rather than by a golden file
+  [render.rs:no_color_keeps_the_exact_text_and_drops_every_color].
 - Runtime behaviour under a real pty is proven in the container harness:
   `./sim/run.sh` (scenarios 31-36), which needs
   `docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .` first.

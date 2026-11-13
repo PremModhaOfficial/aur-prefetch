@@ -48,7 +48,8 @@ and have no `pipeline.md` of their own.
 - The repo is built with no network, no keys, no AUR; packages are hand-built tar
   archives with `.PKGINFO` and `.MTREE` in the shape makepkg produces. [make-repo.sh:build_pkg]
 - Deterministic end state inside the image: `simapp 1.0.0-1` installed,
-  `simapp 2.0.0-1` available as the pending upgrade, download cache empty. [make-repo.sh]
+  `simapp 2.0.0-1` available as the pending upgrade, download cache empty.
+  [make-repo.sh:build_pkg]
 - `sim-upgrade` accepts no arguments (exits 64 otherwise) and performs only
   `pacman -Syu --noconfirm`; no direct pacman argv is allowed through sudo. [sim-upgrade]
 - `yay` rejects root on every path (exit 98) before any branch can succeed, and
@@ -63,7 +64,8 @@ and have no `pipeline.md` of their own.
 ## Side Effects
 
 - `run.sh` builds the container image and runs the runtime containers via the
-  selected docker/podman runtime; it writes nothing to the host.
+  selected docker/podman runtime; it writes nothing into the checkout (the
+  image and its layers stay in the runtime's own store).
   [run.sh:build_image] [run.sh:RUNTIME]
 - `make-repo.sh` removes and rebuilds `/srv/simrepo` and `/srv/simbuild`, installs
   `simapp` into the image, and clears `/var/cache/pacman/pkg/*`. [make-repo.sh:rm -rf]
@@ -75,7 +77,7 @@ and have no `pipeline.md` of their own.
   `installer` users, writes `/etc/sudoers.d/sim`, and pre-creates the
   `/var/log/sim-*.log` files world-writable. [Dockerfile:RUN pacman]
 - `lib.sh` probes are read-only; `finish` prints `PASS`/`FAILED` to stdout/stderr
-  and exits with the failure count status. [lib.sh:finish]
+  and exits 1 when any assertion failed. [lib.sh:finish]
 
 ## Verification
 

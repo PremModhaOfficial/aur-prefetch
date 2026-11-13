@@ -24,7 +24,7 @@ Layout by role:
 
 Modules declared in `lib.rs`: `commands`, `config`, `error`, `fetch_source`,
 `frontier`, `gate`, `json`, `lock`, `post_install`, `progress`, `report`,
-`runner`, `state`, `tui`, `util` [lib.rs].
+`runner`, `state`, `tui`, `util` [lib.rs:commands].
 
 | Module | Public contract |
 |---|---|
@@ -63,30 +63,30 @@ Subdirectories:
   `yay` or `pacdiff` [runner.rs:run_streaming].
 - Exit codes: `Error::Blocked` is 1, `Error::Failed` is 2, and `Interrupted` is
   130, which only the interactive TUI can return [error.rs:exit_code]
-  [main.rs].
+  [main.rs:Commands].
 - The renderers take one input. `report::Snapshot` is the only argument to the
   text renderer, and `json.rs` renders the same types, so text and JSON cannot
-  draw different facts [report.rs] [json.rs].
+  draw different facts [report.rs:Snapshot] [json.rs:check].
 - A section that was not collected is its own state (`Section::NotCollected`),
   never zero [report.rs:Section].
 - `frontier` has no I/O and no clock: an adapter turns domain facts into
   `Observation`s, `reduce` folds them, renderers read the result. A node is
   ready when every required incoming edge is satisfied; parallel roots are a
   set, not a queue; the first failure freezes the run and blocks dependents, and
-  terminal states never move again inside a run [frontier.rs] [frontier.rs:reduce].
+  terminal states never move again inside a run [frontier.rs:reduce] [frontier.rs:reduce].
 - `fetch_source::FetchMonitor` has no clock, no sleep, no thread and no polling
   loop: the caller supplies every `at` and calls `poll` when it has a reason to.
   It reads only the plan's cache directory and writes nothing
-  [fetch_source.rs].
+  [fetch_source.rs:FetchMonitor].
 - `progress::collect` is not a second update collector: it starts from
   `check::collect`'s snapshot and adds only per-package cache facts. It is
-  read-only: no state file, no cache write, no network [progress.rs].
+  read-only: no state file, no cache write, no network [progress.rs:collect].
 - `post_install` values are all observed; it never edits `/etc`, installs
-  anything, or guesses a reboot [post_install.rs].
+  anything, or guesses a reboot [post_install.rs:Receipt].
 - The lock gate is the process list first and the lock file second, because
   `yay` spends most of an AUR build inside `makepkg` where no process is named
   `pacman` and no lock file exists. A lock nobody holds is refused and never
-  deleted [lock.rs].
+  deleted [lock.rs:check].
 - `State::save` writes a sibling temp file, fsyncs, then renames over the
   target, so a reader never sees a partial state file. A missing file is an
   empty state; a malformed value is an error [state.rs:save] [state.rs:load].
@@ -94,7 +94,7 @@ Subdirectories:
   static default, and `from_lookup` takes the lookup function so tests never
   touch the process environment [config.rs:Config].
 - `gate::GateState::Fail` ends a gate sequence: a gate after a failure is
-  absent because it did not run [gate.rs].
+  absent because it did not run [gate.rs:GateState].
 
 ## Side Effects
 
@@ -104,7 +104,7 @@ Subdirectories:
   `fetch` reaches the pacman sync database and download cache, `install` reaches
   `/usr` through `yay`, `init --apply` reaches the sudoers file and user units.
   `check`, `doctor` and `progress` write nothing
-  [state.rs:save] [progress.rs] [post_install.rs].
+  [state.rs:save] [progress.rs:collect] [post_install.rs:Receipt].
 - Reads: pacman's configuration, cache directory, lock file and log; the yay
   and aurto build directories; journald and snapper configuration; the
   systemd user unit directory — all resolved through `Config`
@@ -113,7 +113,7 @@ Subdirectories:
   sudo to install the sudoers rule; nothing runs `yay` or `makepkg` as root
   (`commands/pipeline.md`).
 - No module in this crate opens a network connection. Remote facts are read from
-  other programs' stdout [runner.rs].
+  other programs' stdout [runner.rs:CommandRunner].
 
 ## Verification
 

@@ -3,9 +3,12 @@
 ## Overview
 
 One module per CLI subcommand, plus `mod.rs` declaring the six. Each command
-collects facts, decides a verdict or a gate, and hands the result to a renderer
-in `src/report.rs` (text) or `src/json.rs` (machine). The split exists so the
-CLI and the TUI read the same collected facts instead of querying twice.
+collects facts, decides a verdict or a gate, and renders it: text rendering lives
+in the command module itself (`check::render_text`, `doctor::render_text`, the
+`clean::render_*` functions), and the machine-readable form lives in
+`src/json.rs`. `src/report.rs` holds the types both renderers read. The split
+exists so the CLI and the TUI read the same collected facts instead of querying
+twice.
 
 Three of the six write nothing at all: `check`, `doctor` and the dry run of
 `clean` are read-only. Writing commands are `fetch` (sync database and download
@@ -25,7 +28,7 @@ noted):
 | `clean.rs` | `run(apply)`, `run_with(config, runner, apply)`, `prepare(..) -> CleanPlan`, `render_header`, `run_paccache`, `render_yay`, `render_report_only`; `CleanPlan`, `YayBuild`, `YayAction { KeepNotInstalled, WouldRemove, Removed }`, `YayReport`, `ReportItem` [clean.rs:CleanPlan] [clean.rs:YayAction] [clean.rs:prepare] |
 | `init.rs` | `run(apply)`, `run_with(config, runner, Setup)`; `pub struct Setup<'a> { apply, exe, user }` [init.rs:Setup] [init.rs:run_with] |
 | `doctor.rs` | `run(json)`, `run_with(config, runner)`, `run_with_options`, `render_text(&DoctorReport) -> String` [doctor.rs:run_with_options] |
-| `mod.rs` | declares `check`, `clean`, `doctor`, `fetch`, `init`, `install` [commands/mod.rs] |
+| `mod.rs` | declares `check`, `clean`, `doctor`, `fetch`, `init`, `install` [commands/mod.rs:mod check] |
 
 Private helpers with contract weight:
 
@@ -45,9 +48,12 @@ Private helpers with contract weight:
 - Exit codes come from the error type, not from the command:
   `Error::Blocked` is 1, `Error::Failed` is 2, `Error::Interrupted` is 130
   [error.rs:exit_code].
-- `fetch` gates run in a fixed order: lock, then a read-only `pacman -Qui` size
-  estimate, then free space, then the download. The first blocking gate ends
-  the sequence; later gates neither run nor get reported
+- `fetch` reports its gates in a fixed order: `lists` (a warning when the
+  read-only `pacman -Qui` estimate cannot answer), `cache` (the resolved cache
+  directory), `space` twice (the cache filesystem, then `/`, because a
+  symlinked cache can land on another device), then `state`. The first failing
+  gate ends the sequence; later gates neither run nor get reported, so a
+  rendered checklist only ever shows rows that were reached
   [fetch.rs:plan_observed].
 - The free-space floor is
   `max(min_free_bytes, 5 GiB when snapper_config_dir is a directory) + 2 x
@@ -75,7 +81,8 @@ Private helpers with contract weight:
 - `doctor` judges the cache directory from ownership and mode bits only; ACLs
   are not inspected (`doctor.rs`, cache-permission check).
 - `clean` is a dry run unless `apply` is true; `clean --apply` refuses without
-  root, because `paccache` needs it [clean.rs:run] [clean.rs:run_with].
+  root, because `paccache` needs it, and only `clean::run` performs that check
+  [clean.rs:run] [clean.rs:run_with].
 - `clean` never deletes a yay build for a package that is not installed
   (`YayAction::KeepNotInstalled`) and only touches yay build directories older
   than `THIRTY_DAYS` [clean.rs:YayAction] [clean.rs:THIRTY_DAYS].
