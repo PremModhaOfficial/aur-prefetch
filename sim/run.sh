@@ -74,8 +74,16 @@ for scenario in "${scenarios[@]}"; do
         mount+=(-v "$(realpath "$SIM_BINARY"):/usr/local/bin/aur-prefetch:ro")
     fi
 
+    # A scenario asks for extra container flags with a header comment, e.g.
+    #   # sim-run-args: --tmpfs /var/cache/pacman/pkg:size=1m
+    # Values must not contain spaces. A fault-injection scenario uses this to
+    # get a filesystem it can fill without changing another scenario's.
+    extra=()
+    read -ra extra < <(sed -n 's/^# sim-run-args: //p' "$scenario") || true
+
     if ! "$RUNTIME" run --rm --network none \
         "${mount[@]}" \
+        "${extra[@]}" \
         --entrypoint /bin/bash \
         "$IMAGE" /scenario.sh; then
         rc=1

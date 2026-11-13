@@ -64,6 +64,14 @@ fill)
         dd if=/dev/zero bs=1 count=1 status=none 2>/dev/null >>"$out.filler"; do
         written=$((written + 1))
     done
+    # The filler stops page-aligned, and tmpfs charges whole pages: the `.part`
+    # still has the rest of its own last page free, which is enough for a small
+    # package's tail. Top the target file up too, so the tail append has to take
+    # a new page and gets the real ENOSPC.
+    while ((written < max)) &&
+        dd if=/dev/zero bs=1 count=1 status=none 2>/dev/null >>"$out"; do
+        written=$((written + 1))
+    done
     tail -c +"$((half + 1))" "$src" >>"$out" || exit 1
     exit 0
     ;;

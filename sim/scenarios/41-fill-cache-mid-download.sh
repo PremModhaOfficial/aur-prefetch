@@ -37,8 +37,10 @@ status=$?
 assert_eq "$status" "2" "a failed download is an execution error (exit 2, D6)"
 assert_false "fetch never claims success" \
     bash -c 'grep -q "fetch: ok" "$1"' _ "$log"
-assert_contains "$(cat "$log")" "failed retrieving file" \
+assert_contains "$(cat "$log")" "failed to retrieve some files" \
     "pacman reports the transfer it could not finish"
+assert_contains "$(cat "$log")" "error invoking external downloader" \
+    "the failure is the downloader dying, not the transaction itself"
 
 # 2. The CacheDir itself was full when the package transfer failed, and the
 #    download really had started: the partial artifact and the filler are there
