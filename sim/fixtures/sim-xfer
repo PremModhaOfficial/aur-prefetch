@@ -30,6 +30,53 @@ delay=$(cat /etc/sim/xfer-delay 2>/dev/null || echo 2)
 size=$(stat -c %s "$src")
 half=$((size / 2))
 
+# Fault injection, off unless a scenario writes one word to xfer-fault:
+#   kill - the running pacman dies after the first chunk of the package
+#   fill - the filesystem holding the cache fills up before the last chunk
+# The fault fires once and disarms itself, so the retry a scenario runs next is
+# a clean run. The scenario drives the fault from the harness; no scenario
+# sleeps to fake timing.
+case $(cat /etc/sim/xfer-fault 2>/dev/null || true) in
+kill)
+    rm -f /etc/sim/xfer-fault
+    head -c "$half" "$src" >"$out"
+    pkill -KILL -x pacman
+    exit 0
+    ;;
+fill)
+    rm -f /etc/sim/xfer-fault
+    head -c "$half" "$src" >"$out"
+    # Fill to the last byte: a block-sized loop stops with a few kilobytes left,
+    # which the rest of a small package would still fit into.
+    #
+    # The cap is a safety net, not a limit a scenario should reach. Without a
+    # bounded filesystem (the `# sim-run-args:` tmpfs) this would otherwise fill
+    # the container's root filesystem and with it the host's docker storage. A
+    # capped fill lets the transfer succeed, so the scenario's own "CacheDir is
+    # full" assertion fails loudly instead.
+    max=$(cat /etc/sim/xfer-fill-max 2>/dev/null || echo 67108864)
+    written=0
+    while ((written < max)) &&
+        dd if=/dev/zero bs=65536 count=1 status=none 2>/dev/null >>"$out.filler"; do
+        written=$((written + 65536))
+    done
+    while ((written < max)) &&
+        dd if=/dev/zero bs=1 count=1 status=none 2>/dev/null >>"$out.filler"; do
+        written=$((written + 1))
+    done
+    # The filler stops page-aligned, and tmpfs charges whole pages: the `.part`
+    # still has the rest of its own last page free, which is enough for a small
+    # package's tail. Top the target file up too, so the tail append has to take
+    # a new page and gets the real ENOSPC.
+    while ((written < max)) &&
+        dd if=/dev/zero bs=1 count=1 status=none 2>/dev/null >>"$out"; do
+        written=$((written + 1))
+    done
+    tail -c +"$((half + 1))" "$src" >>"$out" || exit 1
+    exit 0
+    ;;
+esac
+
 head -c "$half" "$src" >"$out"
 sleep "$delay"
 tail -c +"$((half + 1))" "$src" >>"$out"

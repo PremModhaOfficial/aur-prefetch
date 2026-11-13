@@ -53,8 +53,12 @@ current host, so `--no-cache` is the only reliable way to get a fresh image.
 - Pacman config fixtures for default, multiple, empty, and moved `CacheDir`
   under `/usr/local/lib/sim/fixtures`
 - A slow `XferCommand` fixture (`sim-xfer` plus `pacman-slow-xfer.conf`) that
-  writes a package `.part` in two chunks. Only scenario 34 installs it. pacman
-  still chooses the argv, verifies the package, and renames the final file
+  writes a package `.part` in two chunks and carries the optional `kill` and
+  `fill` faults. Scenarios 34, 41, 43 and 46 install it. pacman still chooses
+  the argv, verifies the package, and renames the final file
+- `/usr/local/bin/make-pkg.sh`, which publishes an ad-hoc package with a blob
+  of any size into the sim repo, for the chaos scenarios that need a payload
+  worth interrupting
 - `/usr/local/bin/aur-prefetch`, built inside the image so the glibc matches
 
 The sim binary is built with the `sim-hooks` feature. It adds one env-gated
@@ -107,6 +111,33 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `37-fetch-refuses-during-a-build.sh` | `fetch` refuses with exit 1 while any of `pacman`, `yay`, `makepkg`, `aurto` runs, even with no `db.lck`, and `check` reports the live process |
 | `38-check-and-fetch-share-the-floor.sh` | `check` refuses on the same 5 GiB snapshot floor `fetch` refuses on, so its verdict matches fetch's |
 | `39-fetch-state-unwritable.sh` | a download that completed exits 0 with a loud warning when the state file cannot be written, instead of turning the timer red |
+| `41-fill-cache-mid-download.sh` | the `CacheDir` fills during the transfer (a 2 MiB tmpfs and a fault that writes until the kernel refuses): `fetch` exits 2, never claims success, leaves no final artifact and no lock, still delivers the lists, writes nothing to `/usr` or either DB, and completes on a retry after the user frees the space |
+| `42-kill-mid-install.sh` | a file-size rlimit SIGKILLs pacman inside the extraction of a package upgrade: `install` exits 2 and names the killed command, the payload is truncated at the limit, the local DB records the new version with no file list, `pacman -Qk` calls that clean and `pacman -Qkk` reports size and checksum mismatches (it is the honest one), a retry exits 0 without repairing it, and clearing the broken entry plus `--overwrite` does |
+| `46-kill-mid-download.sh` | the paced transfer SIGKILLs pacman after the first half: the `.part` is a real prefix of the repo artifact, no final artifact exists, the lock and the refreshed lists are left behind, the next fetch refuses on the stale lock without removing it, and the retry after the user removes it fetches the real bytes |
+
+41, 42 and 46 are the Phase 4 chaos level from `NEXT.md`; they need the fault
+injection below.
+
+## Gap scenarios (`sim/gaps/`)
+
+Some behaviour is claimed and missing. Those scenarios are kept, but out of the
+default suite, because a suite that is red on purpose stops being a gate: every
+other change would inherit the same red.
+
+| Scenario | What it proves is missing |
+|---|---|
+| `43-delete-db-lck-under-pacman.sh` | `db.lck` is deleted under a live, paced `pacman -Syuw`: `check` and `fetch` still name the running pacman because their gate is the process list, and `doctor` — which has no lock check — reports a healthy configured system. The last assertion fails until `doctor` gains the lock section `check` prints |
+| `44-partial-upgrade-window.sh` | one package is installed by hand between fetch and install, so the system is half upgraded and the prefetched artifact for the rest is still cached: `check` names the pending update and never says "partial upgrade". `report::PartialUpgrade` is never filled, so nothing reads `pacman.log` for an install after the last fetch |
+| `45-stale-aurto-foreground-build.sh` | a local aurto repo one version behind the AUR with an AUR update pending: `check` sees the update, `install` exits 0 and never reports the foreground build risk. The sentence exists only in the TUI; the CLI has no aurto staleness gate |
+
+Run one directly, by path:
+
+```
+./sim/run.sh sim/gaps/44-partial-upgrade-window.sh
+```
+
+When the gap closes, move the scenario back into `sim/scenarios/` in the same
+commit that fixes it, so the suite starts defending the fix.
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
@@ -126,8 +157,37 @@ finish
 
 Each scenario runs in a fresh container, so no cleanup is needed. Helpers live
 in `sim/lib.sh`: `assert_eq`, `assert_ne`, `assert_contains`, `assert_true`,
-`assert_false`, `installed_version`, `payload_version`, `cache_files`,
-`usr_state`, `yay_log`, `yay_built_something`, `sudo_log`, `finish`.
+`assert_false`, `installed_version`, `payload_version`, `pkg_state`,
+`cache_files`, `usr_state`, `tree_state`, `local_db_state`, `sync_db_state`,
+`yay_log`, `yay_built_something`, `sudo_log`, `finish`.
+
+For a state that is large, assert on a digest (`local_db_state | sha256sum`),
+not on the state itself: a failing `assert_eq` prints both sides, and the whole
+local package DB is thousands of lines of noise.
+
+## Fault injection
+
+The chaos scenarios need a real pacman to misbehave, and the harness provides
+three faults rather than a scenario faking the evidence:
+
+- `sim/fixtures/sim-xfer` is the sim-only `XferCommand`. It paces a package
+transfer (`/etc/sim/xfer-delay`, seconds) so a poll can see real `.part` growth,
+and it injects one fault per run when a scenario writes one word to
+`/etc/sim/xfer-fault`: `kill` SIGKILLs the running pacman after the first half
+of the package, `fill` writes into the cache until the kernel refuses (capped by
+`/etc/sim/xfer-fill-max`, default 64 MiB) and then tries to append the rest,
+which is a real `ENOSPC`. The fault disarms itself, so the retry a scenario runs
+next is a clean run.
+- `# sim-run-args: <flags>` in a scenario's header comments passes extra
+container flags to that one scenario. The `fill` fault needs a bounded
+filesystem to fill, so scenario 41 asks for `--tmpfs
+/var/cache/pacman/pkg:size=2m`. **A scenario that fills a disk must carry that
+header**: without it the fill runs to the fill cap or, if the cap is raised, to
+the container's root filesystem and the host's docker storage.
+- `sim/make-pkg.sh NAME VERSION SIZE_BYTES` publishes an ad-hoc package with one
+blob of `SIZE_BYTES` zero bytes into the sim repo, because the two `simapp`
+versions are too small to interrupt. A `ulimit -f` in the invoking shell then
+kills pacman mid-extraction (scenario 42).
 
 ## Limits
 
