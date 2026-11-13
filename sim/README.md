@@ -113,15 +113,31 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `39-fetch-state-unwritable.sh` | a download that completed exits 0 with a loud warning when the state file cannot be written, instead of turning the timer red |
 | `41-fill-cache-mid-download.sh` | the `CacheDir` fills during the transfer (a 2 MiB tmpfs and a fault that writes until the kernel refuses): `fetch` exits 2, never claims success, leaves no final artifact and no lock, still delivers the lists, writes nothing to `/usr` or either DB, and completes on a retry after the user frees the space |
 | `42-kill-mid-install.sh` | a file-size rlimit SIGKILLs pacman inside the extraction of a package upgrade: `install` exits 2 and names the killed command, the payload is truncated at the limit, the local DB records the new version with no file list, `pacman -Qk` calls that clean and `pacman -Qkk` reports size and checksum mismatches (it is the honest one), a retry exits 0 without repairing it, and clearing the broken entry plus `--overwrite` does |
-| `43-delete-db-lck-under-pacman.sh` | `db.lck` is deleted under a live, paced `pacman -Syuw`: `check` and `fetch` still name the running pacman because their gate is the process list, and `doctor` — which has no lock check — reports a healthy configured system. **Proves the gap:** the last assertion fails until `doctor` gains the lock section `check` prints |
-| `44-partial-upgrade-window.sh` | one package is installed by hand between fetch and install, so the system is half upgraded and the prefetched artifact for the rest is still cached: `check` names the pending update and never says "partial upgrade". **Proves the gap:** `report::PartialUpgrade` is never filled, so nothing reads `pacman.log` for an install after the last fetch |
-| `45-stale-aurto-foreground-build.sh` | a local aurto repo one version behind the AUR with an AUR update pending: `check` sees the update, `install` exits 0 and never reports the foreground build risk. **Proves the gap:** the sentence exists only in the TUI; the CLI has no aurto staleness gate |
 | `46-kill-mid-download.sh` | the paced transfer SIGKILLs pacman after the first half: the `.part` is a real prefix of the repo artifact, no final artifact exists, the lock and the refreshed lists are left behind, the next fetch refuses on the stale lock without removing it, and the retry after the user removes it fetches the real bytes |
 
-41-46 are the Phase 4 chaos level from `NEXT.md`; they need the fault
-injection below. 43, 44 and 45 are red on purpose: each has exactly one failing
-assertion that states the behaviour the tool does not have, and the fix for each
-is a `src/` change.
+41, 42 and 46 are the Phase 4 chaos level from `NEXT.md`; they need the fault
+injection below.
+
+## Gap scenarios (`sim/gaps/`)
+
+Some behaviour is claimed and missing. Those scenarios are kept, but out of the
+default suite, because a suite that is red on purpose stops being a gate: every
+other change would inherit the same red.
+
+| Scenario | What it proves is missing |
+|---|---|
+| `43-delete-db-lck-under-pacman.sh` | `db.lck` is deleted under a live, paced `pacman -Syuw`: `check` and `fetch` still name the running pacman because their gate is the process list, and `doctor` — which has no lock check — reports a healthy configured system. The last assertion fails until `doctor` gains the lock section `check` prints |
+| `44-partial-upgrade-window.sh` | one package is installed by hand between fetch and install, so the system is half upgraded and the prefetched artifact for the rest is still cached: `check` names the pending update and never says "partial upgrade". `report::PartialUpgrade` is never filled, so nothing reads `pacman.log` for an install after the last fetch |
+| `45-stale-aurto-foreground-build.sh` | a local aurto repo one version behind the AUR with an AUR update pending: `check` sees the update, `install` exits 0 and never reports the foreground build risk. The sentence exists only in the TUI; the CLI has no aurto staleness gate |
+
+Run one directly, by path:
+
+```
+./sim/run.sh sim/gaps/44-partial-upgrade-window.sh
+```
+
+When the gap closes, move the scenario back into `sim/scenarios/` in the same
+commit that fixes it, so the suite starts defending the fix.
 
 01 and 02 are a pair. Passing 01 alone would prove nothing if the harness could
 not detect a real install at all.
