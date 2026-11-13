@@ -3,11 +3,13 @@
 ## System Overview
 
 `aur-prefetch` is a Rust CLI plus terminal UI for Arch Linux that splits an
-update in two: `fetch` downloads (and, through `aurto`/`yay`, builds) the
-packages that are pending, and `install` runs the foreground upgrade afterwards,
-when the download is already on disk. The install step is the part that needs a
-terminal, a reviewed PKGBUILD and a snapshot; the download step is the part that
-can run unattended on a timer.
+update in two: `fetch` downloads the pending official-repository packages, and
+`install` runs the foreground upgrade afterwards, when the download is already
+on disk. AUR builds are not part of `fetch`: they belong to `install`
+(`yay -Syuu`, attached to the terminal) and to aurto's own root timers, which
+run outside this tool. The install step is the part that needs a terminal, a
+reviewed PKGBUILD and a snapshot; the download step is the part that can run
+unattended on a timer.
 
 Six subcommands, all implemented and all covered by container scenarios:
 `check`, `fetch`, `install`, `clean`, `init`, `doctor`. A seventh, `tui`, is the
@@ -149,9 +151,11 @@ Shared resources and external systems this tool can touch:
 - **Pacman state:** the sync databases and the download cache (via
   `pacman -Syuw`), and `/var/lib/pacman/db.lck` read-only as a gate
   [fetch.rs:execute] [lock.rs:check].
-- **Installed system:** `/usr` and `/etc` change only through `yay -Syuu` in
-  `install`, run as the user, never by the tool writing files directly
-  [install.rs:run_with_status].
+- **Installed system:** `/usr`, and `/etc` as far as the installed packages
+themselves touch it, change only through `yay -Syuu` in `install`, run as the
+  user. The one `/etc` file this tool writes directly is
+  `/etc/sudoers.d/aur-prefetch`, written by `init --apply` and validated with
+  `visudo -cf` first [install.rs:run_with_status] [init.rs:render_sudoers].
 - **User state:** `$XDG_STATE_HOME/aur-prefetch/state.json` (default
   `~/.local/state/aur-prefetch/state.json`), overridable with
   `AUR_PREFETCH_STATE` [config.rs:Config] [state.rs:State].

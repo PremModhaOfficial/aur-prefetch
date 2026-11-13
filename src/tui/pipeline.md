@@ -53,10 +53,11 @@ The live fetch action:
   [fetch_session.rs:FetchSession] [fetch_session.rs:Tick] [fetch_session.rs:start]
   [fetch_session.rs:tick].
 
-Keys the shell accepts: `F` fetch, `i` install gate, `g` ledger, `l` log,
-`j`/`k` move, `r` refresh, `?` help, `space` news attestation, `q` quit,
-Ctrl-C and Ctrl-Z [mod.rs:KeyCode::Char('F')] [mod.rs:KeyCode::Char('r')]
-[mod.rs:KeyCode::Char('z')].
+Keys the shell accepts: `F` fetch, `i` install gate, `enter` run the armed
+install, `g` ledger, `l` log, `j`/`k` move, `r` refresh, `?` help, `space` news
+attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
+[mod.rs:KeyCode::Char('F')] [mod.rs:KeyCode::Char('r')]
+[mod.rs:KeyCode::Char('z')] [mod.rs:KeyCode::Enter].
 
 ## Invariants
 
@@ -106,8 +107,20 @@ Ctrl-C and Ctrl-Z [mod.rs:KeyCode::Char('F')] [mod.rs:KeyCode::Char('r')]
 - The only file this module writes is the state file, through
   `fetch::record_success`, called once when the fetch exits zero
   [fetch_session.rs:tick] [fetch.rs:record_success].
-- The install gate is read-only: `install::preflight` runs no transaction, and
-  `space` records a session-only attestation without writing state [mod.rs].
+- The install gate itself is read-only: `install::preflight` runs no
+  transaction, and `space` records a session-only attestation without writing
+  state [mod.rs].
+- `enter` on an armed gate runs the attached install, and that is the second
+  way the TUI mutates the system. It is armed only when the news is attested,
+  `preflight` is not blocked, and `preflight.euid` is known. Then the TUI drops
+  the terminal, restores it for the child, calls `install::run_with_status` with
+  `Options { yes: true, force: false, stdin_is_tty: true, euid }` (`yay -Syuu`,
+  attached, as the user), collects a `post_install::Receipt`, re-enters the
+  alternate screen, clears it and re-collects the snapshot
+  [mod.rs:KeyCode::Enter] [install.rs:run_with_status].
+- That install path changes `/usr` through `yay` and records the install time in
+  the state file, so the fetch is not the only mutation the TUI can start
+  [install.rs:run_with_status] [mod.rs:install::run_with_status].
 - Nothing here opens a network connection; every fact comes from the report
   layer or an external program's output [render.rs].
 

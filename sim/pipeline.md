@@ -63,7 +63,8 @@ and have no `pipeline.md` of their own.
 ## Side Effects
 
 - `run.sh` builds the container image and runs the runtime containers via the
-  selected docker/podman runtime; it writes nothing to the host. [run.sh:build_image] [run.sh:docker run]
+  selected docker/podman runtime; it writes nothing to the host.
+  [run.sh:build_image] [run.sh:RUNTIME]
 - `make-repo.sh` removes and rebuilds `/srv/simrepo` and `/srv/simbuild`, installs
   `simapp` into the image, and clears `/var/cache/pacman/pkg/*`. [make-repo.sh:rm -rf]
 - `yay` appends argv to `/var/log/sim-yay.log` and `/var/log/sim-yay-build.log`,
