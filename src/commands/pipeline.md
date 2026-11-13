@@ -12,7 +12,8 @@ twice.
 
 Three of the six write nothing at all: `check`, `doctor` and the dry run of
 `clean` are read-only. Writing commands are `fetch` (sync database and download
-cache), `install` (through `yay`, as the user) and `init --apply` (sudoers rule,
+cache), `install` (through `yay`, as the user), `clean --apply` (cache deletion
+through `paccache` and yay build directories) and `init --apply` (sudoers rule,
 user unit, timer).
 
 ## Interface
@@ -107,8 +108,9 @@ Private helpers with contract weight:
   rule becomes an execution error, not an interactive password ask
   [fetch.rs:command_argv].
 - `install`: runs `yay -Syuu` attached to the terminal (it inherits stdio), then
-  prints the pacdiff, reboot and kernel checks. It records the install time in
-  the state file [install.rs:run_with_status].
+  prints the pacdiff, reboot and kernel checks. On exit 0 it records the
+  install time in the state file, before those prints
+  [install.rs:run_with_status].
 - `install::preflight` runs no transaction and takes no terminal; it only
   collects gates [install.rs:Preflight].
 - `clean`: `paccache` with the planned argv, then yay build directories and

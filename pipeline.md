@@ -30,11 +30,13 @@ The shape that makes the claims checkable:
       (the only spawn)               collect, decide a gate, hand over
 ```
 
-Two pure models sit beside the collection path and take no I/O: the execution
-frontier (`src/frontier.rs`, readiness and transitions) and the download-cache
-observer (`src/fetch_source.rs`). The TUI seeds the frontier from the forest and
-folds real observations into it, so the drawn tree is a view of one state
-machine, not a second guess at progress.
+One pure model sits beside the collection path and takes no I/O: the execution
+frontier (`src/frontier.rs`, readiness and transitions). Beside it,
+`src/fetch_source.rs` is a read-only adapter over the download cache: no clock,
+no sleep, no thread, no polling loop, and it writes nothing, but it does read
+the cache directory. The TUI seeds the frontier from the forest and folds real
+observations into it, so the drawn tree is a view of one state machine, not a
+second guess at progress.
 
 The contracts in this tree are `pipeline.md` files, one per code directory,
 rolled up by this blueprint. `README.md` stays the human-facing document and is
@@ -107,7 +109,9 @@ not by convention alone.
   runs `[sudo -n] <pacman> -Syuw --noconfirm`; `-y` refreshes the sync
   databases, `-w` (`--downloadonly`) means "retrieve all packages from the
   server, but do not install/upgrade anything". It never writes `/usr`, `/etc`,
-  or the local package database [fetch.rs:command_argv] (pacman(8), `-w`).
+  or the local package database, though pacman appends its own line to
+  `/var/log/pacman.log` and holds `/var/lib/pacman/db.lck` while it runs
+  [fetch.rs:command_argv] [fetch.rs:execute] (pacman(8), `-w`).
 - **`check` and `doctor` write nothing at all** — no state file, no cache, no
   configuration [check.rs:run_with_options] [doctor.rs:run_with_options].
 - **`install` never rebuilds a package that was already built.** It runs
@@ -136,9 +140,12 @@ not by convention alone.
 - **Exit codes are a contract, identical for every command:** 0 healthy or done,
   1 action needed or gated, 2 execution error, 130 Ctrl-C in the interactive TUI
   only [error.rs:exit_code] [main.rs:Commands].
-- **A gate after a failure is absent, not passed.** `GateState::Fail` ends the
-  sequence, so a rendered checklist only ever shows the gates that actually ran
-  [gate.rs:GateState] [fetch.rs:plan_observed].
+- **A failure ends the gates still to run, not the checklist already built.**
+  In an executing sequence (`fetch::plan_observed`), `GateState::Fail` stops the
+  sequence, so the download does not start. `install::preflight` is different
+  and deliberately so: it is read-only, so it records a failed `root` gate and
+  keeps collecting `lock`, `lists`, `trust` and `state` rather than hiding them
+  [gate.rs:GateState] [fetch.rs:plan_observed] [install.rs:Preflight].
 - **The UI cannot invent a fact.** Renderers read the report layer; strings that
   reach a cell are sanitized; a tick may advance an elapsed label but never a
   state, a byte or a success [report.rs:Snapshot] [sanitize.rs:sanitize_cell] [fetch_session.rs:FetchSession].
@@ -172,6 +179,10 @@ themselves touch it, change only through `yay -Syuu` in `install`, run as the
 - **Read-only inspection:** pacman configuration, cache directory, log, the yay
   and aurto build directories, journald and snapper configuration, and the
   systemd user timers [config.rs:Config] [doctor.rs:run_with_options].
+- **Cache deletion is its own writer.** `clean --apply` is the fourth command
+  that changes the system: it runs `paccache` with the planned argv and removes
+  yay build directories, while the dry run deletes nothing
+  [clean.rs:run_paccache] [clean.rs:YayAction].
 - **The terminal itself:** raw mode and the alternate screen, always restored on
   every exit path including panic [guard.rs:Guard] [guard.rs:install_panic_hook].
 - **Container runtime:** the harness builds an image and runs disposable
@@ -186,8 +197,9 @@ themselves touch it, change only through `yay -Syuu` in `install`, run as the
 - Run: `cargo test`
 - Full local gate, before any commit: `./ci.sh` (clippy `-D warnings`, tests,
   `fmt --check`, `cargo deny check`).
-- Behaviour that writes anything: `./sim/run.sh`. Build the image first with
-  `docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .`,
-  otherwise the harness silently tests a previous binary.
+- Behaviour that writes anything: `./sim/run.sh`. Rebuild the image with
+  `docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .`
+  before trusting the result: the image is built through the runtime's layer
+  cache, and a cached builder layer has served a previous binary on this host.
 - Unit tests with a fake runner are not enough for a side-effect claim; a change
   that touches pacman behaviour needs a scenario in `sim/scenarios/`.

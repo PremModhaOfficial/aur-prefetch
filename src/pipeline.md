@@ -16,8 +16,9 @@ Layout by role:
   `gate.rs` (one observed check), `state.rs` (what is remembered between runs),
   `config.rs` (every path and limit), `error.rs` (typed error and exit code),
   `runner.rs` (the only process spawn).
-- Pure model: `frontier.rs` (readiness and transitions), `fetch_source.rs`
-  (download-cache observation), `tui/` (forest, live view, layout).
+- Pure model: `frontier.rs` (readiness and transitions). Read-only but not
+  pure: `fetch_source.rs`, which reads the download cache and writes nothing.
+  View: `tui/` (forest, live view, layout).
 - Entry point: `main.rs` (clap surface), `lib.rs` (module list).
 
 ## Interface
@@ -93,16 +94,19 @@ Subdirectories:
 - `Config` reads every path and limit from an `AUR_PREFETCH_*` variable with a
   static default, and `from_lookup` takes the lookup function so tests never
   touch the process environment [config.rs:Config].
-- `gate::GateState::Fail` ends a gate sequence: a gate after a failure is
-  absent because it did not run [gate.rs:GateState].
+- `gate::GateState::Fail` stops an executing gate sequence: in
+  `fetch::plan_observed` the download does not start. The read-only
+  `install::preflight` deliberately keeps collecting after a failed gate
+  [gate.rs:GateState] [fetch.rs:plan_observed].
 
 ## Side Effects
 
 - Process spawning: every external command, through `SystemRunner`, with
   inherited stdio only for `run_interactive` [runner.rs:SystemRunner].
 - Writes: the state file (`state.rs`), and whatever the called programs write —
-  `fetch` reaches the pacman sync database and download cache, `install` reaches
-  `/usr` through `yay`, `init --apply` reaches the sudoers file and user units.
+  `fetch` reaches the pacman sync database and download cache, `install`
+  reaches `/usr` through `yay`, `clean --apply` removes files from the caches it
+  audits, and `init --apply` reaches the sudoers file and user units.
   `check`, `doctor` and `progress` write nothing
   [state.rs:save] [progress.rs:collect] [post_install.rs:Receipt].
 - Reads: pacman's configuration, cache directory, lock file and log; the yay
