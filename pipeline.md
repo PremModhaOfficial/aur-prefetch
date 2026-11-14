@@ -198,8 +198,8 @@ themselves touch it, change only through `yay -Syuu` in `install`, run as the
 - Full local gate, before any commit: `./ci.sh` (clippy `-D warnings`, tests,
   `fmt --check`, `cargo deny check`).
 - Behaviour that writes anything: `./sim/run.sh`. Rebuild the image with
-  `docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .`
-  before trusting the result: the image is built through the runtime's layer
-  cache, and a cached builder layer has served a previous binary on this host.
+  `./sim/run.sh --build-only --no-cache` before trusting the result: the image
+  is built through the runtime's layer cache, and a cached builder layer has
+  served a previous binary on this host.
 - Unit tests with a fake runner are not enough for a side-effect claim; a change
   that touches pacman behaviour needs a scenario in `sim/scenarios/`.

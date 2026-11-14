@@ -17,9 +17,14 @@ and have no `pipeline.md` of their own.
 
 ## Interface
 
-- `run.sh` — harness driver. Flag `--build-only`; env vars `SIM_RUNTIME`
-  (docker/podman), `SIM_IMAGE`, `SIM_BINARY` (host-built binary to mount);
-  function `build_image`. [run.sh:--build-only] [run.sh:SIM_RUNTIME] [run.sh:build_image]
+- `run.sh` — harness driver. Flags `--build-only`, `--no-cache`; env vars
+  `SIM_RUNTIME` (docker/podman), `SIM_IMAGE` (image tag, default
+  `aur-prefetch-sim:<worktree directory>-<8 hex of its path>`), `SIM_BINARY`
+  (host-built binary to mount); function `build_image`. [run.sh:--build-only] [run.sh:--no-cache] [run.sh:SIM_RUNTIME] [run.sh:SIM_IMAGE] [run.sh:build_image]
+- `check-image-tag.sh` — proves the tag is derived per worktree, stays a valid
+  docker tag for any directory name, that `SIM_IMAGE` overrides it, and that the
+  build and the run use one tag; runs a stub runtime instead of a real build, and
+  is part of `./ci.sh`. [check-image-tag.sh:argv]
 - `lib.sh` — shared assertion and probe library sourced by scenarios. Assertions:
   `assert_eq`, `assert_ne`, `assert_contains`, `assert_true`, `assert_false`;
   probes: `installed_version`, `payload_version`, `pkg_state`, `cache_files`,

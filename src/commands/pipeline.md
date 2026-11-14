@@ -130,4 +130,4 @@ Private helpers with contract weight:
 - Run: `cargo test`
 - Runtime side effects are proven in the disposable container harness, not by
   unit tests: `./sim/run.sh` (`sim/scenarios/`), which needs
-  `docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .` first.
+  `./sim/run.sh --build-only --no-cache` first.

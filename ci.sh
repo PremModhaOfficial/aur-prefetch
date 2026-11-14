@@ -11,6 +11,9 @@ cargo clippy --all-targets --all-features --locked -- -D warnings
 echo "=== test (debug) ==="
 cargo test --all-targets --all-features --locked
 
+echo "=== sim image tag (per worktree) ==="
+./sim/check-image-tag.sh
+
 echo "=== fmt --check ==="
 cargo fmt --all --check
 
