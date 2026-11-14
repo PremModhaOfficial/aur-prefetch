@@ -8,13 +8,8 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::lock;
 use crate::report::{
-<<<<<<< HEAD
     CacheUsage, Cached, DiskStatus, DiskUsage, Drift, LockState, PartialUpgrade, Policy, Repo,
-    Section, Snapshot, StateInfo, TimerState, TrustState, Update,
-=======
-    CacheUsage, Cached, DiskStatus, DiskUsage, LockState, Policy, Repo, Section, Snapshot,
-    StateInfo, TimerState, TrustState, Update, attention,
->>>>>>> 5a621b0 (fix(install,tui): block the gate on a missing trust file, share the verdict)
+    Section, Snapshot, StateInfo, TimerState, TrustState, Update, attention,
 };
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;

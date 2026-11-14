@@ -8,7 +8,17 @@
 use serde::Serialize;
 
 use crate::error::Error;
-use crate::report::{DoctorReport, Snapshot};
+use crate::report::{DoctorReport, Snapshot, Verdict};
+
+/// The JSON word for a verdict. `report::attention` owns the exit code; the
+/// label is a surface's own, but the clean/action-needed decision is
+/// `Verdict::from_count`'s, the same one the text surfaces ask for.
+fn verdict_label(verdict: Verdict, healthy: &'static str) -> &'static str {
+    match verdict {
+        Verdict::Ok => healthy,
+        _ => "action_needed",
+    }
+}
 
 #[derive(Serialize)]
 struct CheckObject<'a> {
@@ -35,10 +45,8 @@ struct DoctorObject<'a> {
 pub fn check(snapshot: &Snapshot) -> Result<String, Error> {
     let verdict = if snapshot.fatal.is_some() {
         "error"
-    } else if snapshot.actionable == 0 {
-        "clean"
     } else {
-        "action_needed"
+        verdict_label(Verdict::from_count(snapshot.actionable), "clean")
     };
     let object = CheckObject {
         command: "check",
@@ -52,10 +60,8 @@ pub fn check(snapshot: &Snapshot) -> Result<String, Error> {
 pub fn doctor(report: &DoctorReport, problems: u32, error: Option<&str>) -> Result<String, Error> {
     let verdict = if error.is_some() {
         "error"
-    } else if problems == 0 {
-        "ok"
     } else {
-        "action_needed"
+        verdict_label(Verdict::from_count(problems), "ok")
     };
     let object = DoctorObject {
         command: "doctor",
