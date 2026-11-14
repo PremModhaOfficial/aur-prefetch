@@ -674,7 +674,13 @@ mod tests {
         assert_eq!(monitor.live().state("a"), Some(NodeState::Failed));
         assert_eq!(monitor.live().state("a-child"), Some(NodeState::Blocked));
         assert!(monitor.live().graph().frozen);
-        assert_eq!(row_state(&tree, &monitor, "b-child"), LiveState::Planned);
+        // The reducer blocks only the dependent; the view must still stop
+        // promising the independent chain, which no observation can start.
+        assert_eq!(monitor.live().state("b"), Some(NodeState::Ready));
+        assert_eq!(
+            row_state(&tree, &monitor, "b-child"),
+            LiveState::BlockedByFreeze
+        );
 
         let view = LiveView::build(&tree, monitor.live());
         let evidence = view

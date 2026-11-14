@@ -1209,8 +1209,8 @@ write and the allowed escalation.
 
 T2f landed: a nonzero fetch exit builds one repair card from observed facts
 (the failed row, `exit N` plus the first stderr line, a hint keyed to that
-evidence, the blocked count, and no state write) and the card replaces the
-duplicated status line above the keys. A failure with no running node still
+evidence, the downstream-blocked count, and no state write) and the card
+replaces the duplicated status line above the keys. A failure with no running node still
 shows the card and blames no row. `g` toggles the ledger, a flat list of the
 same rows with no branch connectors, statically and during a fetch. The static
 `--render-once` frame and its goldens are unchanged. Sim 35 corrupts the repo
