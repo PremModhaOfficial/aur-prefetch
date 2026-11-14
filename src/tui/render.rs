@@ -1899,18 +1899,22 @@ fn live_row_line(
     let annotation = match live.state {
         LiveState::Planned => live.waiting.label(ascii),
         LiveState::Running | LiveState::Done => live.timer(ascii),
-        LiveState::Failed => match (live.evidence.as_deref(), live.timer(ascii)) {
-            (Some(evidence), Some(timer)) => Some(format!("{evidence} {separator} {timer}")),
-            (Some(evidence), None) => Some(evidence.to_string()),
-            (None, Some(timer)) => Some(timer),
-            (None, None) => None,
-        },
+        // A failed row and an unproven one both carry the observation that
+        // settled them; neither may show a state label with no reason.
+        LiveState::Failed | LiveState::Skipped { satisfied: false } => {
+            match (live.evidence.as_deref(), live.timer(ascii)) {
+                (Some(evidence), Some(timer)) => Some(format!("{evidence} {separator} {timer}")),
+                (Some(evidence), None) => Some(evidence.to_string()),
+                (None, Some(timer)) => Some(timer),
+                (None, None) => None,
+            }
+        }
         LiveState::Skipped { satisfied: true } => match row.artifact {
             Some(ArtifactState::Cached) => Some("cached".to_string()),
             Some(ArtifactState::Built) => Some("built".to_string()),
             _ => None,
         },
-        LiveState::Blocked | LiveState::Skipped { satisfied: false } => None,
+        LiveState::Blocked => None,
     };
     if let Some(annotation) = annotation {
         suffix.push((format!(" {separator} {annotation}"), dim(color)));
@@ -4346,6 +4350,29 @@ mod tests {
             "a live frame is not static"
         );
         assert!(frame.contains("live"));
+    }
+
+    #[test]
+    fn an_unproven_row_shows_the_evidence_that_settled_it() {
+        let snapshot = diamond_snapshot();
+        let mut run = diamond_run();
+        run.unprove_all_running(live_at(), "artifact not observed")
+            .expect("unproven batch");
+
+        let frame = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
+
+        assert!(
+            frame.contains("[×] left"),
+            "the row is terminal, not running\n{frame}"
+        );
+        assert!(
+            frame.contains("artifact not observed"),
+            "the row says why it is not done\n{frame}"
+        );
+        assert!(
+            !frame.contains("[|] left"),
+            "a finished run draws no spinner\n{frame}"
+        );
     }
 
     #[test]

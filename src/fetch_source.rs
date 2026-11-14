@@ -234,8 +234,10 @@ impl FetchMonitor {
     ///
     /// A nonzero code fails every running node with `exit N` and a short
     /// stderr excerpt in one batch, then freezes; the reducer blocks
-    /// dependents. A zero code finishes only a running node with a final
-    /// artifact and leaves the rest running.
+    /// dependents. A zero code finishes a running node from its final
+    /// artifact and finishes the rest as unproven (`Skipped { satisfied:
+    /// false }`, evidence `artifact not observed`), so a finished run leaves
+    /// no running row. A zero code never freezes: nothing failed.
     ///
     /// A failed command that observed no running node freezes nothing: there
     /// is no node the evidence points at, and planned nodes are never marked

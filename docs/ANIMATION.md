@@ -262,8 +262,9 @@ How the report layer feeds it:
   record. `Ready { data, at }` yields facts stamped `at`.
   `Failed { error, at }` freezes the affected subtree and renders the message.
   `NotCollected` renders unknown and yields no observation.
-- `Section<FetchState>` anchors the run: `running`, `lines`, `last_run`. Lines
-  go to the log, not to the tree, unless an adapter proves a transition.
+- Nothing in `Snapshot` anchors the run: the fetch session streams the child's
+  lines and `FetchMonitor` owns `running`, and an adapter turns an observed
+  change into a transition. Lines go to the log, not to the tree.
 - `Snapshot` never drives motion. An old section renders dim and old. Age is
   data, not animation.
 
