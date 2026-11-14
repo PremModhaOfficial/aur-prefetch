@@ -31,8 +31,11 @@ fi
 
 # One tag per worktree: two checkouts running the sim at once must not build
 # into, or run from, each other's image. The hash separates two worktrees whose
-# leaf directory name happens to match, and survives a name docker would reject.
-slug=$(printf %s "${PWD##*/}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40)
+# leaf directory name happens to match; the slug drops any leading dot or dash
+# and falls back to `worktree`, so the tag is valid whatever the directory is
+# called.
+slug=$(printf %s "${PWD##*/}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40 | sed 's/^[.-]*//')
+[[ -n $slug ]] || slug=worktree
 IMAGE=${SIM_IMAGE:-aur-prefetch-sim:"$slug"-$(printf %s "$PWD" | sha256sum | cut -c1-8)}
 
 build_image() {

@@ -53,6 +53,16 @@ d=$(tag "$tmp/same/two/repo" -)
 [[ $c != "$d" ]] ||
     { echo "sim: sibling paths with one leaf name share the tag '$c'" >&2; exit 1; }
 
+# Any directory name must yield a tag docker accepts: [\w][\w.-]{0,127}.
+for name in .dot -dash 'héllo €' 'x y+z' "$(printf 'n%.0s' {1..200})"; do
+    dir=$tmp/odd/$name
+    mkdir -p "$dir"
+    cp -r "$repo/sim" "$dir/sim"
+    odd=$(tag "$dir" -)
+    [[ $odd =~ ^aur-prefetch-sim:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] ||
+        { echo "sim: directory '$name' derived an invalid docker tag '$odd'" >&2; exit 1; }
+done
+
 override=$(tag "$tmp/alpha" example:override)
 [[ $override == "example:override" ]] ||
     { echo "sim: SIM_IMAGE ignored, build used '$override'" >&2; exit 1; }
