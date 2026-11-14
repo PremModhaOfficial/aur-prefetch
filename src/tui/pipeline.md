@@ -134,5 +134,5 @@ attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
   rendered text rather than by a golden file
   [render.rs:no_color_keeps_the_exact_text_and_drops_every_color].
 - Runtime behaviour under a real pty is proven in the container harness:
-  `./sim/run.sh` (scenarios 31-36), which needs
-  `docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .` first.
+  `./sim/run.sh` (scenarios 31-36), which needs `./sim/run.sh --no-cache`
+  first.

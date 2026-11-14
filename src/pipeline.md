@@ -125,5 +125,4 @@ Subdirectories:
 - Full local gate: `./ci.sh` (clippy with `-D warnings`, tests, `cargo fmt
   --check`, `cargo deny check`).
 - Side-effect claims are proven only in the disposable container harness:
-  `./sim/run.sh`; build the image first with
-  `docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .`.
+  `./sim/run.sh`; build the image first with `./sim/run.sh --no-cache`.

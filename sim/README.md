@@ -11,20 +11,29 @@ touching your machine.
 ```bash
 ./sim/run.sh                    # build image, run every scenario
 ./sim/run.sh --build-only       # just build
+./sim/run.sh --no-cache         # rebuild from scratch, no layer cache
 ./sim/run.sh sim/scenarios/01-download-only-keeps-usr.sh
+SIM_IMAGE=aur-prefetch-sim:mine ./sim/run.sh   # override the image tag
 ```
 
 Requires Docker or Podman. The container runs with `--network none`.
 
+The image tag defaults to `aur-prefetch-sim:<worktree directory name>`, so two
+worktrees running the sim at the same time build into and run from separate
+images instead of executing each other's binary. `SIM_IMAGE` overrides the tag
+outright. `sim/check-image-tag.sh`, run by `./ci.sh`, proves both.
+
 After any source change, rebuild the image without the cache before running:
 
 ```bash
-docker build --no-cache -f sim/Dockerfile -t aur-prefetch-sim:local .
+./sim/run.sh --no-cache
 ```
 
 The classic docker builder caches `COPY --from=builder`, so a plain
-`./sim/run.sh` can silently test the previous binary. There is no buildx on the
-current host, so `--no-cache` is the only reliable way to get a fresh image.
+`./sim/run.sh` can silently test the previous binary (measured 2026-11-14:
+`strings <binary> | grep` returned 0 for a symbol the source had). There is no
+buildx on the current host, so `--no-cache` is the only reliable way to get a
+fresh image.
 
 ## What the image contains
 

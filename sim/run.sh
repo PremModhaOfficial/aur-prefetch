@@ -3,7 +3,9 @@
 #
 #   ./sim/run.sh                          build image, run every scenario
 #   ./sim/run.sh --build-only             build image only
+#   ./sim/run.sh --no-cache               rebuild from scratch, no layer cache
 #   ./sim/run.sh sim/scenarios/03-*.sh    run selected scenarios
+#   SIM_IMAGE=name:tag ./sim/run.sh       override the image tag
 #   SIM_BINARY=target/release/aur-prefetch ./sim/run.sh
 #                                         reuse a host-built binary (same Arch glibc)
 #
@@ -27,17 +29,27 @@ if [[ -z ${RUNTIME:-} ]]; then
     exit 1
 fi
 
-IMAGE=${SIM_IMAGE:-aur-prefetch-sim:local}
+# One tag per worktree: two checkouts running the sim at once must not build
+# into, or run from, each other's image.
+IMAGE=${SIM_IMAGE:-aur-prefetch-sim:$(basename "$PWD")}
 
 build_image() {
-    "$RUNTIME" build -f sim/Dockerfile -t "$IMAGE" .
+    "$RUNTIME" build "${no_cache[@]}" -f sim/Dockerfile -t "$IMAGE" .
 }
 
 build_only=0
-if [[ ${1:-} == "--build-only" ]]; then
-    build_only=1
+no_cache=()
+while [[ ${1:-} == --* ]]; do
+    case $1 in
+    --build-only) build_only=1 ;;
+    --no-cache) no_cache=(--no-cache) ;;
+    *)
+        echo "sim: unknown flag: $1" >&2
+        exit 1
+        ;;
+    esac
     shift
-fi
+done
 
 if ((build_only)); then
     build_image
