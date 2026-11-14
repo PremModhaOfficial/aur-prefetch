@@ -129,10 +129,12 @@ Today the sim runs everything as root, so the real privilege path is untested.
 - [x] Scenario: `fetch` refuses below the free-space floor.
 - [x] Scenario: `fetch` uses only the allowed argv.
 - [x] Scenario: `install` builds nothing when the local repo is current.
-- [x] One image tag per worktree: `aur-prefetch-sim:<worktree directory name>`,
-      with `SIM_IMAGE` as the override, so concurrent worktrees cannot build
-      into or run each other's binary; `run.sh --no-cache` rebuilds a changed
-      binary. `sim/check-image-tag.sh` proves both and `./ci.sh` runs it.
+- [x] One image tag per worktree:
+      `aur-prefetch-sim:<worktree directory>-<8 hex of its path>`, with
+      `SIM_IMAGE` as the override, so concurrent worktrees cannot build into or
+      run each other's binary; `run.sh --no-cache` rebuilds a changed binary.
+      `sim/check-image-tag.sh` proves the derived tag and the override, and
+      `./ci.sh` runs it.
 
 Note: pacman 7.1 sets `DownloadUser = alpm`. Cache directories must be
 accessible to that user, or downloads fail. Test a moved CacheDir explicitly.

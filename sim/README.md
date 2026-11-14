@@ -18,10 +18,12 @@ SIM_IMAGE=aur-prefetch-sim:mine ./sim/run.sh   # override the image tag
 
 Requires Docker or Podman. The container runs with `--network none`.
 
-The image tag defaults to `aur-prefetch-sim:<worktree directory name>`, so two
-worktrees running the sim at the same time build into and run from separate
-images instead of executing each other's binary. `SIM_IMAGE` overrides the tag
-outright. `sim/check-image-tag.sh`, run by `./ci.sh`, proves both.
+The image tag defaults to `aur-prefetch-sim:<worktree directory>-<8 hex of
+its path>`, so two worktrees running the sim at the same time build into and
+run from separate images instead of executing each other's binary. `SIM_IMAGE`
+overrides the tag outright. `sim/check-image-tag.sh`, run by `./ci.sh`, proves
+the derived tag, the override, and that the build and the container use the
+same one.
 
 After any source change, rebuild the image without the cache before running:
 

@@ -30,8 +30,10 @@ if [[ -z ${RUNTIME:-} ]]; then
 fi
 
 # One tag per worktree: two checkouts running the sim at once must not build
-# into, or run from, each other's image.
-IMAGE=${SIM_IMAGE:-aur-prefetch-sim:$(basename "$PWD")}
+# into, or run from, each other's image. The hash separates two worktrees whose
+# leaf directory name happens to match, and survives a name docker would reject.
+slug=$(printf %s "${PWD##*/}" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40)
+IMAGE=${SIM_IMAGE:-aur-prefetch-sim:"$slug"-$(printf %s "$PWD" | sha256sum | cut -c1-8)}
 
 build_image() {
     "$RUNTIME" build "${no_cache[@]}" -f sim/Dockerfile -t "$IMAGE" .
