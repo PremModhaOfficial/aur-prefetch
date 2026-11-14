@@ -336,6 +336,24 @@ pub enum Verdict {
     Skipped,
 }
 
+impl Verdict {
+    /// Any counted item means action is needed; nothing else produces
+    /// `Blocked` from a count.
+    pub fn from_count(count: u32) -> Self {
+        if count == 0 { Self::Ok } else { Self::Blocked }
+    }
+}
+
+/// The one answer to "does anything need attention". The words are the
+/// caller's, the decision and the exit code are not: `check`, `doctor` and the
+/// TUI all ask here, so their three counters cannot drift apart.
+pub fn attention(count: u32, message: &str) -> Result<(), Error> {
+    match Verdict::from_count(count) {
+        Verdict::Ok => Ok(()),
+        _ => Err(Error::blocked(format!("{count} {message}"))),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Drift {
     pub last_fetch: Option<u64>,

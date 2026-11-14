@@ -13,6 +13,11 @@ driver=$(mktemp)
 before_usr=$(usr_state)
 before_pkgs=$(pkg_state)
 
+# An allowlist, because a missing trust file now blocks the gate: the TUI
+# never supplies the CLI's `--yes` (scenario 47 proves that side).
+mkdir -p /etc/aurto
+printf 'maintainer\n' >/etc/aurto/trusted-users
+
 rm -rf "$state_dir"
 : >/var/log/sim-sudo.log
 : >/var/log/sim-yay.log

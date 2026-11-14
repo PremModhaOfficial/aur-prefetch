@@ -551,9 +551,11 @@ Gate rules, in order, mirroring `install.rs`:
    `space` records an attestation **for this session only**. Enter stays
    disabled until attested. This is the same human gate as `spec.md` Step 3,
    made explicit.
-5. **Trust.** Missing file means aurto trusts everyone: require a second confirm
-   (pass `--yes`). Empty means trust no one: refuse; `--force` is not offered
-   here. Non-empty shows the count and continues.
+5. **Trust.** Missing file means aurto trusts everyone, and the CLI refuses
+   that state without `--yes`. The gate never supplies that confirmation, so a
+   missing file **blocks**: create the file, or run `install --yes` from the
+   CLI. Empty means trust no one: refuse; `--force` is not offered here.
+   Non-empty shows the count and continues.
 6. **No `--noconfirm`.** Ever. The command shown is exactly `yay -Syuu`.
 
 Disk is displayed as advice, not a gate: `install.rs` does not gate on it. Adding
@@ -561,9 +563,10 @@ a disk gate here would make the two surfaces disagree about whether an install i
 legal.
 
 Enter calls `install::run_with` with the same `Options` the CLI uses
-(`yes: true`, `force: false`, `stdin_is_tty: true`, real euid), after the
-confirmation. It suspends the TUI, runs attached, then re-collects and opens the
-post-install block. The dependency tree is a plan before and a result after;
+(`yes: false`, `force: false`, `stdin_is_tty: true`, real euid). `yes: false`
+is part of the contract: a confirmation the gate did not show is a confirmation
+the TUI must not invent. It suspends the TUI, runs attached, then re-collects and
+opens the post-install block. The dependency tree is a plan before and a result after;
 it is not animated while `yay` owns the terminal.
 
 ### Post-install

@@ -30,7 +30,7 @@ use crate::error::Error;
 use crate::gate::Gate;
 use crate::post_install;
 use crate::progress;
-use crate::report::Snapshot;
+use crate::report::{Snapshot, attention};
 use crate::runner::SystemRunner;
 use crate::tui::fetch_session::{FetchSession, StartFailure};
 use crate::tui::tree::Tree;
@@ -51,7 +51,7 @@ pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
         if let Some(error) = snapshot.fatal.clone() {
             return Err(error);
         }
-        return verdict(&snapshot);
+        return attention(snapshot.actionable, "item(s) need attention");
     }
 
     ensure_interactive(
@@ -260,7 +260,12 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                     config,
                                     &SystemRunner,
                                     install::Options {
-                                        yes: true,
+                                        // The gate never supplies the CLI's
+                                        // confirmation: a missing or empty
+                                        // trust file blocks above, and a silent
+                                        // `--yes` here would answer a question
+                                        // the gate had just refused to ask.
+                                        yes: false,
                                         force: false,
                                         stdin_is_tty: true,
                                         euid,
@@ -601,17 +606,6 @@ fn collect_snapshot(config: &Config, now: SystemTime) -> Result<Snapshot, Error>
     let mut snapshot = check::collect(config, &SystemRunner, now)?;
     snapshot.prefetch = progress::collect(config, &SystemRunner, &snapshot, now);
     Ok(snapshot)
-}
-
-fn verdict(snapshot: &Snapshot) -> Result<(), Error> {
-    if snapshot.actionable == 0 {
-        Ok(())
-    } else {
-        Err(Error::blocked(format!(
-            "{} item(s) need attention",
-            snapshot.actionable
-        )))
-    }
 }
 
 #[cfg(test)]
