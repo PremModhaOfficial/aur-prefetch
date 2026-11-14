@@ -200,7 +200,7 @@ Read-only setup audit.
       and "the next fetch will work" are different claims (#33).
 
 Done when: each broken setup has a scenario that reports it, not just a missing
-file. Scenarios 11-12, 21-24 and 47 cover the missing setup, a configured
+file. Scenarios 11-12, 21-24 and 48 cover the missing setup, a configured
 system, a wildcard sudoers grant, the disk floor, snapper timers, cache
 permissions, and a floor that only the shared rule makes `doctor` refuse.
 

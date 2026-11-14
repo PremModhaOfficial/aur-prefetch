@@ -82,8 +82,9 @@ fn collect(
     // The same need `fetch` refuses on and `check` reports: the configured
     // floor, the snapshot floor, and the pending download provisioned twice.
     // A row measured against `min_free_bytes` alone called a disk healthy that
-    // tonight's fetch would refuse.
-    let (pending_bytes, _) = fetch::pending_download(path_str(&config.pacman)?, runner)?;
+    // tonight's fetch would refuse. The helper stays quiet here: `pacman -Qui`
+    // exits 1 on an up-to-date machine, and the row prints the need it used.
+    let (pending_bytes, _) = fetch::pending_download(path_str(&config.pacman)?, runner, false)?;
     let need = fetch::space_floor(config, pending_bytes);
     if cache_dir.exists() {
         *problems += report_disk(runner, &cache_dir, need, report)?;
@@ -1044,6 +1045,16 @@ mod tests {
     }
 
     fn queue_happy(runner: &FakeRunner, dir: &Path, user: &str, available: &str) {
+        queue_happy_with_pending(runner, dir, user, available, ok(""));
+    }
+
+    fn queue_happy_with_pending(
+        runner: &FakeRunner,
+        dir: &Path,
+        user: &str,
+        available: &str,
+        pending: CommandOutput,
+    ) {
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
         runner.push_output(ok(&format!("{user}\n")));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
@@ -1053,7 +1064,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
-        runner.push_output(ok(""));
+        runner.push_output(pending);
         runner.push_output(ok(available));
         runner.push_output(ok(available));
     }
@@ -1103,18 +1114,13 @@ mod tests {
             complete_setup(&config, &dir);
 
             let runner = FakeRunner::new();
-            runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
-            runner.push_output(ok("alice\n"));
-            runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
-            let meta = fs::metadata(dir.join("cache")).expect("cache metadata");
-            runner.push_output(ok(&format!("{}\n", meta.uid())));
-            runner.push_output(ok(&format!("{}\n", meta.gid())));
-            let mut not_installed = ok("");
-            not_installed.code = 1;
-            runner.push_output(not_installed);
-            runner.push_output(ok(pending));
-            runner.push_output(ok(&format!("{available}\n")));
-            runner.push_output(ok(&format!("{available}\n")));
+            queue_happy_with_pending(
+                &runner,
+                &dir,
+                "alice",
+                &format!("{available}\n"),
+                ok(pending),
+            );
 
             let result = run_with(&config, &runner);
 
@@ -1126,6 +1132,30 @@ mod tests {
 
             fs::remove_dir_all(&dir).expect("clean temp dir");
         }
+    }
+
+    /// `pacman -Qui` exits 1 on an up-to-date machine, which is the healthy
+    /// path: the row uses the configured floor, and the failure is neither a
+    /// warning nor a problem.
+    #[test]
+    fn an_unanswerable_pending_query_uses_the_configured_floor() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        // The exit 1 an up-to-date machine gives.
+        let mut unanswered = ok("");
+        unanswered.code = 1;
+        queue_happy_with_pending(&runner, &dir, "alice", "1048576\n", unanswered);
+
+        let text = doctor_text(&config, &runner, &dir);
+
+        assert!(text.contains("need 1.0 MiB"), "{text}");
+        assert!(text.ends_with("doctor: ok\n"), "{text}");
+        assert_eq!(runner.calls().len(), 9, "no extra query");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
     }
 
     #[test]

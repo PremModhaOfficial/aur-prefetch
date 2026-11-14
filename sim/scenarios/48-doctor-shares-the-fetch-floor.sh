@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
+# sim-run-args: --tmpfs /dev/shm:size=64m
+#
 # #33: doctor's disk row is the need fetch refuses on, not min_free_bytes.
-# The configured floor here is 1 MiB and the CacheDir filesystem holds 64 MiB,
-# so only the 5 GiB snapshot floor can refuse. Before the shared floor, doctor
-# compared against the 1 MiB configured value and exited 0 while fetch refused
-# on the same disk.
+# The configured floor here is 1 MiB and the CacheDir filesystem holds 64 MiB
+# (the flag above pins the size, so the premise does not depend on a container
+# runtime default), so only the 5 GiB snapshot floor can refuse. Before the
+# shared floor, doctor compared against the 1 MiB configured value and exited 0
+# while fetch refused on the same disk.
 source /usr/local/lib/sim/lib.sh
 
 echo "scenario: doctor refuses on the floor fetch refuses on"
