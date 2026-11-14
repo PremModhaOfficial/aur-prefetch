@@ -105,7 +105,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `31-tui-readonly.sh` | `tui --render-once` is read-only, a pipe is rejected, and pty quit, Ctrl-C, forced panic, and Ctrl-Z all restore the terminal |
 | `32-tui-install-gate.sh` | `i` opens the install gate, `space` attests the news for the session, `esc` cancels, and `/usr`, the package DB, the cache, the state file and the sudo log are untouched; `yay -Syuu` never runs |
 | `33-tui-prefetch.sh` | the prefetch frame reads the real cache: missing, cached, stale, partial and built, with no writes |
-| `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows the PRE-FLIGHT gates, opens the captured log with a real pacman line, shows real `.part` bytes and a bar, finishes from the final artifact, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
+| `34-tui-live-fetch.sh` | `F` runs the real fetch under a pty, shows the PRE-FLIGHT gates, opens the captured log with a real pacman line, shows real `.part` bytes and a bar, finishes from the final artifact, never reads a zero exit as frozen, leaves `/usr` and the package DB unchanged, writes only the state file, and escalates only the allowed argv |
 | `35-tui-failure-freeze.sh` | a corrupted repo artifact behind the paced transfer makes the real fetch fail: the running row freezes, the repair card names the evidence and the hint, `/usr` is unchanged, no state is written, and only the allowed argv is escalated |
 | `36-tui-install-attached.sh` | the attested install gate runs the exact attached `yay -Syuu` path as the sim installer: the package upgrades, the scoped helper is the only escalation, no AUR build happens, the state file records the install, the terminal is restored, and the read-only post-install receipt shows the exit, kernel and pacnew state |
 | `37-fetch-refuses-during-a-build.sh` | `fetch` refuses with exit 1 while any of `pacman`, `yay`, `makepkg`, `aurto` runs, even with no `db.lck`, and `check` reports the live process |
@@ -114,9 +114,12 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `41-fill-cache-mid-download.sh` | the `CacheDir` fills during the transfer (a 2 MiB tmpfs and a fault that writes until the kernel refuses): `fetch` exits 2, never claims success, leaves no final artifact and no lock, still delivers the lists, writes nothing to `/usr` or either DB, and completes on a retry after the user frees the space |
 | `42-kill-mid-install.sh` | a file-size rlimit SIGKILLs pacman inside the extraction of a package upgrade: `install` exits 2 and names the killed command, the payload is truncated at the limit, the local DB records the new version with no file list, `pacman -Qk` calls that clean and `pacman -Qkk` reports size and checksum mismatches (it is the honest one), a retry exits 0 without repairing it, and clearing the broken entry plus `--overwrite` does |
 | `43-delete-db-lck-under-pacman.sh` | `db.lck` is deleted under a live, paced `pacman -Syuw`: `check` and `fetch` still name the running pacman because their gate is the process list, and nothing else broke. **Pins a gap:** the last assertion says `doctor` does *not* name the lock, because it has no lock check; it goes red the day `doctor` gains one |
-| `44-partial-upgrade-window.sh` | one package is installed by hand between fetch and install, so the system is half upgraded and the prefetched artifact for the rest is still cached: `check` names the pending update and leaves everything read-only. **Pins a gap:** the last assertion says `check` does *not* report "partial upgrade", because `report::PartialUpgrade` is never filled |
+| `44-partial-upgrade-window.sh` | one package is installed by hand between fetch and install, so the system is half upgraded and the prefetched artifact for the rest is still cached: `check` names the pending update, reads `pacman.log`, names the partial upgrade and the evidence it read, and leaves everything read-only |
 | `45-stale-aurto-foreground-build.sh` | a local aurto repo one version behind the AUR with an AUR update pending: `install` exits 0 and asks for the full upgrade. **Pins a gap:** the last assertion says `install` does *not* warn about the foreground build, because that sentence exists only in the TUI |
+| `47-tui-install-trust-gate.sh` | `/etc/aurto/trusted-users` is missing, so the install gate blocks instead of arming: `enter` installs nothing, `yay -Syuu` never runs, `/usr`, the package DB, the state file and the sudo log are untouched, and the CLI refuses the same state on a real terminal with exit 1 and the `--yes` it requires |
 | `46-kill-mid-download.sh` | the paced transfer SIGKILLs pacman after the first half: the `.part` is a real prefix of the repo artifact, no final artifact exists, the lock and the refreshed lists are left behind, the next fetch refuses on the stale lock without removing it, and the retry after the user removes it fetches the real bytes |
+| `48-doctor-shares-the-fetch-floor.sh` | a 1 MiB configured floor and a snapper config dir on a pinned 64 MiB `/dev/shm` `CacheDir`: only the 5 GiB snapshot floor can refuse, `doctor` exits 1, names the filesystem and that floor as its only problem, and `fetch` refuses on the same disk on the same machine, so the two verdicts cannot disagree |
+| `49-tui-log-dismiss.sh` | the log belongs to its session: `l` opens it on a finished fetch, a `makepkg` appears so the next `F` is refused by the lock gate, and one `esc` still dismisses the notice, so the refused-`F` path clears the open-log flag before its notice; `/usr` and the package DB stay unchanged and the app exits 0 instead of aborting on the loop's session/log assertion |
 
 41-46 are the Phase 4 chaos level from `NEXT.md`; they need the fault
 injection below. 43, 44 and 45 pin a known gap rather than a fixed behaviour:
@@ -150,6 +153,12 @@ For a state that is large, assert on a digest (`local_db_state | sha256sum`),
 not on the state itself: a failing `assert_eq` prints both sides, and the whole
 local package DB is thousands of lines of noise.
 
+A TUI scenario reads `script`'s delta stream, which carries only the cells
+ratatui changed. A value drawn once and then partially rewritten survives as
+digits, not as `49.9%`. Assert a value that is drawn whole, and make the
+fixture hand the TUI that state for the first poll instead of relying on which
+frame a poll happens to catch.
+
 ## Fault injection
 
 The chaos scenarios need a real pacman to misbehave, and the harness provides
@@ -157,7 +166,12 @@ three faults rather than a scenario faking the evidence:
 
 - `sim/fixtures/sim-xfer` is the sim-only `XferCommand`. It paces a package
 transfer (`/etc/sim/xfer-delay`, seconds) so a poll can see real `.part` growth,
-and it injects one fault per run when a scenario writes one word to
+and on the paced path its first chunk is renamed into place so the `.part` is
+never observable at zero bytes. pacman does not create that path; the hook
+does, so a plain `head -c ... >"$out"` would hand the TUI a few milliseconds of
+an empty file. The fault branches below write the target directly, because a
+fault wants the partial file on disk, not a paced one.
+It injects one fault per run when a scenario writes one word to
 `/etc/sim/xfer-fault`: `kill` SIGKILLs the running pacman after the first half
 of the package, `fill` writes into the cache until the kernel refuses (capped by
 `/etc/sim/xfer-fill-max`, default 64 MiB) and then tries to append the rest,

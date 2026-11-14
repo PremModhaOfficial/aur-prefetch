@@ -598,9 +598,9 @@ mod tests {
             package(
                 "parent",
                 ArtifactState::Missing,
-                &["missing", "cached", "failed", "gamma", "alpha"],
+                &["missing", "cached", "partial", "gamma", "alpha"],
             ),
-            package("failed", ArtifactState::Failed, &[]),
+            package("partial", ArtifactState::Partial, &[]),
             package("cached", ArtifactState::Cached, &[]),
             package("missing", ArtifactState::Missing, &[]),
             package("gamma", ArtifactState::Missing, &[]),
@@ -610,7 +610,7 @@ mod tests {
 
         assert_eq!(
             child_names(&tree, find(&tree, "parent")),
-            ["failed", "cached", "alpha", "gamma", "missing"]
+            ["partial", "cached", "alpha", "gamma", "missing"]
         );
     }
 }

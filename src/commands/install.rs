@@ -98,9 +98,12 @@ pub fn preflight(config: &Config, runner: &dyn CommandRunner) -> Preflight {
             "trust",
             format!("allowlist · {count} maintainer(s)"),
         )),
-        Ok(Trust::Missing) => gates.push(Gate::warn(
+        // The action refuses this state without `--yes` (`check_trust`), and
+        // the gate never supplies that confirmation, so it blocks: a warn here
+        // would arm an install the CLI would have refused.
+        Ok(Trust::Missing) => gates.push(Gate::fail(
             "trust",
-            "trusted-users is missing; aurto trusts everyone; a confirmation is required",
+            "trusted-users is missing; aurto trusts everyone; create it, or run install --yes",
         )),
         Ok(Trust::Empty) => gates.push(Gate::fail(
             "trust",
@@ -440,8 +443,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::{
-        Options, effective_uid, format_unix_utc, install_since, preflight, record_install,
-        run_with, run_with_status,
+        Options, check_trust, effective_uid, format_unix_utc, install_since, preflight,
+        record_install, run_with, run_with_status,
     };
     use crate::config::Config;
     use crate::error::Error;
@@ -573,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn preflight_warns_when_the_trust_file_is_missing() {
+    fn preflight_blocks_when_the_trust_file_is_missing() {
         let dir = temp_dir();
         let config = test_config(&dir);
         let runner = FakeRunner::new();
@@ -584,16 +587,49 @@ mod tests {
 
         let preflight = preflight(&config, &runner);
 
-        assert!(!preflight.blocked(), "a missing file is a warning");
+        assert!(preflight.blocked(), "a missing file blocks the gate");
         let trust = preflight
             .gates
             .iter()
             .find(|gate| gate.name == "trust")
             .expect("trust gate");
-        assert_eq!(trust.state, GateState::Warn);
+        assert_eq!(trust.state, GateState::Fail);
         assert!(trust.detail.contains("trusts everyone"));
+        assert!(trust.detail.contains("--yes"), "it names the CLI's way out");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    /// The gate and the action must agree under the TUI's own options: the TUI
+    /// passes no `--yes` and no `--force`, so every trust state the CLI refuses
+    /// with those must block the gate too.
+    #[test]
+    fn preflight_blocks_exactly_where_the_tui_options_refuse() {
+        for (contents, blocked) in [
+            (Some("alice\n"), false),
+            (Some("# nobody\n\n"), true),
+            (None, true),
+        ] {
+            let dir = temp_dir();
+            let config = test_config(&dir);
+            match contents {
+                Some(text) => fs::write(&config.trusted_users, text).expect("trust file"),
+                None => assert!(!config.trusted_users.exists(), "no trust file"),
+            }
+            let runner = FakeRunner::new();
+            runner.push_output(ok("1000\n"));
+            runner.push_output(none_running());
+            runner.push_output(ok(""));
+            runner.push_output(ok(""));
+
+            let gate = preflight(&config, &runner).blocked();
+            let refused = check_trust(&config, &options(false, false, true)).is_err();
+
+            assert_eq!(gate, blocked, "preflight for {contents:?}");
+            assert_eq!(refused, blocked, "the action for {contents:?}");
+
+            fs::remove_dir_all(&dir).expect("clean temp dir");
+        }
     }
 
     #[test]

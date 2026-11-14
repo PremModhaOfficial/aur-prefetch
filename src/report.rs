@@ -114,7 +114,9 @@ pub enum Cached {
 /// What the cache/build scan proves about one package's artifact.
 ///
 /// `Cached` and `Built` are ready. `Stale` and `Partial` are not. `Unknown`
-/// is a value, not a missing zero.
+/// is a value, not a missing zero. There is no `Failed`: a static scan cannot
+/// observe a build in progress or a build that failed, so the live view carries
+/// that state itself and never invents it here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactState {
@@ -124,22 +126,21 @@ pub enum ArtifactState {
     Partial,
     Missing,
     BuildPending,
-    Failed,
     Unknown,
 }
 
 impl ArtifactState {
-    /// Primary-glyph precedence. Lower sorts first; failure is never hidden.
+    /// Primary-glyph precedence. Lower sorts first; a partial artifact outranks
+    /// a stale one.
     pub fn rank(self) -> u8 {
         match self {
-            Self::Failed => 0,
-            Self::Partial => 1,
-            Self::Stale => 2,
-            Self::Built => 3,
-            Self::Cached => 4,
-            Self::BuildPending => 5,
-            Self::Missing => 6,
-            Self::Unknown => 7,
+            Self::Partial => 0,
+            Self::Stale => 1,
+            Self::Built => 2,
+            Self::Cached => 3,
+            Self::BuildPending => 4,
+            Self::Missing => 5,
+            Self::Unknown => 6,
         }
     }
 }
@@ -169,7 +170,6 @@ pub struct Counts {
     pub partial: usize,
     pub missing: usize,
     pub build_pending: usize,
-    pub failed: usize,
     pub unknown: usize,
     /// `None` until IgnorePkg/IgnoreGroup is parsed; never a guessed zero.
     pub held: Option<usize>,
@@ -186,7 +186,6 @@ impl Counts {
                 ArtifactState::Partial => counts.partial += 1,
                 ArtifactState::Missing => counts.missing += 1,
                 ArtifactState::BuildPending => counts.build_pending += 1,
-                ArtifactState::Failed => counts.failed += 1,
                 ArtifactState::Unknown => counts.unknown += 1,
             }
         }
@@ -204,7 +203,6 @@ impl Counts {
             .saturating_add(self.partial)
             .saturating_add(self.missing)
             .saturating_add(self.build_pending)
-            .saturating_add(self.failed)
             .saturating_add(self.unknown)
     }
 }
@@ -305,25 +303,6 @@ pub enum TrustState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct FetchState {
-    pub last_run: Option<SystemTime>,
-    pub lines: Vec<String>,
-    pub running: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct NewsState {
-    pub url: String,
-    pub last_install: Option<SystemTime>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct JournalTail {
-    pub lines: Vec<String>,
-    pub at: Option<SystemTime>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PostInstall {
     pub exit_code: i32,
     pub kernel_running: String,
@@ -357,6 +336,24 @@ pub enum Verdict {
     Skipped,
 }
 
+impl Verdict {
+    /// Any counted item means action is needed; nothing else produces
+    /// `Blocked` from a count.
+    pub fn from_count(count: u32) -> Self {
+        if count == 0 { Self::Ok } else { Self::Blocked }
+    }
+}
+
+/// The one answer to "does anything need attention". The words are the
+/// caller's, the decision and the exit code are not: `check`, `doctor` and the
+/// TUI all ask here, so their three counters cannot drift apart.
+pub fn attention(count: u32, message: &str) -> Result<(), Error> {
+    match Verdict::from_count(count) {
+        Verdict::Ok => Ok(()),
+        _ => Err(Error::blocked(format!("{count} {message}"))),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Drift {
     pub last_fetch: Option<u64>,
@@ -375,6 +372,15 @@ pub enum PartialUpgrade {
 
 /// Everything one collection pass knows.
 ///
+/// Every section here is written by a command that runs today. A field with no
+/// collector would serialize as `NotCollected` forever and read as a fact the
+/// report layer had merely failed to get, so a section is added with its
+/// collector, never before it.
+///
+/// `drift` is the one declared exception: its producer is a live change
+/// (issue #41), which fills it from the post-upgrade pending query. The type
+/// exists because the state is declared, not because it is collected.
+///
 /// `actionable` is the count the CLI already uses for its exit verdict. It is
 /// part of the snapshot because the TUI needs the same answer, not a second
 /// calculation that can drift.
@@ -388,11 +394,6 @@ pub struct Snapshot {
     pub timer: Section<TimerState>,
     pub state: Section<StateInfo>,
     pub trust: Section<TrustState>,
-    pub doctor: Section<DoctorReport>,
-    pub fetch: Section<FetchState>,
-    pub news: Section<NewsState>,
-    pub journal: Section<JournalTail>,
-    pub post_install: Section<PostInstall>,
     pub prefetch: Section<PrefetchReport>,
     pub drift: Drift,
     pub actionable: u32,

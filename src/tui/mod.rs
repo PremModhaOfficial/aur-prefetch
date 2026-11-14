@@ -30,7 +30,7 @@ use crate::error::Error;
 use crate::gate::Gate;
 use crate::post_install;
 use crate::progress;
-use crate::report::Snapshot;
+use crate::report::{Snapshot, attention};
 use crate::runner::SystemRunner;
 use crate::tui::fetch_session::{FetchSession, StartFailure};
 use crate::tui::tree::Tree;
@@ -51,7 +51,7 @@ pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
         if let Some(error) = snapshot.fatal.clone() {
             return Err(error);
         }
-        return verdict(&snapshot);
+        return attention(snapshot.actionable, "item(s) need attention");
     }
 
     ensure_interactive(
@@ -121,6 +121,12 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
         if interrupted.load(Ordering::Relaxed) {
             return Err(Error::Interrupted);
         }
+        // The log screen belongs to a session. A flag left behind could never
+        // be toggled off, because every key that reads it needs the session.
+        assert!(
+            session.is_some() || !log_open,
+            "the log flag outlived its session"
+        );
 
         if session.as_ref().is_some_and(FetchSession::running) {
             let tick = session
@@ -154,7 +160,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             render::Footer {
                                 status: Some(&notice.status),
                                 keys: Some(notice.keys(ascii)),
-                                failure: notice.failure,
+                                failed: notice.failure,
                                 repair: None,
                             },
                             ascii,
@@ -172,7 +178,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 render::Footer {
                                     status: None,
                                     keys: Some(keys),
-                                    failure: false,
+                                    failed: false,
                                     repair: None,
                                 },
                                 ascii,
@@ -260,7 +266,12 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                     config,
                                     &SystemRunner,
                                     install::Options {
-                                        yes: true,
+                                        // The gate never supplies the CLI's
+                                        // confirmation: a missing or empty
+                                        // trust file blocks above, and a silent
+                                        // `--yes` here would answer a question
+                                        // the gate had just refused to ask.
+                                        yes: false,
                                         force: false,
                                         stdin_is_tty: true,
                                         euid,
@@ -332,6 +343,8 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             // Detach while the command runs. No result is claimed.
                             break;
                         } else if session.take().is_some() {
+                            // Dismissing a session closes its log with it.
+                            log_open = false;
                             snapshot = collect_snapshot(config, SystemTime::now())?;
                         } else {
                             notice = None;
@@ -371,7 +384,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                             render::Footer {
                                                 status: Some(&notice.status),
                                                 keys: Some(notice.keys(ascii)),
-                                                failure: notice.failure,
+                                                failed: notice.failure,
                                                 repair: None,
                                             },
                                             notice.gates.as_slice(),
@@ -447,6 +460,9 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                         } else {
                             if session.is_some() || notice.is_some() {
                                 session = None;
+                                // Ending the session closes its log, so a refusal
+                                // below cannot leave the flag orphaned.
+                                log_open = false;
                                 snapshot = collect_snapshot(config, SystemTime::now())?;
                             }
                             match start_fetch(config, &snapshot, SystemTime::now()) {
@@ -601,17 +617,6 @@ fn collect_snapshot(config: &Config, now: SystemTime) -> Result<Snapshot, Error>
     let mut snapshot = check::collect(config, &SystemRunner, now)?;
     snapshot.prefetch = progress::collect(config, &SystemRunner, &snapshot, now);
     Ok(snapshot)
-}
-
-fn verdict(snapshot: &Snapshot) -> Result<(), Error> {
-    if snapshot.actionable == 0 {
-        Ok(())
-    } else {
-        Err(Error::blocked(format!(
-            "{} item(s) need attention",
-            snapshot.actionable
-        )))
-    }
 }
 
 #[cfg(test)]

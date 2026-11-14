@@ -194,11 +194,15 @@ Read-only setup audit.
       (checked from ownership and mode bits; ACLs are not inspected).
 - [x] journald `Storage=persistent` and a size cap.
 - [x] Snapper timers and ranges, only if snapper is installed.
-- [x] Disk floor.
+- [x] Disk floor: the same `space_floor` `fetch` refuses on and `check`
+      reports, so a disk `doctor` passes is a disk `fetch` will not refuse.
+      The row prints the free space and the need, because "the setup is sane"
+      and "the next fetch will work" are different claims (#33).
 
 Done when: each broken setup has a scenario that reports it, not just a missing
-file. Scenarios 11-12 and 21-24 cover the missing setup, a configured system, a
-wildcard sudoers grant, the disk floor, snapper timers, and cache permissions.
+file. Scenarios 11-12, 21-24 and 48 cover the missing setup, a configured
+system, a wildcard sudoers grant, the disk floor, snapper timers, cache
+permissions, and a floor that only the shared rule makes `doctor` refuse.
 
 ### 3.4 `clean`
 
@@ -248,7 +252,7 @@ Requires fault injection in the sim.
 - [ ] Kill pacman mid-install, verify `pacman -Qkk` detects damage and `Qk`
       does not.
 - [ ] Delete `db.lck` while pacman runs, verify `doctor` catches it.
-- [ ] Install a single package between fetch and install, verify `check`
+- [x] Install a single package between fetch and install, verify `check`
       reports a partial upgrade.
 - [ ] Stale aurto repo, verify `install` reports a foreground build risk.
 
@@ -343,6 +347,12 @@ freeze and the repair card.
 T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
 writes.
+
+Issue 40 landed: the AUR branch has a real `stale` arm, so an older build on
+disk is `stale`/`older build`, and `build pending` means only "no artifact on
+disk"; sim 33 proves both badges through the real aurto repo. `ArtifactState::Failed`
+is gone: `scan` cannot observe a build that failed, so the state had no producer
+and the live view carries failure itself.
 
 T2a landed: `src/tui/tree.rs` is the pure forest model and `render.rs` prints it
 bottom-up like nom. It has one row per package, one root per pending package
@@ -465,7 +475,7 @@ package DB, the cache, the state file and the sudo log are untouched and `yay
 
 T3c landed: once the news is attested and no gate fails, the overlay arms
 `enter`. Enter suspends the TUI through the existing guard, runs
-`install::run_with` with the CLI's `Options` (`yes: true`, `force: false`,
+`install::run_with` with the CLI's `Options` (`yes: false`, `force: false`,
 `stdin_is_tty: true`, the preflight's effective uid), then restores the
 terminal, re-collects and shows an honest result line. The tree is a plan
 before and a result after; the attached command is never faked as live. Sim 36
@@ -482,26 +492,61 @@ receipt alongside the upgrade. The receipt's attached `p` (sudo pacdiff), copy
 and install-log keys from `TUI.md` are not wired; the receipt says to run
 `sudo pacdiff` after closing. T3's checklist is closed; T4 polish is next.
 
+### T3e. Gate and action agree; one verdict
+
+- [x] Issue 42: `install::preflight` maps `Trust::Missing` to a blocking gate,
+      so the gate and `check_trust` cannot disagree, and the TUI passes
+      `yes: false` instead of supplying the CLI's confirmation itself. Sim 47
+      proves the gate blocks, nothing runs, and the CLI refuses the same state.
+- [x] Issue 46: `report::attention` is the one "does anything need attention"
+      decision, over `Verdict::from_count`; `check`, `doctor` and the TUI all
+      call it, so their counters, texts and exit codes cannot drift.
+
 ### T4. Polish
 
 - [x] Bootvine's frame grammar: bracketed `[ ]` / `[|]` / `[√]` / `[×]` status
       markers, a light `├─`/`└─` tree, and a one-line `done · running · waiting ·
       failed` footer; ASCII uses `[ ]`/`[|]`/`[v]`/`[x]` and keeps the meaning.
 - [x] Help overlay lists every key the shell handles and sizes to its content;
-      a test reads the `KeyCode` arms in `src/tui/mod.rs` so it cannot drift.
+      a test reads the `KeyCode` arms under `src/tui/` so it cannot drift.
+- [x] The log screen belongs to its session: `esc` on a finished session, and a
+      `F` that a gate refuses, close the log with it, so no open-log flag is
+      left with no screen to toggle it.
 - [ ] `--no-motion`, ASCII, 2,000-package performance pass.
 - [ ] Keymap overrides for the v1 keys.
 - [ ] No mouse, themes, or `tui.conf` in v1.
 
 Done when the frame budget in `TUI.md` holds and ASCII preserves meaning.
 
+T4 stuck-flag fix landed: `esc` on a finished session closes its log with it,
+and so does the `F` path that drops a session before a gate refuses, so the
+open-log flag can no longer outlive the screen that toggles it. The loop
+asserts the pairing (`log_open` implies a session), so a future drop site that
+forgets fails loudly instead of leaving `l` inert. Sim 47 opens the log on a
+finished fetch, starts a `makepkg` so the next `F` is refused by the lock gate,
+and proves one `esc` still dismisses the notice; the same scenario goes red on
+a build without the fix.
+
 ### T5. Docs
 
-- [ ] README command table and a TUI section.
-- [ ] `AGENTS.md` layout entry for `src/tui/`.
-- [ ] Tick these boxes in the same commits that change behaviour.
-- [ ] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
+- [x] README command entry and a TUI section (a bulleted list, not a table).
+- [x] `AGENTS.md` layout entry for `src/tui/`.
+- [x] Tick each box in the commit that makes it true.
+- [x] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
       `tui` needs one.
+
+### T6. Reported model gaps
+
+Two issues named the same class of bug: a state the model declares but never
+reaches, and a flag carrying two meanings.
+
+- [x] #43 fetch run: a zero exit finishes a download it could not prove as a
+      terminal unproven row, so a finished run never draws a running row or a
+      spinner, and the footer's failure style is reserved for a failed run
+      rather than a state-file warning.
+- [x] #44 report layer: `Snapshot` declares only sections a command collects;
+      the five uncollected fields and the types only they used are gone, and a
+      JSON test pins the key set to the list of real sections.
 
 ---
 

@@ -3,11 +3,12 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use crate::commands::fetch;
 use crate::config::Config;
 use crate::error::Error;
-use crate::report::{Check, DoctorReport, Verdict};
+use crate::report::{Check, DoctorReport, Verdict, attention};
 use crate::runner::{CommandRunner, SystemRunner};
-use crate::util::{human_bytes, resolve_cache_dir};
+use crate::util::{human_bytes, path_str, resolve_cache_dir};
 
 pub fn run(json: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
@@ -45,8 +46,7 @@ pub fn run_with_options(
     }
 
     match outcome {
-        Ok(()) if problems == 0 => Ok(()),
-        Ok(()) => Err(Error::blocked(format!("{problems} setup problem(s)"))),
+        Ok(()) => attention(problems, "setup problem(s)"),
         Err(error) => Err(error),
     }
 }
@@ -77,12 +77,20 @@ fn collect(
     *problems += report_cache_dir(runner, &cache_dir, report)?;
     *problems += report_journald(config, report)?;
     *problems += report_snapper(config, runner, report)?;
+
+    // The same need `fetch` refuses on and `check` reports: the configured
+    // floor, the snapshot floor, and the pending download provisioned twice.
+    // A row measured against `min_free_bytes` alone called a disk healthy that
+    // tonight's fetch would refuse. The helper stays quiet here: `pacman -Qui`
+    // exits 1 on an up-to-date machine, and the row prints the need it used.
+    let (pending_bytes, _) = fetch::pending_download(path_str(&config.pacman)?, runner, false)?;
+    let need = fetch::space_floor(config, pending_bytes);
     if cache_dir.exists() {
-        *problems += report_disk(runner, &cache_dir, config.min_free_bytes, report)?;
+        *problems += report_disk(runner, &cache_dir, need, report)?;
     }
     // The root floor still matters when the configured CacheDir is missing.
     if cache_dir != PathBuf::from("/") {
-        *problems += report_disk(runner, Path::new("/"), config.min_free_bytes, report)?;
+        *problems += report_disk(runner, Path::new("/"), need, report)?;
     }
     Ok(())
 }
@@ -878,10 +886,12 @@ fn timer_is_scheduled(text: &str, name: &str) -> bool {
     })
 }
 
+/// The free space the next fetch needs, not the configured minimum alone, so a
+/// disk this row passes is a disk `fetch` will not refuse.
 fn report_disk(
     runner: &dyn CommandRunner,
     path: &Path,
-    floor: u64,
+    need: u64,
     report: &mut DoctorReport,
 ) -> Result<u32, Error> {
     let label = crate::util::path_str(path)?;
@@ -901,7 +911,7 @@ fn report_disk(
         .ok_or_else(|| Error::failed(format!("cannot parse df output for {label}")))?;
 
     let display = format!("disk {label}");
-    if available < floor {
+    if available < need {
         record_label(
             report,
             "disk",
@@ -910,7 +920,7 @@ fn report_disk(
             format!(
                 "{} free, below the {} floor",
                 human_bytes(available),
-                human_bytes(floor)
+                human_bytes(need)
             ),
         );
         Ok(1)
@@ -920,7 +930,11 @@ fn report_disk(
             "disk",
             display,
             Verdict::Ok,
-            format!("{} free", human_bytes(available)),
+            format!(
+                "{} free, need {}",
+                human_bytes(available),
+                human_bytes(need)
+            ),
         );
         Ok(0)
     }
@@ -996,6 +1010,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(ok(""));
         runner.push_output(ok("10737418240\n"));
         runner.push_output(ok("10737418240\n"));
 
@@ -1029,6 +1044,16 @@ mod tests {
     }
 
     fn queue_happy(runner: &FakeRunner, dir: &Path, user: &str, available: &str) {
+        queue_happy_with_pending(runner, dir, user, available, ok(""));
+    }
+
+    fn queue_happy_with_pending(
+        runner: &FakeRunner,
+        dir: &Path,
+        user: &str,
+        available: &str,
+        pending: CommandOutput,
+    ) {
         runner.push_output(ok("Tue 2026-11-11 00:00:00 UTC  aur-prefetch.timer\n"));
         runner.push_output(ok(&format!("{user}\n")));
         runner.push_output(ok(&format!("{}\n", dir.join("cache").to_string_lossy())));
@@ -1038,6 +1063,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(pending);
         runner.push_output(ok(available));
         runner.push_output(ok(available));
     }
@@ -1068,6 +1094,65 @@ mod tests {
         let result = run_with(&config, &runner);
 
         assert!(matches!(result, Err(Error::Blocked(_))));
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    /// The row is `fetch`'s need, not the configured minimum: the pending
+    /// download is provisioned twice, so a disk above `min_free_bytes` and
+    /// below the doubled download must block.
+    #[test]
+    fn the_disk_row_includes_the_doubled_pending_download() {
+        let pending = "Name : simapp\nVersion : 2.0.0-1\nDownload Size : 1.00 MiB\n";
+        // 1 MiB configured floor in `test_config`, plus 2 x 1 MiB pending.
+        let need = 3 * 1024 * 1024;
+
+        for (available, blocked) in [(need - 1, true), (need, false)] {
+            let dir = temp_dir();
+            let config = test_config(&dir);
+            complete_setup(&config, &dir);
+
+            let runner = FakeRunner::new();
+            queue_happy_with_pending(
+                &runner,
+                &dir,
+                "alice",
+                &format!("{available}\n"),
+                ok(pending),
+            );
+
+            let result = run_with(&config, &runner);
+
+            assert_eq!(
+                matches!(result, Err(Error::Blocked(_))),
+                blocked,
+                "{available} bytes free"
+            );
+
+            fs::remove_dir_all(&dir).expect("clean temp dir");
+        }
+    }
+
+    /// `pacman -Qui` exits 1 on an up-to-date machine, which is the healthy
+    /// path: the row uses the configured floor, and the failure is neither a
+    /// warning nor a problem.
+    #[test]
+    fn an_unanswerable_pending_query_uses_the_configured_floor() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        complete_setup(&config, &dir);
+
+        let runner = FakeRunner::new();
+        // The exit 1 an up-to-date machine gives.
+        let mut unanswered = ok("");
+        unanswered.code = 1;
+        queue_happy_with_pending(&runner, &dir, "alice", "1048576\n", unanswered);
+
+        let text = doctor_text(&config, &runner, &dir);
+
+        assert!(text.contains("need 1.0 MiB"), "{text}");
+        assert!(text.ends_with("doctor: ok\n"), "{text}");
+        assert_eq!(runner.calls().len(), 9, "no extra query");
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }
@@ -1103,6 +1188,7 @@ mod tests {
         runner.push_output(ok(&format!("{}\n", meta.uid())));
         runner.push_output(ok(&format!("{}\n", meta.gid())));
         runner.push_output(ok("snapper 0.10\n"));
+        runner.push_output(ok(""));
         runner.push_output(ok(""));
         runner.push_output(ok("10737418240\n"));
         runner.push_output(ok("10737418240\n"));
@@ -1180,6 +1266,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(ok(""));
         runner.push_output(ok("10737418240\n"));
         runner.push_output(ok("10737418240\n"));
 
@@ -1205,6 +1292,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(ok(""));
         runner.push_output(ok("10737418240\n"));
         runner.push_output(ok("10737418240\n"));
 
@@ -1230,6 +1318,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(ok(""));
         runner.push_output(ok("1000\n"));
 
         let result = run_with(&config, &runner);
@@ -1262,6 +1351,7 @@ mod tests {
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(ok(""));
         runner.push_output(ok("10737418240\n"));
         runner.push_output(ok("10737418240\n"));
 
@@ -1513,8 +1603,8 @@ doctor: cache: DIR/cache is writable by alpm (mode 755)
 doctor: journald: Storage=persistent
 doctor: journald: a size cap is set
 doctor: snapper: not installed
-doctor: disk DIR/cache: 10.0 GiB free
-doctor: disk /: 10.0 GiB free
+doctor: disk DIR/cache: 10.0 GiB free, need 1.0 MiB
+doctor: disk /: 10.0 GiB free, need 1.0 MiB
 doctor: ok
 "
         );
@@ -1532,6 +1622,7 @@ doctor: ok
         let mut not_installed = ok("");
         not_installed.code = 1;
         runner.push_output(not_installed);
+        runner.push_output(ok(""));
         runner.push_output(ok("10737418240\n"));
         runner.push_output(ok("10737418240\n"));
 
@@ -1545,7 +1636,7 @@ doctor: repo: DIR/pacman.conf is missing
 doctor: cache: DIR/cache is missing
 doctor: journald: DIR/journald.conf is missing
 doctor: snapper: not installed
-doctor: disk /: 10.0 GiB free
+doctor: disk /: 10.0 GiB free, need 1.0 MiB
 doctor: action needed (6 problem(s))
 "
         );

@@ -241,10 +241,10 @@ pub fn execute(argv: &[String], runner: &dyn CommandRunner) -> Result<CommandOut
     runner.run(args[0], &args[1..])
 }
 
-/// The free-space floor `fetch` and `check` both compare against, so the two
-/// commands cannot disagree about whether the next fetch will work. Snapshot
-/// configs raise the floor to 5 GiB, and the pending download is provisioned
-/// twice (download plus install).
+/// The free-space floor `fetch`, `check` and `doctor` all compare against, so no
+/// command can promise a fetch the gate then refuses. Snapshot configs raise
+/// the floor to 5 GiB, and the pending download is provisioned twice (download
+/// plus install).
 pub(crate) fn space_floor(config: &Config, pending_bytes: u64) -> u64 {
     let floor = if config.snapper_config_dir.is_dir() {
         config.min_free_bytes.max(SNAPSHOT_FLOOR_BYTES)
@@ -255,17 +255,25 @@ pub(crate) fn space_floor(config: &Config, pending_bytes: u64) -> u64 {
 }
 
 /// Pending download size and the names behind it. A query that cannot answer
-/// is a warning and the minimum floor, never a silent zero.
+/// reports no bytes and the minimum floor, never a silent zero.
+///
+/// `warn` prints that fallback on stderr. `fetch` and `check` ask about a
+/// download they are about to make, so they warn; `doctor` only reports the
+/// floor it used and passes `false`, because `pacman -Qui` exits 1 on an
+/// up-to-date machine, which is the healthy path and not worth a warning.
 pub(crate) fn pending_download(
     pacman: &str,
     runner: &dyn CommandRunner,
+    warn: bool,
 ) -> Result<(u64, Vec<String>), Error> {
     let quiet = runner.run(pacman, &["-Qui"])?;
     if quiet.code != 0 {
-        eprintln!(
-            "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
-            quiet.code
-        );
+        if warn {
+            eprintln!(
+                "warning: pacman -Qui exited {}; assuming the minimum free-space floor",
+                quiet.code
+            );
+        }
         return Ok((0, Vec::new()));
     }
     Ok(parse_pending(&quiet.stdout))
@@ -652,7 +660,8 @@ mod tests {
         failed.code = 1;
         runner.push_output(failed);
 
-        let (bytes, names) = pending_download("/usr/bin/pacman", &runner).expect("warning only");
+        let (bytes, names) =
+            pending_download("/usr/bin/pacman", &runner, true).expect("warning only");
 
         assert_eq!(bytes, 0);
         assert!(names.is_empty());

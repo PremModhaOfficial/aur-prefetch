@@ -70,7 +70,7 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
 - `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
 - `aur-prefetch doctor [--json]` — verify timers, limits, repo, journald
-- `aur-prefetch tui [--render-once] [--ascii]` - dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
+- `aur-prefetch tui [--render-once] [--ascii]` — dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
 
 ### `tui`
 
@@ -97,11 +97,14 @@ hint and the blocked count. `g` toggles a flat ledger of the same rows. The
 running screen shows the gates that actually ran, and `l` opens the captured
 log of pacman's own lines. `i` opens a read-only install gate with the same
 checks the CLI runs, the exact `yay -Syuu` command, and a session-only news
-attestation. Once attested and unblocked, `enter` suspends the TUI and runs
+attestation. A missing `/etc/aurto/trusted-users` blocks that gate, because the
+TUI never supplies the `--yes` the CLI requires for it. Once attested and
+unblocked, `enter` suspends the TUI and runs
 `yay -Syuu` attached with the CLI's options; the terminal is restored, the tree
 re-collected, and a read-only post-install receipt shows the exit, kernel,
 `.pacnew` count and reboot advice. The fetch's only write is its existing state
-file after a successful exit.
+file after a successful exit. `?` opens the help overlay, `r` re-collects the
+snapshot (refused while the fetch runs), and `j`/`k` move the selection.
 
 ### `check`
 
@@ -111,6 +114,11 @@ cache and `/`, the pacman lock, cache sizes, timer state, and the last
 fetch/install times. System-owned caches (`/var/cache/pacman/aurto`, aurutils
 chroots) that the invoking user cannot read are reported as unreadable but do
 not fail a healthy system; unreadable user caches do.
+
+It also reports a **partial upgrade**: an install or upgrade after the last
+download-only fetch while updates are still pending, read from `pacman.log`. It
+prints the evidence it read. When the log cannot be read it says the answer is
+unknown rather than guessing, and it still exits `1` for the pending updates.
 
 Exit codes: `0` when clean, `1` when one or more checks need attention, `2`
 when a check could not run (for example `pacman -Qu` failed).
@@ -158,7 +166,8 @@ An empty value falls back to the default.
   `/etc/aurto/trusted-users` means aurto trusts everyone. Empty means trust no
   one. See `NEXT.md` D1.
 - Disk full mid-install: `Qkk` catches the damage; `Qk` does not.
-- Lock file: check `pgrep pacman` first, never delete while it runs.
+- Lock file: one gate tests for a running `pacman`, `yay`, `makepkg` or `aurto`
+  before it looks at `db.lck`. Never delete the lock while one runs.
 - Prefetch never writes to `/usr`. That is the whole point.
 
 ## Develop

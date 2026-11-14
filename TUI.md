@@ -231,6 +231,11 @@ code path that deletes, downloads, or installs.
 Today `check` prints while it collects, so there is nothing to render. Extract
 that first. No UI work starts before T0 lands.
 
+The sketch below is the Phase 8 target. `src/report.rs` declares only the
+sections a command collects today; a section with no collector is added with
+its collector, never before it. `drift` is the one exception: its producer is
+issue #41, and the field is declared so that state has somewhere to land.
+
 ```rust
 pub enum Section<T> {
     Ready { data: T, at: SystemTime },
@@ -323,9 +328,10 @@ Rules for the extraction:
 - `Cached` is a filename match for `<name>-<version>-*.pkg.tar.*` in the resolved
   CacheDir after stripping an epoch and excluding `.sig` files. For AUR it is
   `Unknown` in v1; the UI prints `?`, not `no`.
-- `Drift::partial_upgrade` is `Detected` when `pacman.log` shows any install
-  after the last fetch. The dashboard surfaces it; `Possible` means lists are
-  newer than the last install but no single install is proven.
+- `Drift::partial_upgrade` is `Detected` when `pacman.log` shows an install or
+  upgrade after the last download-only fetch while updates are still pending.
+  The dashboard surfaces it; `Possible` means the log cannot be read while
+  updates are pending, so the answer is unknown and never reported as `None`.
 - `PostInstall` is collected after `yay` exits, on both success and failure, so
   the failure modal has real kernel/pacdiff/reboot data.
 - `FetchState` is fed by a streaming channel; no screen shells out on its own.
@@ -545,9 +551,11 @@ Gate rules, in order, mirroring `install.rs`:
    `space` records an attestation **for this session only**. Enter stays
    disabled until attested. This is the same human gate as `spec.md` Step 3,
    made explicit.
-5. **Trust.** Missing file means aurto trusts everyone: require a second confirm
-   (pass `--yes`). Empty means trust no one: refuse; `--force` is not offered
-   here. Non-empty shows the count and continues.
+5. **Trust.** Missing file means aurto trusts everyone, and the CLI refuses
+   that state without `--yes`. The gate never supplies that confirmation, so a
+   missing file **blocks**: create the file, or run `install --yes` from the
+   CLI. Empty means trust no one: refuse; `--force` is not offered here.
+   Non-empty shows the count and continues.
 6. **No `--noconfirm`.** Ever. The command shown is exactly `yay -Syuu`.
 
 Disk is displayed as advice, not a gate: `install.rs` does not gate on it. Adding
@@ -555,9 +563,10 @@ a disk gate here would make the two surfaces disagree about whether an install i
 legal.
 
 Enter calls `install::run_with` with the same `Options` the CLI uses
-(`yes: true`, `force: false`, `stdin_is_tty: true`, real euid), after the
-confirmation. It suspends the TUI, runs attached, then re-collects and opens the
-post-install block. The dependency tree is a plan before and a result after;
+(`yes: false`, `force: false`, `stdin_is_tty: true`, real euid). `yes: false`
+is part of the contract: a confirmation the gate did not show is a confirmation
+the TUI must not invent. It suspends the TUI, runs attached, then re-collects and
+opens the post-install block. The dependency tree is a plan before and a result after;
 it is not animated while `yay` owns the terminal.
 
 ### Post-install
@@ -818,7 +827,9 @@ so the tree shows the gate checklist, the output it does emit, `.part` growth
 observed with `stat`, and elapsed time. A percentage appears only if both
 observed bytes and a known total exist. The install owns the terminal; it is not
 a captured tree. `l` opens the captured log; `Esc` closes the log first, so a
-closed log is never mistaken for a detach.
+closed log is never mistaken for a detach. The log never outlives its session:
+whatever ends the session, whether `Esc`, `r` or a refused `F`, closes the log
+with it, so no open-log flag can be left with nothing to toggle it.
 
 ---
 
@@ -1243,6 +1254,14 @@ real exit, the running kernel against `/usr/lib/modules`, the `.pacnew` count,
 kernel-based reboot advice, and a repair line on failure. It is read-only and
 closes with enter or esc; sim 36 proves the success receipt. The attached `p`
 (sudo pacdiff), copy and install-log keys remain unwired.
+
+T4 stuck-flag fix landed: the log screen belongs to its session. Ending a
+session (`esc` on a finished one, or a `F` that a gate refuses) closes the log
+with it, so the open-log flag can never outlive the screen that toggles it. The
+loop also asserts the pairing, so a future drop site that forgets fails loudly
+instead of leaving a key that does nothing. Sim 47 opens the log on a finished
+fetch, makes the next `F` refuse on the lock gate, and proves one `esc` still
+dismisses the notice.
 
 ### T3. Actions
 

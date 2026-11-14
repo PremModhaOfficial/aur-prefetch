@@ -117,7 +117,7 @@ The PR review is a machine surface first, human second. Read it, decide, act.
 | `NEXT.md` | Working plan: decisions, phases, acceptance criteria |
 | `context.md` | Implementation notes and edge cases |
 | `src/main.rs` | CLI surface (subcommands) |
-| `src/tui/` | Terminal UI: shell, forest, live view, fetch session, renderer |
+| `src/tui/` | Terminal UI (`src/tui/pipeline.md` is the module map): `mod.rs` shell and keymap, `tree.rs` forest, `live.rs` pure view rows, `fetch_session.rs` live fetch, `render.rs` frames, `guard.rs` terminal restore, `sanitize.rs` untrusted text |
 | `PKGBUILD` / `packaging/` | AUR package: binary to `/usr/bin`, user units to `/usr/lib/systemd/user` |
 | `ci.sh` | Local mirror of the GitHub checks |
 | `sim/` | Arch simulation harness (see `sim/README.md`) |

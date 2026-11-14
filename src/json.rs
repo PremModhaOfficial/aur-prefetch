@@ -8,7 +8,17 @@
 use serde::Serialize;
 
 use crate::error::Error;
-use crate::report::{DoctorReport, Snapshot};
+use crate::report::{DoctorReport, Snapshot, Verdict};
+
+/// The JSON word for a verdict. `report::attention` owns the exit code; the
+/// label is a surface's own, but the clean/action-needed decision is
+/// `Verdict::from_count`'s, the same one the text surfaces ask for.
+fn verdict_label(verdict: Verdict, healthy: &'static str) -> &'static str {
+    match verdict {
+        Verdict::Ok => healthy,
+        _ => "action_needed",
+    }
+}
 
 #[derive(Serialize)]
 struct CheckObject<'a> {
@@ -35,10 +45,8 @@ struct DoctorObject<'a> {
 pub fn check(snapshot: &Snapshot) -> Result<String, Error> {
     let verdict = if snapshot.fatal.is_some() {
         "error"
-    } else if snapshot.actionable == 0 {
-        "clean"
     } else {
-        "action_needed"
+        verdict_label(Verdict::from_count(snapshot.actionable), "clean")
     };
     let object = CheckObject {
         command: "check",
@@ -52,10 +60,8 @@ pub fn check(snapshot: &Snapshot) -> Result<String, Error> {
 pub fn doctor(report: &DoctorReport, problems: u32, error: Option<&str>) -> Result<String, Error> {
     let verdict = if error.is_some() {
         "error"
-    } else if problems == 0 {
-        "ok"
     } else {
-        "action_needed"
+        verdict_label(Verdict::from_count(problems), "ok")
     };
     let object = DoctorObject {
         command: "doctor",
@@ -189,6 +195,42 @@ mod tests {
         assert_eq!(value["disk"]["data"][0]["status"], "measured");
         // Sections a command did not collect are reported as such, not guessed.
         assert_eq!(value["prefetch"]["state"], "not_collected");
+    }
+
+    #[test]
+    fn check_json_declares_only_sections_a_command_collects() {
+        // The report layer is the contract: a section that no command fills
+        // would serialize as `not_collected` forever and read as a missing
+        // fact. The key set is the list of sections that exist plus the
+        // envelope, so adding a field with no collector fails here. `drift` is
+        // declared on purpose - issue #41 fills it - and it is in the list.
+        let value: Value = serde_json::from_str(&check(&snapshot()).expect("json")).expect("JSON");
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("one object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "actionable",
+                "aur",
+                "caches",
+                "command",
+                "disk",
+                "drift",
+                "fatal",
+                "lock",
+                "official",
+                "prefetch",
+                "state",
+                "timer",
+                "trust",
+                "verdict",
+            ]
+        );
     }
 
     #[test]
