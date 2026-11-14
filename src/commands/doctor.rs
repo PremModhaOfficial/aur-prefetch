@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::commands::fetch;
 use crate::config::Config;
 use crate::error::Error;
-use crate::report::{Check, DoctorReport, Verdict};
+use crate::report::{Check, DoctorReport, Verdict, attention};
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::util::{human_bytes, path_str, resolve_cache_dir};
 
@@ -46,8 +46,7 @@ pub fn run_with_options(
     }
 
     match outcome {
-        Ok(()) if problems == 0 => Ok(()),
-        Ok(()) => Err(Error::blocked(format!("{problems} setup problem(s)"))),
+        Ok(()) => attention(problems, "setup problem(s)"),
         Err(error) => Err(error),
     }
 }

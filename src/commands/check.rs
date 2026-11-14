@@ -8,8 +8,13 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::lock;
 use crate::report::{
+<<<<<<< HEAD
     CacheUsage, Cached, DiskStatus, DiskUsage, Drift, LockState, PartialUpgrade, Policy, Repo,
     Section, Snapshot, StateInfo, TimerState, TrustState, Update,
+=======
+    CacheUsage, Cached, DiskStatus, DiskUsage, LockState, Policy, Repo, Section, Snapshot,
+    StateInfo, TimerState, TrustState, Update, attention,
+>>>>>>> 5a621b0 (fix(install,tui): block the gate on a missing trust file, share the verdict)
 };
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
@@ -39,7 +44,7 @@ pub fn run_with_options(
     if let Some(error) = snapshot.fatal.clone() {
         return Err(error);
     }
-    verdict(&snapshot)
+    attention(snapshot.actionable, "item(s) need attention")
 }
 
 macro_rules! collect_or_fatal {
@@ -200,17 +205,6 @@ pub fn collect(
     snapshot.trust = Section::ready(trust, now);
     snapshot.actionable = actionable;
     Ok(snapshot)
-}
-
-fn verdict(snapshot: &Snapshot) -> Result<(), Error> {
-    if snapshot.actionable == 0 {
-        Ok(())
-    } else {
-        Err(Error::blocked(format!(
-            "{} item(s) need attention",
-            snapshot.actionable
-        )))
-    }
 }
 
 /// Render the same text the CLI printed before the report layer existed.

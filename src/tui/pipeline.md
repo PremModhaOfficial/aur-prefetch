@@ -116,7 +116,7 @@ attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
   way the TUI mutates the system. It is armed only when the news is attested,
   `preflight` is not blocked, and `preflight.euid` is known. Then the TUI drops
   the terminal, restores it for the child, calls `install::run_with_status` with
-  `Options { yes: true, force: false, stdin_is_tty: true, euid }` (`yay -Syuu`,
+  `Options { yes: false, force: false, stdin_is_tty: true, euid }` (`yay -Syuu`,
   attached, as the user), collects a `post_install::Receipt`, re-enters the
   alternate screen, clears it and re-collects the snapshot
   [mod.rs:KeyCode::Enter] [install.rs:run_with_status].

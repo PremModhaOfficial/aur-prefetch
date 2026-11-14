@@ -475,7 +475,7 @@ package DB, the cache, the state file and the sudo log are untouched and `yay
 
 T3c landed: once the news is attested and no gate fails, the overlay arms
 `enter`. Enter suspends the TUI through the existing guard, runs
-`install::run_with` with the CLI's `Options` (`yes: true`, `force: false`,
+`install::run_with` with the CLI's `Options` (`yes: false`, `force: false`,
 `stdin_is_tty: true`, the preflight's effective uid), then restores the
 terminal, re-collects and shows an honest result line. The tree is a plan
 before and a result after; the attached command is never faked as live. Sim 36
@@ -491,6 +491,16 @@ so. It is read-only and closes with enter or esc. Sim 36 proves the success
 receipt alongside the upgrade. The receipt's attached `p` (sudo pacdiff), copy
 and install-log keys from `TUI.md` are not wired; the receipt says to run
 `sudo pacdiff` after closing. T3's checklist is closed; T4 polish is next.
+
+### T3e. Gate and action agree; one verdict
+
+- [x] Issue 42: `install::preflight` maps `Trust::Missing` to a blocking gate,
+      so the gate and `check_trust` cannot disagree, and the TUI passes
+      `yes: false` instead of supplying the CLI's confirmation itself. Sim 47
+      proves the gate blocks, nothing runs, and the CLI refuses the same state.
+- [x] Issue 46: `report::attention` is the one "does anything need attention"
+      decision, over `Verdict::from_count`; `check`, `doctor` and the TUI all
+      call it, so their counters, texts and exit codes cannot drift.
 
 ### T4. Polish
 
