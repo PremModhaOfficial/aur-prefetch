@@ -2,13 +2,14 @@
 # Sim-only pacman XferCommand.
 #
 # The scenario needs a package transfer long enough for a 100 ms TUI poll to
-# see real `.part` growth. pacman passes the URL as %u and its own `.part`
-# output path as %o; this copies the local file in two chunks with a pause
-# between them. The database transfer stays fast.
+# see real `.part` growth. pacman passes the URL as %u and the `.part` path to
+# write as %o; this copies the local file in two chunks with a pause between
+# them. The database transfer stays fast.
 #
 # This is a transfer fixture, not a product mode: the real /usr/bin/pacman
-# still chooses the argv, creates the `.part` path, verifies the package, and
-# renames it to the final artifact. The bytes written are the real repo bytes.
+# still chooses the argv, verifies the package, and renames the `.part` to the
+# final artifact. It does not create the `.part` path; this hook does, in the
+# first write. The bytes written are the real repo bytes.
 set -uo pipefail
 
 url=${1:?usage: sim-xfer URL OUTPUT}
@@ -77,6 +78,17 @@ fill)
     ;;
 esac
 
-head -c "$half" "$src" >"$out"
+# The first chunk is renamed into place, so the `.part` never exists at zero
+# bytes. A `head -c ... >"$out"` redirect leaves an empty file for the few
+# milliseconds head takes to be exec'd, and a 10 Hz poll that catches it draws
+# `0.0%` first; every later percentage then reaches the terminal as a digit
+# delta only, because ratatui rewrites changed cells. The paced half state is
+# what the scenario asserts, so it must be the first state on this path.
+chunk="${out%/*}/.sim-xfer-chunk.$$"
+head -c "$half" "$src" >"$chunk" || {
+    rm -f "$chunk"
+    exit 1
+}
+mv "$chunk" "$out"
 sleep "$delay"
 tail -c +"$((half + 1))" "$src" >>"$out"

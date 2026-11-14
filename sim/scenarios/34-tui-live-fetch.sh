@@ -54,9 +54,11 @@ pct=$(awk -v h="$half" -v t="$total" 'BEGIN { printf "%.1f%%", h * 100 / t }')
 assert_contains "$clean" "downloading" "the row is downloading"
 assert_contains "$clean" "$total B" "the row shows the real total"
 assert_contains "$clean" "$half B" "the row shows the observed .part size"
-# The first poll can catch the `.part` mid-copy, and ratatui's delta stream
-# then rewrites only the changed digits. The half-to-total ratio is durable
-# proof that both real sizes were observed.
+# The fixture renames the first chunk into place, so the half state is the
+# first thing any poll of the `.part` can observe and this percentage is drawn
+# whole. `script` records a delta stream, and a percentage drawn once and then
+# diffed (0.0%, then the digits changing to 49.9%) is never a whole string
+# again, so the first full draw is the only assertable one.
 assert_contains "$clean" "$pct" "the percentage needs both observed sizes"
 assert_contains "$clean" "■" "the bar is drawn"
 assert_contains "$clean" "fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm" \
