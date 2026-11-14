@@ -102,7 +102,7 @@ pub fn collect(
     // nowhere.
     let pending_bytes = collect_or_fatal!(
         snapshot,
-        fetch::pending_download(pacman, runner).map(|(bytes, _)| bytes)
+        fetch::pending_download(pacman, runner, true).map(|(bytes, _)| bytes)
     );
     let need = fetch::space_floor(config, pending_bytes);
 

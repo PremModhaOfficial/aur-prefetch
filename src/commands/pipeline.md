@@ -58,7 +58,7 @@ Private helpers with contract weight:
   reached [fetch.rs:plan_observed].
 - The free-space floor is
   `max(min_free_bytes, 5 GiB when snapper_config_dir is a directory) + 2 x
-  pending_bytes`, and `check` reuses it rather than recomputing
+  pending_bytes`, and `check` and `doctor` reuse it rather than recomputing
   [fetch.rs:space_floor].
 - An unreadable pending-size estimate prints a warning and contributes zero
   bytes; it never silently reports "0 bytes to download" as a fact
