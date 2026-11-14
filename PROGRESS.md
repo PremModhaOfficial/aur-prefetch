@@ -89,7 +89,7 @@ is the line between a monitor and a screensaver.
 |---|---|---|
 | Pending set, versions, download size, deps | `pacman -Qu` + `-Qi` | Rows, columns, edges |
 | Cache artifact, version match, mtime, `.part`, `.sig` | CacheDir scan | `✓ cached`, `▲ stale`, `◔ partial`, `○ missing` |
-| AUR built artifact and metadata | aurto repo, `.PKGINFO` | `◆ built` / `▲ stale` / `⏸ build-pending` |
+| AUR built artifact and metadata | aurto repo, `.PKGINFO` | `◆ built` / `▲ stale` / `◔ partial` / `⏸ build-pending` |
 | AUR runtime and build deps | `.SRCINFO`, `pacman -Si` | Child rows; unknown edges are `?` |
 | Download started, bytes, finished | `.part` size via `stat`; `pacman -Syuw` `downloading` lines only if present | `↓` running, real bytes, `✔` done |
 | Build phase started | `makepkg`/`yay` line: `Starting build()`, `check()`, `package()` | `⏵ buildPhase` |
