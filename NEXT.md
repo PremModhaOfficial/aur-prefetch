@@ -487,6 +487,8 @@ and install-log keys from `TUI.md` are not wired; the receipt says to run
 - [x] Bootvine's frame grammar: bracketed `[ ]` / `[|]` / `[√]` / `[×]` status
       markers, a light `├─`/`└─` tree, and a one-line `done · running · waiting ·
       failed` footer; ASCII uses `[ ]`/`[|]`/`[v]`/`[x]` and keeps the meaning.
+- [x] Help overlay lists every key the shell handles and sizes to its content;
+      a test reads the `KeyCode` arms in `src/tui/mod.rs` so it cannot drift.
 - [ ] `--no-motion`, ASCII, 2,000-package performance pass.
 - [ ] Keymap overrides for the v1 keys.
 - [ ] No mouse, themes, or `tui.conf` in v1.
