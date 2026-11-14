@@ -26,7 +26,7 @@ noted):
 | `check.rs` | `run(json: bool)`, `run_with(config, runner)`, `run_with_options`, `collect(..) -> Snapshot`, `render_text(&Snapshot) -> String` [check.rs:collect] [check.rs:render_text] |
 | `fetch.rs` | `run()`, `run_with(config, runner)`, `plan(..) -> FetchPlan`, `plan_observed(config, runner, observe: &mut dyn FnMut(Gate))`, `render_plan`, `command_argv(..) -> Vec<String>`, `render_running`, `execute`, `record_success`; `pub struct FetchPlan { pending, pending_bytes, cache_dir, need, state }` [fetch.rs:FetchPlan] [fetch.rs:plan_observed] [fetch.rs:command_argv] [fetch.rs:record_success] |
 | `install.rs` | `run(yes, force)`, `run_with(config, runner, Options)`, `run_with_status(..) -> Result<i32, Error>`, `preflight(config, runner) -> Preflight`; `pub struct Options { yes, force, stdin_is_tty, euid }`, `pub struct Preflight { gates, official, aur, news_since, euid }`, `NEWS_URL`, `INSTALL_COMMAND = "yay -Syuu"` [install.rs:Options] [install.rs:Preflight] [install.rs:INSTALL_COMMAND] [install.rs:run_with_status] |
-| `clean.rs` | `run(apply)`, `run_with(config, runner, apply)`, `prepare(..) -> CleanPlan`, `render_header`, `run_paccache`, `render_yay`, `render_report_only`; `CleanPlan`, `YayBuild`, `YayAction { KeepNotInstalled, WouldRemove, Removed }`, `YayReport`, `ReportItem` [clean.rs:CleanPlan] [clean.rs:YayAction] [clean.rs:prepare] |
+| `clean.rs` | `run(apply)`, `run_with(config, runner, apply)`, `prepare(..) -> CleanPlan`, `render_header`, `run_paccache`, `render_yay`, `render_report_only`; `CleanPlan`, `YayBuild`, `YayAction { KeepNotInstalled, KeepUnidentified, WouldRemove, Removed }`, `YayReport`, `ReportItem` [clean.rs:CleanPlan] [clean.rs:YayAction] [clean.rs:prepare] |
 | `init.rs` | `run(apply)`, `run_with(config, runner, Setup)`; `pub struct Setup<'a> { apply, exe, user }` [init.rs:Setup] [init.rs:run_with] |
 | `doctor.rs` | `run(json)`, `run_with(config, runner)`, `run_with_options`, `render_text(&DoctorReport) -> String` [doctor.rs:run_with_options] |
 | `mod.rs` | declares `check`, `clean`, `doctor`, `fetch`, `init`, `install` [commands/mod.rs:mod check] |
@@ -86,7 +86,11 @@ Private helpers with contract weight:
   [clean.rs:run] [clean.rs:run_with].
 - `clean` never deletes a yay build for a package that is not installed
   (`YayAction::KeepNotInstalled`) and only touches yay build directories older
-  than `THIRTY_DAYS` [clean.rs:YayAction] [clean.rs:THIRTY_DAYS].
+  than `THIRTY_DAYS` [clean.rs:YayAction] [clean.rs:THIRTY_DAYS]. A build names
+  itself through `.SRCINFO` or its built `*.pkg.tar.*` files; the directory is
+  the pkgbase, not an installed name, so it is never used. A build that names
+  nothing is kept (`YayAction::KeepUnidentified`) [clean.rs:package_names]
+  [clean.rs:built_package_names].
 - `init` prints its artifacts unless `apply` is set, and refuses
   `init --apply` when run under sudo by a different user, because the sudoers
   rule must be installed for the invoking user [init.rs:run].
