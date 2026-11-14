@@ -154,7 +154,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             render::Footer {
                                 status: Some(&notice.status),
                                 keys: Some(notice.keys(ascii)),
-                                failure: notice.failure,
+                                failed: notice.failure,
                                 repair: None,
                             },
                             ascii,
@@ -172,7 +172,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 render::Footer {
                                     status: None,
                                     keys: Some(keys),
-                                    failure: false,
+                                    failed: false,
                                     repair: None,
                                 },
                                 ascii,
@@ -371,7 +371,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                             render::Footer {
                                                 status: Some(&notice.status),
                                                 keys: Some(notice.keys(ascii)),
-                                                failure: notice.failure,
+                                                failed: notice.failure,
                                                 repair: None,
                                             },
                                             notice.gates.as_slice(),

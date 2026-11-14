@@ -409,6 +409,43 @@ impl LiveRun {
         Ok(transitions)
     }
 
+    /// Finish every running node as unproven in one batch.
+    ///
+    /// A zero command exit with no final artifact is not proof of success and
+    /// not evidence of failure. Each affected row keeps the observation as its
+    /// evidence, so the view can say why it is not `done`, and the waiting
+    /// counts settle exactly as a single observation would. The run is not
+    /// frozen: the caller's seal, not a failure, is what stops the frontier.
+    pub fn unprove_all_running(
+        &mut self,
+        at: SystemTime,
+        evidence: impl Into<String>,
+    ) -> Result<Vec<Transition>, FrontierError> {
+        let evidence = evidence.into();
+        let seq = self.graph.last_seq.saturating_add(1);
+        let transitions = self.graph.unprove_all_running(seq)?;
+
+        self.clock = self.clock.max(at);
+
+        for transition in &transitions {
+            if transition.from == NodeState::Running
+                && matches!(transition.to, NodeState::Skipped { satisfied: false })
+            {
+                self.finished.insert(transition.node.clone(), at);
+                self.evidence
+                    .insert(transition.node.clone(), evidence.clone());
+            }
+            let activity = self.activities.get(&transition.node).copied();
+            self.settle_waiting(
+                &transition.node,
+                Waiting::from_state(transition.from, activity),
+                Waiting::from_state(transition.to, activity),
+            );
+        }
+
+        Ok(transitions)
+    }
+
     /// Move one prerequisite's contribution to every dependent's counts.
     fn settle_waiting(&mut self, node: &str, before: Waiting, after: Waiting) {
         if before == after {

@@ -77,7 +77,8 @@ fn bold() -> Style {
 pub struct Footer<'a> {
     pub status: Option<&'a str>,
     pub keys: Option<&'a str>,
-    pub failure: bool,
+    /// The command failed. A state-file warning on a zero exit is not this.
+    pub failed: bool,
     /// When present, the repair card replaces the action status line. It
     /// carries only observed facts: the failed row, the command evidence and
     /// the blocked count.
@@ -969,7 +970,7 @@ fn footer_lines(footer: Footer<'_>, width: usize, ascii: bool, color: bool) -> V
     if let Some(card) = footer.repair {
         lines.extend(repair_lines(card, width, ascii, color));
     } else if let Some(status) = footer.status {
-        let style = if footer.failure {
+        let style = if footer.failed {
             accent_bold(color, FAILURE)
         } else {
             bold()
@@ -1898,18 +1899,22 @@ fn live_row_line(
     let annotation = match live.state {
         LiveState::Planned => live.waiting.label(ascii),
         LiveState::Running | LiveState::Done => live.timer(ascii),
-        LiveState::Failed => match (live.evidence.as_deref(), live.timer(ascii)) {
-            (Some(evidence), Some(timer)) => Some(format!("{evidence} {separator} {timer}")),
-            (Some(evidence), None) => Some(evidence.to_string()),
-            (None, Some(timer)) => Some(timer),
-            (None, None) => None,
-        },
+        // A failed row and an unproven one both carry the observation that
+        // settled them; neither may show a state label with no reason.
+        LiveState::Failed | LiveState::Skipped { satisfied: false } => {
+            match (live.evidence.as_deref(), live.timer(ascii)) {
+                (Some(evidence), Some(timer)) => Some(format!("{evidence} {separator} {timer}")),
+                (Some(evidence), None) => Some(evidence.to_string()),
+                (None, Some(timer)) => Some(timer),
+                (None, None) => None,
+            }
+        }
         LiveState::Skipped { satisfied: true } => match row.artifact {
             Some(ArtifactState::Cached) => Some("cached".to_string()),
             Some(ArtifactState::Built) => Some("built".to_string()),
             _ => None,
         },
-        LiveState::Blocked | LiveState::Skipped { satisfied: false } => None,
+        LiveState::Blocked => None,
     };
     if let Some(annotation) = annotation {
         suffix.push((format!(" {separator} {annotation}"), dim(color)));
@@ -3498,7 +3503,7 @@ mod tests {
         Footer {
             status: Some("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
             keys: Some("esc detach · g ledger · ? help"),
-            failure: false,
+            failed: false,
             repair: None,
         }
     }
@@ -3517,7 +3522,7 @@ mod tests {
         Footer {
             status: Some("fetch failed: exit 2: error: target not found: go"),
             keys: Some("esc dismiss · F fetch again · g ledger · q quit · ? help"),
-            failure: true,
+            failed: true,
             repair: Some(card),
         }
     }
@@ -3526,7 +3531,7 @@ mod tests {
         Footer {
             status: None,
             keys: Some("q quit · g tree · ? help · r refresh"),
-            failure: false,
+            failed: false,
             repair: None,
         }
     }
@@ -3798,7 +3803,7 @@ mod tests {
         Footer {
             status: Some("fetch: exit 2 after 6s"),
             keys: Some(keys),
-            failure: true,
+            failed: true,
             repair: Some(card),
         }
     }
@@ -4294,7 +4299,7 @@ mod tests {
             Footer {
                 status: Some("fetch blocked: pacman is running"),
                 keys: Some("r refresh · q quit · ? help"),
-                failure: true,
+                failed: true,
                 repair: None,
             },
             120,
@@ -4343,6 +4348,29 @@ mod tests {
             "a live frame is not static"
         );
         assert!(frame.contains("live"));
+    }
+
+    #[test]
+    fn an_unproven_row_shows_the_evidence_that_settled_it() {
+        let snapshot = diamond_snapshot();
+        let mut run = diamond_run();
+        run.unprove_all_running(live_at(), "artifact not observed")
+            .expect("unproven batch");
+
+        let frame = render_live_frame(&snapshot, &run, 120, 40, false, false, false);
+
+        assert!(
+            frame.contains("[×] left"),
+            "the row is terminal, not running\n{frame}"
+        );
+        assert!(
+            frame.contains("artifact not observed"),
+            "the row says why it is not done\n{frame}"
+        );
+        assert!(
+            !frame.contains("[|] left"),
+            "a finished run draws no spinner\n{frame}"
+        );
     }
 
     #[test]
@@ -4660,7 +4688,7 @@ mod tests {
                     "fetch blocked: not enough free space on /: need 5.0 GiB, have 1000 B",
                 ),
                 keys: Some("F retry · g ledger · r refresh · q quit · ? help"),
-                failure: true,
+                failed: true,
                 repair: None,
             },
             120,

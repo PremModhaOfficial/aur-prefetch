@@ -84,6 +84,11 @@ assert_contains "$clean" "blocked" "the refused install key names the reason"
 assert_contains "$clean" "[√]" "the final artifact finishes the row"
 assert_contains "$clean" "done" "the row says done"
 assert_contains "$clean" "exit 0" "the result footer carries the real exit"
+# A zero exit is not a failure and not a freeze. A download the fetch cannot
+# prove (its `.part` vanished, no final artifact) is finished as unproven, a
+# terminal row, so a finished run never draws a frozen running row.
+assert_false "a zero-exit result never reads as frozen" \
+    bash -c 'printf "%s" "$1" | grep -q "frozen"' _ "$clean"
 # The key line is drawn across cells, so the space between the words can be
 # absent from the delta stream. "F fetch" is the durable fragment.
 assert_contains "$clean" "F fetch" "the result offers another fetch"

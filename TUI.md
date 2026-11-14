@@ -231,6 +231,11 @@ code path that deletes, downloads, or installs.
 Today `check` prints while it collects, so there is nothing to render. Extract
 that first. No UI work starts before T0 lands.
 
+The sketch below is the Phase 8 target. `src/report.rs` declares only the
+sections a command collects today; a section with no collector is added with
+its collector, never before it. `drift` is the one exception: its producer is
+issue #41, and the field is declared so that state has somewhere to land.
+
 ```rust
 pub enum Section<T> {
     Ready { data: T, at: SystemTime },

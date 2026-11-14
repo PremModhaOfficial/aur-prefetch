@@ -24,9 +24,12 @@
 //! A zero exit code finishes a running node only when a final artifact exists.
 //! It never turns the remaining pending nodes into successes: AUR packages are
 //! not downloaded by `fetch`, and cached or built packages were already seeded
-//! `NoWork` by [`LiveRun::plan`]. A running node without a final artifact stays
-//! running, so the caller can report the mismatch instead of the model
-//! inventing one.
+//! `NoWork` by [`LiveRun::plan`]. A running node without a final artifact is
+//! finished as unproven (`Skipped { satisfied: false }`): the command exited
+//! zero, so nothing failed, but no artifact proves the transfer landed, so the
+//! row is not `done` and its dependents stay blocked. The count is exposed by
+//! [`FetchMonitor::unproven`], so the caller reports the mismatch instead of
+//! drawing a running row on a finished run.
 //!
 //! Cache filenames are matched with [`entry_version`], the parser
 //! `progress::collect` already uses, against every package name in the tree.
@@ -95,6 +98,9 @@ pub struct FetchMonitor {
     bytes: BTreeMap<String, u64>,
     /// Set by `finish`; later polls are no-ops.
     sealed: bool,
+    /// How many downloads the last zero-exit `finish` could not prove. Read by
+    /// the caller for the footer, never guessed from the graph afterwards.
+    unproven: usize,
 }
 
 impl FetchMonitor {
@@ -124,6 +130,7 @@ impl FetchMonitor {
             known,
             bytes: BTreeMap::new(),
             sealed: false,
+            unproven: 0,
         })
     }
 
@@ -227,8 +234,10 @@ impl FetchMonitor {
     ///
     /// A nonzero code fails every running node with `exit N` and a short
     /// stderr excerpt in one batch, then freezes; the reducer blocks
-    /// dependents. A zero code finishes only a running node with a final
-    /// artifact and leaves the rest running.
+    /// dependents. A zero code finishes a running node from its final
+    /// artifact and finishes the rest as unproven (`Skipped { satisfied:
+    /// false }`, evidence `artifact not observed`), so a finished run leaves
+    /// no running row. A zero code never freezes: nothing failed.
     ///
     /// A failed command that observed no running node freezes nothing: there
     /// is no node the evidence points at, and planned nodes are never marked
@@ -308,7 +317,24 @@ impl FetchMonitor {
             }
             self.bytes.remove(&name);
         }
+
+        // A download whose `.part` vanished and whose final artifact never
+        // appeared is not a success and not a failure. Finish it as unproven
+        // so a finished run cannot draw a row the clock is still turning.
+        self.unproven = self.run.graph().running.len();
+        if self.unproven > 0 {
+            transitions.extend(
+                self.run
+                    .unprove_all_running(at, "artifact not observed")
+                    .map_err(frontier_error)?,
+            );
+        }
         Ok(transitions)
+    }
+
+    /// How many downloads the last zero-exit `finish` left unproven.
+    pub fn unproven(&self) -> usize {
+        self.unproven
     }
 
     /// The live frontier the renderer reads.
@@ -755,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_exit_without_an_artifact_leaves_the_node_running() {
+    fn a_zero_exit_without_an_artifact_finishes_the_node_as_unproven() {
         let fixture = Fixture::new();
         let tree =
             Tree::build(&[package("tool", ArtifactState::Missing, Some(1000), &[])]).expect("tree");
@@ -775,7 +801,15 @@ mod tests {
             )
             .expect("finish");
 
-        assert_eq!(monitor.live().state("tool"), Some(NodeState::Running));
+        // The `.part` vanished and no final artifact appeared, but the child
+        // exited 0: nothing failed and nothing proved the transfer.
+        assert_eq!(
+            monitor.live().state("tool"),
+            Some(NodeState::Skipped { satisfied: false }),
+            "an unproven download is terminal, never left running"
+        );
+        assert_eq!(monitor.unproven(), 1);
+        assert!(!monitor.live().graph().frozen, "exit 0 is not a failure");
         assert!(monitor.poll(at(4)).expect("post-finish poll").is_empty());
     }
 
