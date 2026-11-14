@@ -75,12 +75,26 @@ pub enum LiveState {
     Done,
     Failed,
     Blocked,
-    Skipped { satisfied: bool },
+    /// Not started, and never will be: a failure froze the frontier, so no
+    /// later observation can start this node. The reducer keeps it `Pending`
+    /// or `Ready` (nothing failed in its closure), which reads as planned and
+    /// promises work the run will not do.
+    ///
+    /// Drawn as blocked, but kept apart from [`Self::Blocked`]: that state is
+    /// the reason the frame exists and is counted as a downstream block, while
+    /// this one is a consequence of the freeze and is neither.
+    BlockedByFreeze,
+    Skipped {
+        satisfied: bool,
+    },
 }
 
 impl LiveState {
-    fn from_node(state: NodeState) -> Self {
+    /// `frozen` is [`GraphState::frozen`]: a frozen run accepts no further
+    /// observation, so readiness there is not a promise to start.
+    fn from_node(state: NodeState, frozen: bool) -> Self {
         match state {
+            NodeState::Pending | NodeState::Ready if frozen => Self::BlockedByFreeze,
             NodeState::Pending | NodeState::Ready => Self::Planned,
             NodeState::Running => Self::Running,
             NodeState::Done => Self::Done,
@@ -574,7 +588,7 @@ impl LiveView {
             let Some(node_state) = run.graph.nodes.get(&row.name).copied() else {
                 continue;
             };
-            let state = LiveState::from_node(node_state);
+            let state = LiveState::from_node(node_state, run.graph.frozen);
             let activity = run.activities.get(&row.name).copied();
             let elapsed = elapsed_for(run, &row.name, node_state, at);
             let waiting = if matches!(state, LiveState::Planned) {
@@ -601,7 +615,7 @@ impl LiveView {
                     None => {}
                 },
                 LiveState::Failed => failed += 1,
-                LiveState::Blocked | LiveState::Skipped { .. } => {}
+                LiveState::Blocked | LiveState::BlockedByFreeze | LiveState::Skipped { .. } => {}
             }
 
             rows.insert(
@@ -645,10 +659,12 @@ impl LiveView {
 
     /// Nom's viewport over the bottom-up display order.
     ///
-    /// Running, failed and blocked rows are always kept. The remaining budget
-    /// is filled from the bottom of the frame (the roots and the goal), and
-    /// every hidden run becomes one [`WindowSlot::Clipped`] marker. The order
-    /// is the display order and each row appears once.
+    /// Running, failed and blocked rows are always kept; a row blocked by the
+    /// freeze is not, because it will never run and cannot be why the frame
+    /// exists. The remaining budget is filled from the bottom of the frame
+    /// (the roots and the goal), and every hidden run becomes one
+    /// [`WindowSlot::Clipped`] marker. The order is the display order and each
+    /// row appears once.
     pub fn window(&self, tree: &Tree, budget: usize) -> Window {
         let display = tree.display_rows();
         // No room means no rows and no marker: the caller has already spent
@@ -1546,6 +1562,121 @@ mod tests {
     }
 
     #[test]
+    fn a_frozen_run_draws_a_ready_row_it_will_never_start_as_blocked() {
+        // Issue 69: `frozen` and `is_complete` describe different things, and
+        // this run is frozen without being complete. `solo` is no dependent of
+        // the failure, so the reducer leaves it `Ready` — but a frozen run
+        // ignores every later observation, so `Ready` means "could start",
+        // not "will start". Drawing it as planned promised work the run will
+        // not do.
+        let tree = Tree::build(&[
+            package("base", Repo::Aur, ArtifactState::Missing, &[]),
+            package("solo", Repo::Extra, ArtifactState::Missing, &[]),
+        ])
+        .expect("forest builds");
+        let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
+
+        // Planned and will run: nothing has failed yet.
+        assert_eq!(
+            row_for(&LiveView::build(&tree, &run), &tree, "solo").state,
+            LiveState::Planned
+        );
+
+        run.observe(
+            "base",
+            Observed::Started,
+            at(),
+            Some(Activity::Build),
+            "started",
+        )
+        .expect("starts");
+        run.observe(
+            "base",
+            Observed::Failed,
+            at() + Duration::from_secs(2),
+            None,
+            "exit 2",
+        )
+        .expect("fails");
+
+        assert!(run.graph().frozen);
+        assert!(
+            !run.graph().is_complete(),
+            "the fixture is the frozen-but-not-complete case"
+        );
+        assert_eq!(
+            run.state("solo"),
+            Some(NodeState::Ready),
+            "the reducer never moves a node outside the failure's closure"
+        );
+
+        // The start cannot land, which is exactly why the row may not plan it.
+        let transitions = run
+            .observe(
+                "solo",
+                Observed::Started,
+                at() + Duration::from_secs(3),
+                Some(Activity::Download),
+                "late poll",
+            )
+            .expect("a frozen run still reduces");
+        assert!(transitions.is_empty());
+        assert_eq!(run.state("solo"), Some(NodeState::Ready));
+
+        let view = LiveView::build(&tree, &run);
+        assert_eq!(
+            row_for(&view, &tree, "solo").state,
+            LiveState::BlockedByFreeze
+        );
+        assert!(
+            view.rows
+                .values()
+                .all(|row| row.state != LiveState::Planned),
+            "a frozen frame promises nothing: no row reads planned"
+        );
+    }
+
+    #[test]
+    fn a_complete_frozen_run_blocks_only_what_the_failure_blocked() {
+        // The other half of issue 69: with every node terminal there is no
+        // `Ready` row left to misdraw, so the view adds no block of its own
+        // and the downstream block is the reducer's own.
+        let tree = Tree::build(&[
+            package("base", Repo::Aur, ArtifactState::Missing, &[]),
+            package("top", Repo::Extra, ArtifactState::Missing, &["base"]),
+        ])
+        .expect("forest builds");
+        let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
+        run.observe(
+            "base",
+            Observed::Started,
+            at(),
+            Some(Activity::Build),
+            "started",
+        )
+        .expect("starts");
+        run.observe(
+            "base",
+            Observed::Failed,
+            at() + Duration::from_secs(2),
+            None,
+            "exit 2",
+        )
+        .expect("fails");
+
+        assert!(run.graph().frozen);
+        assert!(run.graph().is_complete());
+        let view = LiveView::build(&tree, &run);
+        assert!(
+            view.rows
+                .values()
+                .all(|row| row.state != LiveState::BlockedByFreeze),
+            "a complete run leaves nothing unstarted"
+        );
+        assert_eq!(row_for(&view, &tree, "top").state, LiveState::Blocked);
+    }
+
+    #[test]
     fn a_frozen_run_stops_its_clock() {
         let tree = mixed_diamond();
         let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
@@ -1987,7 +2118,7 @@ mod tests {
     }
 
     #[test]
-    fn the_window_never_hides_running_failed_or_blocked_rows() {
+    fn the_window_never_hides_running_failed_or_reducer_blocked_rows() {
         let mut packages = Vec::new();
         for index in 0..10 {
             packages.push(package(

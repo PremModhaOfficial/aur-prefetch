@@ -6,15 +6,15 @@ PRE-FLIGHT
 ✓  cache    /var/cache/pacman/pkg
 ✓  space    /var/cache/pacman/pkg: need 5.0 GiB, have 14.2 GiB
 ✓  space    /: need 5.0 GiB, have 40.1 GiB
-[ ] paru 2.0.0-1                               planned · waiting for 1 ⏵                                         1.1 MiB
+[×] paru 2.0.0-1                               blocked · not started                                             1.1 MiB
 ┌─ [|] yay-bin 2.0.0-1                         building · ⏱ 6s                                                   1.1 MiB
-[ ] ollama 2.0.0-1                             planned · waiting for 1 ⏵                                         1.1 MiB
+[×] ollama 2.0.0-1                             blocked · not started                                             1.1 MiB
 [|] linux 2.0.0-1 downloading · ⏱ 7s 46.7 MiB/57.0 MiB       ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■◧□□□□□□□□□  81.9%
 [√] lib32-glibc 2.0.0-1                        skipped · cached                                                  1.1 MiB
    ┌─ [√] glibc 2.0.0-1                        skipped · cached                                                  1.1 MiB
 ┌─ [×] nvidia 2.0.0-1                          failed · exit 2: error: target not found: go                      1.1 MiB
 [×] simapp 2.0.0-1                             blocked                                                           1.1 MiB
-0 done · 2 running · 2 waiting · 1 failed · frozen · 2 prefetched 2.3 MiB · ⏱ 7s · mirror.example.org
+0 done · 2 running · 0 waiting · 1 failed · frozen · 2 prefetched 2.3 MiB · ⏱ 7s · mirror.example.org
 
 
 

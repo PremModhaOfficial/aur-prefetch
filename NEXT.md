@@ -337,6 +337,10 @@ and Ctrl-Z re-entry/clear with raw mode restored.
 - [x] Live fetch: real state changes and counters; timers after 1s.
 - [x] No duplicate nodes; one placement per package, no repeated subtree.
 - [x] Failure freeze, repair card, downstream blocked.
+- [x] Issue 69: a frozen frontier draws unstarted rows as blocked, not planned.
+      The reducer keeps them `pending`/`ready` (nothing in their closure
+      failed), so the view derives the block from `frozen`; those rows are not
+      counted as downstream blocks and are not mandatory in the viewport.
 - [x] Ledger fallback (`g`). No timeline in v1.
 
 Done when a prefetched fixture shows the correct tree, no state is invented,

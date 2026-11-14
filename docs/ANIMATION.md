@@ -50,6 +50,14 @@ Terminal_t  = Completed_t union {v | blocking(v)}
 
 The seven states partition `V`. A node is in exactly one set at every `t`.
 
+These sets belong to the reducer. The view adds no reducer state and one
+display reading: a node that is still `pending` or `ready` in a frozen graph is
+drawn `blocked`,
+because a frozen graph accepts no further observation and so will never start
+it. `Ready_t` is membership in the frontier, not a promise to dispatch: after a
+freeze `Frontier_t` still holds those nodes and `is_complete` is false, so
+neither is a licence to draw them as planned.
+
 ## 3. Transitions
 
 An observation is `(seq, at, node, kind, evidence)`. `seq` is assigned by the
@@ -206,7 +214,13 @@ attribute a phase to a package.
    the same rule: `.part` growth is authoritative and no progress bar is parsed.
 3. **Freeze on failure.** The first failed transition sets `frozen`. Motion and
    byte polling stop globally, the failed node and its blocked dependents
-   stay visible, and the repair card replaces the footer.
+   stay visible, and the repair card replaces the footer. A node that has not
+   started when the graph freezes reads `blocked`, not `planned`: the reducer
+   keeps it `pending` or `ready` because no required edge of it failed, and
+   `frozen` is what proves no later observation will start it. Such a row is a
+   consequence of the freeze, not a downstream block, so it is annotated
+   `not started`, is not counted as one, and is not kept as a mandatory row in
+   the viewport.
 4. **Coalesce.** Observations may outrun frames. The reducer folds the queue
    into one state and one transition batch per frame. The renderer draws the
    final state and logs intermediate events. Coalescing is lossless for state

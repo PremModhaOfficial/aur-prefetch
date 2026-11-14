@@ -371,7 +371,8 @@ hide a running or failed node. Print one node once, at its lowest dependency.
 Acceptance: golden frames at 120x40 and 80x24. A 200-package fixture keeps
 every running and failed node visible and still fits the terminal.
 
-T2c landed: `LiveView::window` keeps running, failed and blocked rows, fills
+T2c landed: `LiveView::window` keeps running, failed and reducer-blocked rows
+(a row blocked only by a frozen frontier is not kept), fills
 the rest of the `height / 3` budget from the root end, and marks each hidden
 run with `⋮`. The header counts shown roots. The live goldens include a
 200-package forest at both sizes; the static prefetch frame is unchanged.
