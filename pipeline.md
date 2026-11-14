@@ -127,9 +127,9 @@ not by convention alone.
   lock file itself, so the report and the gates agree. A lock nobody holds is
   refused and never deleted [lock.rs:check] [lock.rs:running]
   [check.rs:collect_lock].
-- **One free-space floor, shared.** `fetch` and `check` compare against the same
-  `space_floor`, so the report cannot promise a fetch that the gate then refuses
-  [fetch.rs:space_floor].
+- **One free-space floor, shared.** `fetch`, `check` and `doctor` compare
+  against the same `space_floor`, so no report can promise a fetch that the gate
+  then refuses [fetch.rs:space_floor].
 - **Every external command goes through `CommandRunner`.** `Command::new` exists
   only in `src/runner.rs`, which is what makes the argv assertions in the tests
   possible [runner.rs:CommandRunner].

@@ -117,6 +117,7 @@ package, add it to `sim/make-repo.sh`, do not open the network.
 | `44-partial-upgrade-window.sh` | one package is installed by hand between fetch and install, so the system is half upgraded and the prefetched artifact for the rest is still cached: `check` names the pending update and leaves everything read-only. **Pins a gap:** the last assertion says `check` does *not* report "partial upgrade", because `report::PartialUpgrade` is never filled |
 | `45-stale-aurto-foreground-build.sh` | a local aurto repo one version behind the AUR with an AUR update pending: `install` exits 0 and asks for the full upgrade. **Pins a gap:** the last assertion says `install` does *not* warn about the foreground build, because that sentence exists only in the TUI |
 | `46-kill-mid-download.sh` | the paced transfer SIGKILLs pacman after the first half: the `.part` is a real prefix of the repo artifact, no final artifact exists, the lock and the refreshed lists are left behind, the next fetch refuses on the stale lock without removing it, and the retry after the user removes it fetches the real bytes |
+| `47-doctor-shares-the-fetch-floor.sh` | on a 64 MiB `CacheDir` filesystem with a 1 MiB configured floor and a snapper config dir, only the 5 GiB snapshot floor can refuse: `doctor` exits 1, names the filesystem and that floor, and `fetch` refuses on the same disk on the same machine, so the two verdicts cannot disagree |
 
 41-46 are the Phase 4 chaos level from `NEXT.md`; they need the fault
 injection below. 43, 44 and 45 pin a known gap rather than a fixed behaviour:

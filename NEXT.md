@@ -194,11 +194,15 @@ Read-only setup audit.
       (checked from ownership and mode bits; ACLs are not inspected).
 - [x] journald `Storage=persistent` and a size cap.
 - [x] Snapper timers and ranges, only if snapper is installed.
-- [x] Disk floor.
+- [x] Disk floor: the same `space_floor` `fetch` refuses on and `check`
+      reports, so a disk `doctor` passes is a disk `fetch` will not refuse.
+      The row prints the free space and the need, because "the setup is sane"
+      and "the next fetch will work" are different claims (#33).
 
 Done when: each broken setup has a scenario that reports it, not just a missing
-file. Scenarios 11-12 and 21-24 cover the missing setup, a configured system, a
-wildcard sudoers grant, the disk floor, snapper timers, and cache permissions.
+file. Scenarios 11-12, 21-24 and 47 cover the missing setup, a configured
+system, a wildcard sudoers grant, the disk floor, snapper timers, cache
+permissions, and a floor that only the shared rule makes `doctor` refuse.
 
 ### 3.4 `clean`
 
