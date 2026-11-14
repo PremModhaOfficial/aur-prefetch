@@ -515,10 +515,10 @@ Done when the frame budget in `TUI.md` holds and ASCII preserves meaning.
 
 ### T5. Docs
 
-- [ ] README command table and a TUI section.
-- [ ] `AGENTS.md` layout entry for `src/tui/`.
-- [ ] Tick these boxes in the same commits that change behaviour.
-- [ ] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
+- [x] README command entry and a TUI section (a bulleted list, not a table).
+- [x] `AGENTS.md` layout entry for `src/tui/`.
+- [x] Tick each box in the commit that makes it true.
+- [x] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
       `tui` needs one.
 
 ### T6. Reported model gaps

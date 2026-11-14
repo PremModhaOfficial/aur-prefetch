@@ -12,13 +12,13 @@ This file is edge-case reference, not a plan.
 - CacheDir: pacman 7.1 prints a value even when the line is commented. Keep the static `/var/cache/pacman/pkg` fallback for a failed or empty query, not because the default is empty.
 - Threshold: 2 GiB floor, 2× download estimate + 2-5 GB floor (5 if snapshots).
 - Gate guards `pacman -Syuw` only, NOT aurto builds.
-- Check `/var/lib/pacman/db.lck` + `pgrep pacman` before running.
+- Lock first (`src/lock.rs:14`): `pgrep -x -l 'pacman|yay|makepkg|aurto'`, then `/var/lib/pacman/db.lck`.
 - The trust gate belongs to `install`, not `fetch` (D1). Missing `/etc/aurto/trusted-users` means aurto trusts everyone; empty means trust no one; non-empty is an allowlist.
 
 ### check
 - Pending: `pacman -Qu` + `yay -Qua` non-empty = updates pending.
 - Disk: `df -h /` + `df -i /` (slots fill separately).
-- Lock: `pgrep pacman`, never delete `/var/lib/pacman/db.lck` while running.
+- Lock: the same shared gate (`src/lock.rs:14`); never delete `/var/lib/pacman/db.lck` while pacman, yay, makepkg or aurto runs.
 - Caches: 4 locations (downloads, yay builds, aurto repo, chroots).
 - Timer: `systemctl --user list-timers`, `journalctl --user -u aur-prefetch.service`.
 - Partial-upgrade detection: `grep "installed\|upgraded" /var/log/pacman.log` after last `-Syuw`.
