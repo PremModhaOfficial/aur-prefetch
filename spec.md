@@ -199,7 +199,7 @@ df -h /
 df -i /
 ```
 `df -h` shows free disk. `df -i` shows free file slots. Full slots break install even if disk looks free.
-Check lock file `/var/lib/pacman/db.lck` first. If it exists, check the service or `pgrep pacman`. If pacman is still running, wait.
+Check for a running `pacman`, `yay`, `makepkg` or `aurto` first: `pgrep -x -l 'pacman|yay|makepkg|aurto'`. If one is still running, wait. That process check comes before the lock file on purpose: a `yay` build spends its time inside `makepkg`, which holds no `/var/lib/pacman/db.lck`. Only then look at `/var/lib/pacman/db.lck`: if it exists and none of those runs, it is stale.
 Check Arch news. News is at https://archlinux.org/news/ Use the gated sequence. Do not install first. Manual steps can be before install or after install. Installing first can leave you unbootable. See Ways to mess up #5.
 1. List upgrades: `yay -Qua` and `pacman -Qu`
 2. Find last install time: check `/var/log/pacman.log` for last upgrade
@@ -226,7 +226,7 @@ Then check kernel: `uname -r && ls /usr/lib/modules/`
 If something fails:
 - Disk low but install never started: clean caches in Step 4, then retry.
 - Disk low during install: clean caches, then repair above for each broken package.
-- Lock stuck: check `systemctl --user status aur-prefetch.service` or `pgrep pacman`. Timer status shows active waiting. It does not show if download is running. Only remove lock file if no pacman is running.
+- Lock stuck: check `systemctl --user status aur-prefetch.service` or `pgrep -x -l 'pacman|yay|makepkg|aurto'`. Timer status shows active waiting. It does not show if download is running. Only remove lock file if no pacman transaction or AUR build is running.
 - Breaking news: do not install yet. Read news first.
 - Build did not run today: rebuild by hand after reading PKGBUILD.
 Finish Step 3 with pacdiff. Pacdiff is part of install, not extra tidy. Run it before reboot or service restart. See Ways to mess up #4.
@@ -356,7 +356,7 @@ Fix forward vs roll back: fix forward if system boots and only one service or pr
 ## Other mistakes
 - Running builds as root. Never sudo yay or makepkg. Only timer gets sudo for exact prefetch command. No NOPASSWD ALL.
 - Accepting a build without reading. PKGBUILD changes on each update. Read new PKGBUILD before you let a build run.
-- Deleting the lock file while pacman still running corrupts the database. Check service/pgrep first.
+- Deleting the lock file while pacman or a build still runs corrupts the database. Check the service and for a running pacman, yay, makepkg or aurto first.
 - Thinking paccache cleans all. It cleans each CacheDir. yay builds, aurto repo, and chroots need own checks.
 - Thinking disk full is always safe to retry. Full at download is mostly safe but still needs full install. Full at install is corruption. Reinstall broken packages.
 - Forgetting aurto repo and chroots stay on `/`. Moving downloads to /home does not move them.
