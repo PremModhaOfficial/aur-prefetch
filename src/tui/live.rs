@@ -232,6 +232,10 @@ pub struct LiveRun {
     waiting: BTreeMap<NodeId, Waiting>,
     first_at: SystemTime,
     clock: SystemTime,
+    /// `--no-motion` freezes the spinner cell. It is a display choice for this
+    /// run, so it travels with the run: the frame key and the drawn glyph then
+    /// read the same value instead of disagreeing about what changed.
+    motion: bool,
 }
 
 impl LiveRun {
@@ -276,6 +280,7 @@ impl LiveRun {
             waiting,
             first_at: at,
             clock: at,
+            motion: true,
         };
 
         let seeded: Vec<(String, &'static str)> = tree
@@ -466,6 +471,13 @@ impl LiveRun {
     pub fn clock(&self) -> SystemTime {
         self.clock
     }
+
+    /// Turn the spinner off for this run (`--no-motion`). A no-motion run is
+    /// the frozen case for the spinner only: rows, bars and elapsed labels
+    /// still update on real observations.
+    pub fn set_motion(&mut self, motion: bool) {
+        self.motion = motion;
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -594,7 +606,7 @@ impl LiveView {
             },
             spinner: spinner_at(
                 elapsed,
-                run.graph.frozen,
+                run.graph.frozen || !run.motion,
                 builds.running + downloads.running,
             ),
             frozen: run.graph.frozen,
@@ -1292,6 +1304,35 @@ mod tests {
             .expect("fails");
         frozen.advance(at() + Duration::from_millis(900));
         assert_eq!(LiveView::build(&tree, &frozen).spinner, 0);
+    }
+
+    #[test]
+    fn no_motion_freezes_the_spinner_but_keeps_the_row() {
+        let tree = mixed_diamond_cached_base();
+        let mut run = LiveRun::plan(&tree, at()).expect("plan seeds");
+        run.observe(
+            "left",
+            Observed::Started,
+            at(),
+            Some(Activity::Build),
+            "started",
+        )
+        .expect("starts");
+        run.advance(at() + Duration::from_millis(500));
+        assert_eq!(LiveView::build(&tree, &run).spinner, 1, "motion turns it");
+
+        run.set_motion(false);
+        let still = LiveView::build(&tree, &run);
+        assert_eq!(still.spinner, 0, "--no-motion pins the spinner cell");
+        assert_eq!(
+            still
+                .rows
+                .values()
+                .filter(|row| row.state == LiveState::Running)
+                .count(),
+            1,
+            "the real running row is still observed and drawn"
+        );
     }
 
     #[test]

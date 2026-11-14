@@ -40,6 +40,28 @@ const DONE: Color = Color::Green;
 const DIM: Color = Color::DarkGray;
 const FAILURE: Color = Color::Red;
 
+/// The ASCII frame set from TUI.md's glyph table: `┌ ┐ └ ┘ ─ │` become
+/// `+ + + + - |`. ratatui's own `border::PLAIN` is Unicode, so `--ascii`
+/// cannot use it.
+const ASCII_BORDER: border::Set = border::Set {
+    top_left: "+",
+    top_right: "+",
+    bottom_left: "+",
+    bottom_right: "+",
+    vertical_left: "|",
+    vertical_right: "|",
+    horizontal_top: "-",
+    horizontal_bottom: "-",
+};
+
+/// One framed overlay, in the glyph set the caller asked for.
+fn frame_block<'a>(title: impl Into<Line<'a>>, ascii: bool) -> Block<'a> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_set(if ascii { ASCII_BORDER } else { border::PLAIN })
+        .title(title)
+}
+
 fn accent(color: bool, value: Color) -> Style {
     if color {
         Style::default().fg(value)
@@ -285,14 +307,7 @@ pub fn draw_log(frame: &mut Frame, lines: &VecDeque<StreamLine>, ascii: bool, co
         height,
     );
     frame.render_widget(Clear, popup);
-    let block = if ascii {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::PLAIN)
-            .title("fetch log")
-    } else {
-        Block::default().borders(Borders::ALL).title("fetch log")
-    };
+    let block = frame_block("fetch log", ascii);
     frame.render_widget(block, popup);
     let inner = Rect::new(
         popup.x.saturating_add(1),
@@ -361,14 +376,7 @@ pub fn draw_install_gate(
         " Install {separator} {} ",
         package_count(preflight.official + preflight.aur)
     );
-    let block = if ascii {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::PLAIN)
-            .title(title)
-    } else {
-        Block::default().borders(Borders::ALL).title(title)
-    };
+    let block = frame_block(title, ascii);
     frame.render_widget(block, area);
     let inner = Rect::new(
         area.x.saturating_add(2),
@@ -483,14 +491,7 @@ pub fn draw_post_install(frame: &mut Frame, receipt: &Receipt, ascii: bool, colo
     let separator = if ascii { "|" } else { "·" };
     let mode = if receipt.failed { "failure" } else { "success" };
     let title = format!(" Post-install {separator} {mode} ");
-    let block = if ascii {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::PLAIN)
-            .title(title)
-    } else {
-        Block::default().borders(Borders::ALL).title(title)
-    };
+    let block = frame_block(title, ascii);
     frame.render_widget(block, area);
     let inner = Rect::new(
         area.x.saturating_add(2),
@@ -2340,14 +2341,7 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
     );
 
     frame.render_widget(Clear, popup);
-    let block = if ascii {
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(border::PLAIN)
-            .title("help")
-    } else {
-        Block::default().borders(Borders::ALL).title("help")
-    };
+    let block = frame_block("help", ascii);
     frame.render_widget(block, popup);
 
     let inner = Rect::new(
@@ -5318,6 +5312,166 @@ mod tests {
             frame.is_ascii(),
             "ascii frame contained a non-ASCII character"
         );
+    }
+
+    #[test]
+    fn every_surface_is_ascii_in_ascii_mode() {
+        // TUI.md: `--ascii` swaps the whole set, not only statuses. One sweep
+        // over every screen at both harness sizes. `cell_text` turns an
+        // unmapped glyph into `?`, so `is_ascii` alone is not enough: none of
+        // these fixtures carries genuinely unknown text, so a `?` is a missing
+        // Tier A glyph too.
+        let snapshot = showcase_snapshot();
+        let run = showcase_run();
+        let card = showcase_card();
+        let gates = fetch_gates();
+        let preflight = install_preflight();
+        let log = long_log_fixture();
+        let mut frames: Vec<(String, String)> = Vec::new();
+        for (width, height) in [(80_u16, 24_u16), (120_u16, 40_u16)] {
+            let size = format!("{width}x{height}");
+            let live = |ledger: bool| {
+                render_live_frame_status(
+                    &snapshot,
+                    &run,
+                    showcase_footer(&card, true),
+                    width,
+                    height,
+                    true,
+                    false,
+                    false,
+                    ledger,
+                    Some(&gates),
+                    Selection::none(),
+                )
+            };
+            // A gate detail and a fetch status carry `·` from the command
+            // layer. In ASCII the separator must read as `|`, not as the
+            // unknown marker.
+            let mut with_failure = fetch_gates();
+            with_failure.push(Gate::fail("space", "allowlist · 2 maintainer(s)"));
+            let separator = Footer {
+                status: Some("fetch: running sudo -n pacman -Syuw · install blocked"),
+                keys: Some("esc detach | g ledger | l log"),
+                failure: false,
+                repair: None,
+            };
+            let separator_frame = render_live_frame_status(
+                &snapshot,
+                &run,
+                separator,
+                width,
+                height,
+                true,
+                false,
+                false,
+                false,
+                Some(&with_failure),
+                Selection::none(),
+            );
+            assert!(
+                separator_frame.contains("allowlist | 2 maintainer(s)"),
+                "the gate separator keeps its meaning\n{separator_frame}"
+            );
+            assert!(
+                separator_frame.contains("Syuw | install blocked"),
+                "the status separator keeps its meaning\n{separator_frame}"
+            );
+            // This frame carries the shared `·` separator and no unknown text,
+            // so any `?` in it is a glyph with no Tier A form.
+            assert!(
+                !separator_frame.contains('?'),
+                "the separator frame has a glyph with no Tier A form\n{separator_frame}"
+            );
+            frames.push((format!("separators {size}"), separator_frame));
+            frames.push((
+                format!("tree {size}"),
+                render_frame(&snapshot, width, height, true, false, false),
+            ));
+            frames.push((
+                format!("help {size}"),
+                render_frame(&snapshot, width, height, true, false, true),
+            ));
+            frames.push((format!("live {size}"), live(false)));
+            frames.push((format!("ledger {size}"), live(true)));
+            frames.push((
+                format!("log {size}"),
+                render_log_frame(&log, width, height, true, false),
+            ));
+            frames.push((
+                format!("install gate {size}"),
+                render_install_gate(&preflight, true, width, height, true, false),
+            ));
+            frames.push((
+                format!("success receipt {size}"),
+                render_post_install(&success_receipt(), width, height, true, false),
+            ));
+            frames.push((
+                format!("failure receipt {size}"),
+                render_post_install(&failure_receipt(), width, height, true, false),
+            ));
+            // A screen with no prefetch data is a sentence, not a tree.
+            frames.push((
+                format!("empty {size}"),
+                render_frame(&Snapshot::default(), width, height, true, false, false),
+            ));
+            let unavailable = Snapshot {
+                prefetch: Section::failed("pacman -Qu failed", at()),
+                ..Snapshot::default()
+            };
+            frames.push((
+                format!("unavailable {size}"),
+                render_frame(&unavailable, width, height, true, false, false),
+            ));
+        }
+        // The 40x12 floor is a size notice: text, not glyphs.
+        frames.push((
+            "notice 40x12".to_string(),
+            render_frame(&snapshot, 40, 12, true, false, false),
+        ));
+        // A clipped forest, where the hidden-run marker is `:` in ASCII.
+        let clipped = render_frame(&wide_snapshot(2_000), 80, 24, true, false, false);
+        assert!(
+            clipped.contains(':'),
+            "the clipped marker is drawn\n{clipped}"
+        );
+        frames.push(("clipped 80x24".to_string(), clipped));
+        // The selection cursor is `>` in ASCII, never `▸`.
+        let tree = tree_of(&snapshot);
+        let plan = super::plan_frame(
+            &snapshot,
+            None,
+            Footer::default(),
+            80,
+            24,
+            true,
+            false,
+            None,
+        );
+        let selection = Selection::none().moved(&tree, &plan.slots, 1);
+        assert!(selection.node().is_some(), "the cursor lands on a row");
+        let cursor = super::render_frame_status(
+            &snapshot,
+            Footer::default(),
+            80,
+            24,
+            true,
+            false,
+            false,
+            false,
+            None,
+            selection,
+        );
+        assert!(
+            cursor.contains('>') && !cursor.contains('▸'),
+            "the ASCII cursor is drawn\n{cursor}"
+        );
+        frames.push(("cursor 80x24".to_string(), cursor));
+
+        for (name, frame) in frames {
+            assert!(frame.is_ascii(), "{name} leaked a non-ASCII byte:\n{frame}");
+            assert!(!frame.contains('▸'), "{name} kept the Unicode cursor");
+        }
     }
 
     #[test]

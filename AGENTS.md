@@ -153,7 +153,9 @@ proves the badges; sim 34 proves the live fetch, the real bytes, the gates, the
 log and the one state write; sim 35 proves the failure freeze; sim 36 proves
 the attached install, the receipt and the terminal restore.
 
-Next action: T4. Add `--no-motion`, finish the ASCII pass, and do the
-2,000-package performance pass; optionally wire the receipt's attached `p`.
+Next action: T4 is closed except the keymap overrides. `--no-motion`, the ASCII
+pass and the 2,000-package performance pass are landed: the budget measures
+7.7 ms static and 10.4 ms live against 16 ms, and a sweep test proves every
+screen is ASCII in `--ascii`. Still open from T3: the receipt's attached `p`.
 The tree reads `check::collect`, `progress::collect` and `fetch::plan`; it does
 not collect its own facts.

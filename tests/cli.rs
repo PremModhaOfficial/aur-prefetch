@@ -28,6 +28,7 @@ fn tui_help_lists_the_safe_flags() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("--render-once"));
     assert!(text.contains("--ascii"));
+    assert!(text.contains("--no-motion"));
 }
 
 #[test]

@@ -1259,11 +1259,16 @@ terminal) pass.
 
 ### T4. Polish
 
-- [ ] `--no-motion`, ASCII, 2,000-package performance pass.
+- [x] `--no-motion`, ASCII, 2,000-package performance pass.
 - [ ] Keymap overrides for the v1 keys.
 - [ ] No mouse, themes, or `tui.conf` in v1.
 
-Done when: the frame budget below holds and ASCII preserves meaning.
+Done when: the frame budget below holds and ASCII preserves meaning. Measured
+with `cargo test --release --test perf -- --nocapture`: 2,000 rows, key to frame
+7.7 ms static and 10.4 ms live against the 16 ms budget, peak RSS 9.2 MB against
+30 MB. `--ascii` now uses an ASCII frame set (`+ - |`) for every overlay, and
+`every_surface_is_ascii_in_ascii_mode` sweeps every screen at 80x24 and 120x40
+for a non-ASCII byte.
 
 ### T5. Docs
 

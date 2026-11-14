@@ -35,7 +35,7 @@ use crate::runner::SystemRunner;
 use crate::tui::fetch_session::{FetchSession, StartFailure};
 use crate::tui::tree::Tree;
 
-pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
+pub fn run(render_once: bool, ascii: bool, motion: bool) -> Result<(), Error> {
     let config = Config::from_env()?;
     let color = use_color(ascii, std::env::var_os("NO_COLOR").is_some());
 
@@ -59,7 +59,7 @@ pub fn run(render_once: bool, ascii: bool) -> Result<(), Error> {
         stdout().is_terminal(),
         std::env::var("TERM").ok().as_deref(),
     )?;
-    run_interactive(&config, ascii, color)
+    run_interactive(&config, ascii, color, motion)
 }
 
 /// ASCII mode is a no-color mode: the glyph fallback is the signal, and the
@@ -82,7 +82,7 @@ fn ensure_interactive(stdin_tty: bool, stdout_tty: bool, term: Option<&str>) -> 
     Ok(())
 }
 
-fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Error> {
+fn run_interactive(config: &Config, ascii: bool, color: bool, motion: bool) -> Result<(), Error> {
     guard::install_panic_hook();
     let mut guard = guard::Guard::enter()
         .map_err(|err| Error::failed(format!("cannot enter the terminal: {err}")))?;
@@ -449,7 +449,7 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                                 session = None;
                                 snapshot = collect_snapshot(config, SystemTime::now())?;
                             }
-                            match start_fetch(config, &snapshot, SystemTime::now()) {
+                            match start_fetch(config, &snapshot, SystemTime::now(), motion) {
                                 Ok(started) => {
                                     session = Some(started);
                                     notice = None;
@@ -580,6 +580,7 @@ fn start_fetch(
     config: &Config,
     snapshot: &Snapshot,
     now: SystemTime,
+    motion: bool,
 ) -> Result<FetchSession, StartFailure> {
     let failure = |error: Error| StartFailure {
         error,
@@ -594,7 +595,7 @@ fn start_fetch(
     };
     let tree =
         Tree::build(&report.packages).map_err(|error| failure(Error::failed(error.to_string())))?;
-    FetchSession::start(config, SystemRunner, tree, now)
+    FetchSession::start(config, SystemRunner, tree, now, motion)
 }
 
 fn collect_snapshot(config: &Config, now: SystemTime) -> Result<Snapshot, Error> {

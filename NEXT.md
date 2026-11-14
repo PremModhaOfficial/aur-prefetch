@@ -487,11 +487,19 @@ and install-log keys from `TUI.md` are not wired; the receipt says to run
 - [x] Bootvine's frame grammar: bracketed `[ ]` / `[|]` / `[√]` / `[×]` status
       markers, a light `├─`/`└─` tree, and a one-line `done · running · waiting ·
       failed` footer; ASCII uses `[ ]`/`[|]`/`[v]`/`[x]` and keeps the meaning.
-- [ ] `--no-motion`, ASCII, 2,000-package performance pass.
+- [x] `--no-motion`, ASCII, 2,000-package performance pass.
+      `--no-motion` freezes the spinner and the 10 Hz pulse: the ten-per-second
+      tick still observes the cache, but only a real fact or the once-a-second
+      elapsed label redraws. `--ascii`
+      uses an ASCII frame set for every overlay and one sweep test asserts no
+      non-ASCII byte on any screen at 80x24 and 120x40.
 - [ ] Keymap overrides for the v1 keys.
 - [ ] No mouse, themes, or `tui.conf` in v1.
 
 Done when the frame budget in `TUI.md` holds and ASCII preserves meaning.
+Measured with `cargo test --release --test perf -- --nocapture` on 2,000 rows
+(worst of two release runs): key to frame 7.7 ms static and 10.4 ms live
+against 16 ms, peak RSS 9.2 MB against 30 MB.
 
 ### T5. Docs
 
