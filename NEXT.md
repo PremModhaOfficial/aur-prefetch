@@ -507,6 +507,8 @@ and install-log keys from `TUI.md` are not wired; the receipt says to run
 - [x] Bootvine's frame grammar: bracketed `[ ]` / `[|]` / `[√]` / `[×]` status
       markers, a light `├─`/`└─` tree, and a one-line `done · running · waiting ·
       failed` footer; ASCII uses `[ ]`/`[|]`/`[v]`/`[x]` and keeps the meaning.
+- [x] Help overlay lists every key the shell handles and sizes to its content;
+      a test reads the `KeyCode` arms under `src/tui/` so it cannot drift.
 - [x] The log screen belongs to its session: `esc` on a finished session, and a
       `F` that a gate refuses, close the log with it, so no open-log flag is
       left with no screen to toggle it.

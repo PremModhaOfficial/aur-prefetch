@@ -2332,9 +2332,70 @@ fn age_label(at: Option<SystemTime>, now: SystemTime) -> Option<String> {
     })
 }
 
+/// The help overlay's rows. The drift test compares this table against every
+/// `KeyCode` arm under `src/tui/`, so a handled key cannot lack a row.
+const HELP_ROWS: &[(&str, &str)] = &[
+    ("q", "quit"),
+    ("?", "toggle help"),
+    ("esc", "close, detach or dismiss"),
+    ("j k", "move selection"),
+    ("enter", "install · dismiss receipt"),
+    ("space", "attest news"),
+    ("F", "fetch downloads"),
+    ("g", "tree/ledger"),
+    ("i", "install gate"),
+    ("l", "fetch log"),
+    ("r", "refresh"),
+    ("ctrl-c", "quit with 130"),
+    ("ctrl-z", "suspend"),
+];
+
+fn help_lines(ascii: bool) -> Vec<String> {
+    let label = HELP_ROWS
+        .iter()
+        .map(|(keys, _)| display_width(keys))
+        .max()
+        .unwrap_or(0)
+        + 2;
+    HELP_ROWS
+        .iter()
+        .map(|(keys, action)| {
+            let action = if ascii {
+                action.replace('·', "|")
+            } else {
+                action.to_string()
+            };
+            format!("{keys:<label$}{action}")
+        })
+        .collect()
+}
+
+/// Fit the help rows into `room` lines. A terminal too short names what it
+/// cannot show, and with no room at all it reports the count instead of
+/// claiming a subset sits on screen.
+fn fit_help(mut text: Vec<String>, room: usize) -> Vec<String> {
+    if text.len() <= room {
+        return text;
+    }
+    if room <= 1 {
+        return vec![format!("{} rows, taller window", text.len())];
+    }
+    let hidden = text.len() - (room - 1);
+    text.truncate(room - 1);
+    text.push(format!("+{hidden} more rows, taller window"));
+    text
+}
+
 fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
-    let width = area.width.min(60);
-    let height = area.height.min(12);
+    let lines = help_lines(ascii);
+    let height = area.height.min(lines.len() as u16 + 2);
+    let text = fit_help(lines, height.saturating_sub(2) as usize);
+    let content = text
+        .iter()
+        .map(|line| display_width(line))
+        .max()
+        .unwrap_or(0) as u16;
+    let width = area.width.min(content.saturating_add(4));
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -2359,17 +2420,7 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
         popup.width.saturating_sub(4),
         popup.height.saturating_sub(2),
     );
-    let text = vec![
-        Line::from("q       quit"),
-        Line::from("? / esc close help"),
-        Line::from("F       fetch downloads"),
-        Line::from("g       tree/ledger"),
-        Line::from("i       install gate"),
-        Line::from("l       fetch log"),
-        Line::from("r       refresh"),
-        Line::from("ctrl-c  quit with 130"),
-        Line::from("ctrl-z  suspend"),
-    ];
+    let text: Vec<Line> = text.into_iter().map(Line::from).collect();
     frame.render_widget(Paragraph::new(text), inner);
 }
 
@@ -5607,6 +5658,147 @@ mod tests {
         let frame = render_frame(&snapshot(), 80, 24, false, false, true);
         assert!(frame.contains("help"));
         assert!(frame.contains("ctrl-z  suspend"));
+    }
+
+    /// Every `KeyCode` arm in the shell has a help row. The test reads the
+    /// shell's own sources, so a key added there fails here without a second
+    /// hand-kept list to drift.
+    #[test]
+    fn every_handled_key_has_a_help_row() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
+        let mut sources: Vec<_> = std::fs::read_dir(dir)
+            .expect("the tui sources")
+            .map(|entry| entry.expect("a directory entry").path())
+            .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
+            .collect();
+        sources.sort();
+        let mut handled = Vec::new();
+        for path in &sources {
+            handled.extend(handled_keys(
+                &std::fs::read_to_string(path).expect("a tui source"),
+            ));
+        }
+        for known in [
+            "q", "esc", "j", "k", "space", "enter", "F", "ctrl-c", "ctrl-z",
+        ] {
+            assert!(
+                handled.contains(&known.to_string()),
+                "missing {known}: {handled:?}"
+            );
+        }
+        let labels: Vec<&str> = super::HELP_ROWS
+            .iter()
+            .flat_map(|(keys, _)| keys.split_whitespace())
+            .collect();
+        for key in &handled {
+            assert!(
+                labels.contains(&key.as_str()),
+                "`{key}` is handled by the shell but has no help row: {handled:?}"
+            );
+        }
+    }
+
+    /// The shell's own `KeyCode` arms, without its tests or commented-out keys.
+    fn handled_keys(source: &str) -> Vec<String> {
+        let live = source.split("#[cfg(test)]").next().unwrap_or_default();
+        let code: String = live
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut keys: Vec<String> = Vec::new();
+        // An arm runs from its first `KeyCode` to the `=>` closing its guard,
+        // so a modifier on a wrapped guard belongs to that arm alone.
+        for arm in code.split("=>") {
+            let head = match arm.find("KeyCode::") {
+                Some(at) => &arm[at..],
+                None => continue,
+            };
+            let control = head.contains("KeyModifiers::CONTROL");
+            let mut rest = head;
+            while let Some(at) = rest.find("KeyCode::") {
+                rest = &rest[at + "KeyCode::".len()..];
+                let code = match rest.strip_prefix("Char(") {
+                    Some(tail) => match tail.trim_start_matches('\'').chars().next() {
+                        Some(' ') => "space".to_string(),
+                        Some(ch) => ch.to_string(),
+                        None => continue,
+                    },
+                    None => rest
+                        .chars()
+                        .take_while(|ch| ch.is_alphanumeric())
+                        .collect::<String>()
+                        .to_lowercase(),
+                };
+                if code.is_empty() {
+                    continue;
+                }
+                let key = if control {
+                    format!("ctrl-{code}")
+                } else {
+                    code
+                };
+                if !keys.contains(&key) {
+                    keys.push(key);
+                }
+            }
+        }
+        keys
+    }
+
+    #[test]
+    fn the_help_key_scanner_is_arm_scoped() {
+        let source = "KeyCode::Char('c')\n    if key.modifiers.contains(KeyModifiers::CONTROL) => quit,\nKeyCode::Esc => close,\nKeyCode::Char('x') => x,";
+        assert_eq!(handled_keys(source), vec!["ctrl-c", "esc", "x"]);
+    }
+
+    #[test]
+    fn the_help_key_scanner_skips_tests_and_comments() {
+        let source = "// KeyCode::Char('z')\nKeyCode::Esc => close,\n#[cfg(test)]\nmod tests {\n    KeyEvent::new(KeyCode::Char('x'), m);\n}";
+        assert_eq!(handled_keys(source), vec!["esc"]);
+    }
+
+    #[test]
+    fn fit_help_names_the_rows_it_cannot_show() {
+        let rows = super::HELP_ROWS.len();
+        let none = super::fit_help(super::help_lines(false), 1);
+        assert_eq!(none, vec![format!("{rows} rows, taller window")]);
+        let one = super::fit_help(super::help_lines(false), 2);
+        assert_eq!(one.len(), 2);
+        assert_eq!(one[1], format!("+{} more rows, taller window", rows - 1));
+        assert_eq!(super::fit_help(super::help_lines(false), rows).len(), rows);
+    }
+
+    #[test]
+    fn the_help_popup_grows_to_its_rows() {
+        // The old 12-row cap clipped the thirteenth row; every one is on screen.
+        let frame = render_frame(&snapshot(), 80, 24, false, false, true);
+        for (keys, action) in super::HELP_ROWS {
+            assert!(
+                frame.contains(&format!("{keys} ")),
+                "help row `{keys}` is clipped"
+            );
+            assert!(frame.contains(action), "help text `{action}` is clipped");
+        }
+        // `--ascii` replaces the row separators, as the footers do.
+        let ascii = render_frame(&snapshot(), 80, 24, true, false, true);
+        assert!(ascii.contains("install | dismiss receipt"));
+    }
+
+    #[test]
+    fn a_short_terminal_says_the_help_is_a_subset() {
+        // 12 rows cannot hold 13, and a silent cut is what #62 reported.
+        let frame = render_frame(&snapshot(), 40, 12, false, false, true);
+        let hidden = super::HELP_ROWS.len() - 9;
+        assert!(frame.contains(&format!("+{hidden} more rows, taller window")));
+        assert!(
+            frame.contains("install · dismiss receipt"),
+            "a row is cut sideways"
+        );
+        assert!(
+            !frame.contains("ctrl-z"),
+            "a clipped row must not look whole"
+        );
     }
 
     #[test]
