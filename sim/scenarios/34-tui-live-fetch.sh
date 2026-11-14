@@ -3,8 +3,8 @@
 # real `.part` bytes from the pacman cache.
 #
 # The sim pacman config adds one transfer hook that writes the package `.part`
-# in two chunks with a pause. pacman still chooses the argv, creates the
-# `.part` path, verifies the package, and renames it; the hook only paces the
+# in two chunks with a pause. pacman still chooses the argv, verifies the
+# package, and renames the `.part`; the hook creates the path and paces the
 # local copy so the 100 ms poll can see it.
 source /usr/local/lib/sim/lib.sh
 

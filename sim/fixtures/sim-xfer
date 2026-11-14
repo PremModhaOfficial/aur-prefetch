@@ -8,8 +8,8 @@
 #
 # This is a transfer fixture, not a product mode: the real /usr/bin/pacman
 # still chooses the argv, verifies the package, and renames the `.part` to the
-# final artifact. It does not create the `.part` path; this hook does, in the
-# first write. The bytes written are the real repo bytes.
+# final artifact. It does not create the `.part` path; this hook does, with the
+# first chunk. The bytes written are the real repo bytes.
 set -uo pipefail
 
 url=${1:?usage: sim-xfer URL OUTPUT}
@@ -85,6 +85,9 @@ esac
 # delta only, because ratatui rewrites changed cells. The paced half state is
 # what the scenario asserts, so it must be the first state on this path.
 chunk="${out%/*}/.sim-xfer-chunk.$$"
+# A transfer killed between the write and the rename must not leave a file in
+# the cache: scenario 34 asserts the cache holds exactly one artifact.
+trap 'rm -f "$chunk"' EXIT
 head -c "$half" "$src" >"$chunk" || {
     rm -f "$chunk"
     exit 1

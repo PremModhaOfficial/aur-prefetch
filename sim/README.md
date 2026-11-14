@@ -163,9 +163,11 @@ three faults rather than a scenario faking the evidence:
 
 - `sim/fixtures/sim-xfer` is the sim-only `XferCommand`. It paces a package
 transfer (`/etc/sim/xfer-delay`, seconds) so a poll can see real `.part` growth,
-and its first chunk is renamed into place so the `.part` is never observable at
-zero bytes. pacman does not create that path; the hook does, so a plain
-`head -c ... >"$out"` would hand the TUI a few milliseconds of an empty file.
+and on the paced path its first chunk is renamed into place so the `.part` is
+never observable at zero bytes. pacman does not create that path; the hook
+does, so a plain `head -c ... >"$out"` would hand the TUI a few milliseconds of
+an empty file. The fault branches below write the target directly, because a
+fault wants the partial file on disk, not a paced one.
 It injects one fault per run when a scenario writes one word to
 `/etc/sim/xfer-fault`: `kill` SIGKILLs the running pacman after the first half
 of the package, `fill` writes into the cache until the kernel refuses (capped by
