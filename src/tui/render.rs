@@ -2347,7 +2347,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("ctrl-z", "suspend"),
 ];
 
-fn help_lines(ascii: bool) -> Vec<Line<'static>> {
+fn help_lines(ascii: bool) -> Vec<String> {
     let label = HELP_ROWS
         .iter()
         .map(|(keys, _)| display_width(keys))
@@ -2362,22 +2362,36 @@ fn help_lines(ascii: bool) -> Vec<Line<'static>> {
             } else {
                 action.to_string()
             };
-            Line::from(format!("{keys:<label$}{action}"))
+            format!("{keys:<label$}{action}")
         })
         .collect()
 }
 
-fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
-    let mut text = help_lines(ascii);
-    let height = area.height.min(text.len() as u16 + 2);
-    // A terminal this short cannot show every row; say so instead of clipping.
-    let room = height.saturating_sub(2) as usize;
-    if text.len() > room {
-        let hidden = text.len() - room.saturating_sub(1);
-        text.truncate(room.saturating_sub(1));
-        text.push(Line::from(format!("+{hidden} more rows, taller window")));
+/// Fit the help rows into `room` lines. A terminal too short names what it
+/// cannot show, and with no room at all it reports the count instead of
+/// claiming a subset sits on screen.
+fn fit_help(mut text: Vec<String>, room: usize) -> Vec<String> {
+    if text.len() <= room {
+        return text;
     }
-    let content = text.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
+    if room <= 1 {
+        return vec![format!("{} rows, taller window", text.len())];
+    }
+    let hidden = text.len() - (room - 1);
+    text.truncate(room - 1);
+    text.push(format!("+{hidden} more rows, taller window"));
+    text
+}
+
+fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
+    let lines = help_lines(ascii);
+    let height = area.height.min(lines.len() as u16 + 2);
+    let text = fit_help(lines, height.saturating_sub(2) as usize);
+    let content = text
+        .iter()
+        .map(|line| display_width(line))
+        .max()
+        .unwrap_or(0) as u16;
     let width = area.width.min(content.saturating_add(4));
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
@@ -2403,6 +2417,7 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
         popup.width.saturating_sub(4),
         popup.height.saturating_sub(2),
     );
+    let text: Vec<Line> = text.into_iter().map(Line::from).collect();
     frame.render_widget(Paragraph::new(text), inner);
 }
 
@@ -5633,10 +5648,9 @@ mod tests {
         sources.sort();
         let mut handled = Vec::new();
         for path in &sources {
-            handled_keys(
+            handled.extend(handled_keys(
                 &std::fs::read_to_string(path).expect("a tui source"),
-                &mut handled,
-            );
+            ));
         }
         for known in [
             "q", "esc", "j", "k", "space", "enter", "F", "ctrl-c", "ctrl-z",
@@ -5658,9 +5672,24 @@ mod tests {
         }
     }
 
-    fn handled_keys(source: &str, keys: &mut Vec<String>) {
-        for line in source.lines() {
-            let mut rest = line;
+    /// The shell's own `KeyCode` arms, without its tests or commented-out keys.
+    fn handled_keys(source: &str) -> Vec<String> {
+        let live = source.split("#[cfg(test)]").next().unwrap_or_default();
+        let code: String = live
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut keys: Vec<String> = Vec::new();
+        // An arm runs from its first `KeyCode` to the `=>` closing its guard,
+        // so a modifier on a wrapped guard belongs to that arm alone.
+        for arm in code.split("=>") {
+            let head = match arm.find("KeyCode::") {
+                Some(at) => &arm[at..],
+                None => continue,
+            };
+            let control = head.contains("KeyModifiers::CONTROL");
+            let mut rest = head;
             while let Some(at) = rest.find("KeyCode::") {
                 rest = &rest[at + "KeyCode::".len()..];
                 let code = match rest.strip_prefix("Char(") {
@@ -5676,10 +5705,9 @@ mod tests {
                         .to_lowercase(),
                 };
                 if code.is_empty() {
-                    // A literal `"KeyCode::"` in a source, not an arm.
                     continue;
                 }
-                let key = if line.contains("KeyModifiers::CONTROL") {
+                let key = if control {
                     format!("ctrl-{code}")
                 } else {
                     code
@@ -5689,6 +5717,30 @@ mod tests {
                 }
             }
         }
+        keys
+    }
+
+    #[test]
+    fn the_help_key_scanner_is_arm_scoped() {
+        let source = "KeyCode::Char('c')\n    if key.modifiers.contains(KeyModifiers::CONTROL) => quit,\nKeyCode::Esc => close,\nKeyCode::Char('x') => x,";
+        assert_eq!(handled_keys(source), vec!["ctrl-c", "esc", "x"]);
+    }
+
+    #[test]
+    fn the_help_key_scanner_skips_tests_and_comments() {
+        let source = "// KeyCode::Char('z')\nKeyCode::Esc => close,\n#[cfg(test)]\nmod tests {\n    KeyEvent::new(KeyCode::Char('x'), m);\n}";
+        assert_eq!(handled_keys(source), vec!["esc"]);
+    }
+
+    #[test]
+    fn fit_help_names_the_rows_it_cannot_show() {
+        let rows = super::HELP_ROWS.len();
+        let none = super::fit_help(super::help_lines(false), 1);
+        assert_eq!(none, vec![format!("{rows} rows, taller window")]);
+        let one = super::fit_help(super::help_lines(false), 2);
+        assert_eq!(one.len(), 2);
+        assert_eq!(one[1], format!("+{} more rows, taller window", rows - 1));
+        assert_eq!(super::fit_help(super::help_lines(false), rows).len(), rows);
     }
 
     #[test]
