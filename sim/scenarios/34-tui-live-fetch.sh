@@ -3,8 +3,8 @@
 # real `.part` bytes from the pacman cache.
 #
 # The sim pacman config adds one transfer hook that writes the package `.part`
-# in two chunks with a pause. pacman still chooses the argv, creates the
-# `.part` path, verifies the package, and renames it; the hook only paces the
+# in two chunks with a pause. pacman still chooses the argv, verifies the
+# package, and renames the `.part`; the hook creates the path and paces the
 # local copy so the 100 ms poll can see it.
 source /usr/local/lib/sim/lib.sh
 
@@ -54,9 +54,11 @@ pct=$(awk -v h="$half" -v t="$total" 'BEGIN { printf "%.1f%%", h * 100 / t }')
 assert_contains "$clean" "downloading" "the row is downloading"
 assert_contains "$clean" "$total B" "the row shows the real total"
 assert_contains "$clean" "$half B" "the row shows the observed .part size"
-# The first poll can catch the `.part` mid-copy, and ratatui's delta stream
-# then rewrites only the changed digits. The half-to-total ratio is durable
-# proof that both real sizes were observed.
+# The fixture renames the first chunk into place, so the half state is the
+# first thing any poll of the `.part` can observe and this percentage is drawn
+# whole. `script` records a delta stream, and a percentage drawn once and then
+# diffed (0.0%, then the digits changing to 49.9%) is never a whole string
+# again, so the first full draw is the only assertable one.
 assert_contains "$clean" "$pct" "the percentage needs both observed sizes"
 assert_contains "$clean" "■" "the bar is drawn"
 assert_contains "$clean" "fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm" \

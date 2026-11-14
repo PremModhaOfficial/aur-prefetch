@@ -150,6 +150,12 @@ For a state that is large, assert on a digest (`local_db_state | sha256sum`),
 not on the state itself: a failing `assert_eq` prints both sides, and the whole
 local package DB is thousands of lines of noise.
 
+A TUI scenario reads `script`'s delta stream, which carries only the cells
+ratatui changed. A value drawn once and then partially rewritten survives as
+digits, not as `49.9%`. Assert a value that is drawn whole, and make the
+fixture hand the TUI that state for the first poll instead of relying on which
+frame a poll happens to catch.
+
 ## Fault injection
 
 The chaos scenarios need a real pacman to misbehave, and the harness provides
@@ -157,7 +163,12 @@ three faults rather than a scenario faking the evidence:
 
 - `sim/fixtures/sim-xfer` is the sim-only `XferCommand`. It paces a package
 transfer (`/etc/sim/xfer-delay`, seconds) so a poll can see real `.part` growth,
-and it injects one fault per run when a scenario writes one word to
+and on the paced path its first chunk is renamed into place so the `.part` is
+never observable at zero bytes. pacman does not create that path; the hook
+does, so a plain `head -c ... >"$out"` would hand the TUI a few milliseconds of
+an empty file. The fault branches below write the target directly, because a
+fault wants the partial file on disk, not a paced one.
+It injects one fault per run when a scenario writes one word to
 `/etc/sim/xfer-fault`: `kill` SIGKILLs the running pacman after the first half
 of the package, `fill` writes into the cache until the kernel refuses (capped by
 `/etc/sim/xfer-fill-max`, default 64 MiB) and then tries to append the rest,
