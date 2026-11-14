@@ -121,6 +121,12 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
         if interrupted.load(Ordering::Relaxed) {
             return Err(Error::Interrupted);
         }
+        // The log screen belongs to a session. A flag left behind could never
+        // be toggled off, because every key that reads it needs the session.
+        assert!(
+            session.is_some() || !log_open,
+            "the log flag outlived its session"
+        );
 
         if session.as_ref().is_some_and(FetchSession::running) {
             let tick = session
@@ -337,6 +343,8 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                             // Detach while the command runs. No result is claimed.
                             break;
                         } else if session.take().is_some() {
+                            // Dismissing a session closes its log with it.
+                            log_open = false;
                             snapshot = collect_snapshot(config, SystemTime::now())?;
                         } else {
                             notice = None;
@@ -452,6 +460,9 @@ fn run_interactive(config: &Config, ascii: bool, color: bool) -> Result<(), Erro
                         } else {
                             if session.is_some() || notice.is_some() {
                                 session = None;
+                                // Ending the session closes its log, so a refusal
+                                // below cannot leave the flag orphaned.
+                                log_open = false;
                                 snapshot = collect_snapshot(config, SystemTime::now())?;
                             }
                             match start_fetch(config, &snapshot, SystemTime::now()) {

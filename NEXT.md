@@ -507,11 +507,23 @@ and install-log keys from `TUI.md` are not wired; the receipt says to run
 - [x] Bootvine's frame grammar: bracketed `[ ]` / `[|]` / `[√]` / `[×]` status
       markers, a light `├─`/`└─` tree, and a one-line `done · running · waiting ·
       failed` footer; ASCII uses `[ ]`/`[|]`/`[v]`/`[x]` and keeps the meaning.
+- [x] The log screen belongs to its session: `esc` on a finished session, and a
+      `F` that a gate refuses, close the log with it, so no open-log flag is
+      left with no screen to toggle it.
 - [ ] `--no-motion`, ASCII, 2,000-package performance pass.
 - [ ] Keymap overrides for the v1 keys.
 - [ ] No mouse, themes, or `tui.conf` in v1.
 
 Done when the frame budget in `TUI.md` holds and ASCII preserves meaning.
+
+T4 stuck-flag fix landed: `esc` on a finished session closes its log with it,
+and so does the `F` path that drops a session before a gate refuses, so the
+open-log flag can no longer outlive the screen that toggles it. The loop
+asserts the pairing (`log_open` implies a session), so a future drop site that
+forgets fails loudly instead of leaving `l` inert. Sim 47 opens the log on a
+finished fetch, starts a `makepkg` so the next `F` is refused by the lock gate,
+and proves one `esc` still dismisses the notice; the same scenario goes red on
+a build without the fix.
 
 ### T5. Docs
 

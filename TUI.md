@@ -827,7 +827,9 @@ so the tree shows the gate checklist, the output it does emit, `.part` growth
 observed with `stat`, and elapsed time. A percentage appears only if both
 observed bytes and a known total exist. The install owns the terminal; it is not
 a captured tree. `l` opens the captured log; `Esc` closes the log first, so a
-closed log is never mistaken for a detach.
+closed log is never mistaken for a detach. The log never outlives its session:
+whatever ends the session, whether `Esc`, `r` or a refused `F`, closes the log
+with it, so no open-log flag can be left with nothing to toggle it.
 
 ---
 
@@ -1252,6 +1254,14 @@ real exit, the running kernel against `/usr/lib/modules`, the `.pacnew` count,
 kernel-based reboot advice, and a repair line on failure. It is read-only and
 closes with enter or esc; sim 36 proves the success receipt. The attached `p`
 (sudo pacdiff), copy and install-log keys remain unwired.
+
+T4 stuck-flag fix landed: the log screen belongs to its session. Ending a
+session (`esc` on a finished one, or a `F` that a gate refuses) closes the log
+with it, so the open-log flag can never outlive the screen that toggles it. The
+loop also asserts the pairing, so a future drop site that forgets fails loudly
+instead of leaving a key that does nothing. Sim 47 opens the log on a finished
+fetch, makes the next `F` refuse on the lock gate, and proves one `esc` still
+dismisses the notice.
 
 ### T3. Actions
 
