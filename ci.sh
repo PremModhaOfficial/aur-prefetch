@@ -5,6 +5,9 @@ set -euo pipefail
 # compile time and burns free-tier minutes for almost no extra signal;
 # release-only bugs are rare. Run `cargo test --release --all-targets
 # --all-features --locked` manually or on a schedule before a release.
+echo "=== sim scenario numbers (unique) ==="
+bash scripts/check-sim-numbers.sh
+
 echo "=== clippy (deny warnings) ==="
 cargo clippy --all-targets --all-features --locked -- -D warnings
 

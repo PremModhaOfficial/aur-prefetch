@@ -140,6 +140,10 @@ assert_eq "$(installed_version)" "1.0.0-1" "still on the old version"
 finish
 ```
 
+Name it `NN-slug.sh`. The number is a namespace every worktree shares, and git
+cannot see two PRs adding the same one, so `ci.sh` fails when two files share a
+numeric prefix or a file has none ([#61](https://github.com/PremModhaOfficial/aur-prefetch/issues/61)).
+
 Each scenario runs in a fresh container, so no cleanup is needed. Helpers live
 in `sim/lib.sh`: `assert_eq`, `assert_ne`, `assert_contains`, `assert_true`,
 `assert_false`, `installed_version`, `payload_version`, `pkg_state`,

@@ -165,7 +165,7 @@ An empty value falls back to the default.
 
 ```bash
 cargo build --release
-./ci.sh          # fmt, clippy -D warnings, tests, cargo-deny
+./ci.sh          # scenario numbers, fmt, clippy -D warnings, tests, cargo-deny
 ./sim/run.sh     # real pacman in a disposable Arch container, no network
 ```
 
