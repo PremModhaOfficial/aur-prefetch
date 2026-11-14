@@ -378,6 +378,48 @@ impl GraphState {
         Ok(transitions)
     }
 
+    /// Mark every running node `Skipped { satisfied: false }` in one batch.
+    ///
+    /// A zero command exit proves the command finished, not that every
+    /// download landed: the `.part` can vanish and no final artifact appear.
+    /// Such a node is not `Done` (nothing proved the transfer) and not
+    /// `Failed` (the command exited zero). `Skipped` with `satisfied: false`
+    /// is exactly "not proven": it is terminal, so a finished run draws no
+    /// running row and counts no spinner; it blocks, so no dependent claims a
+    /// ready build on an unproven artifact.
+    ///
+    /// The graph is deliberately not frozen. A zero exit is not a failure and
+    /// the summary must not say "frozen"; the run is over because no further
+    /// observation can arrive after the seal.
+    pub fn unprove_all_running(&mut self, seq: u64) -> Result<Vec<Transition>, FrontierError> {
+        let expected = self.last_seq.saturating_add(1);
+        if seq != expected {
+            return Err(FrontierError::Sequence { expected, got: seq });
+        }
+        self.last_seq = seq;
+
+        let mut transitions = Vec::new();
+        if self.frozen {
+            return Ok(transitions);
+        }
+        let running: Vec<NodeId> = self.running.iter().cloned().collect();
+        if running.is_empty() {
+            return Ok(transitions);
+        }
+        for node in &running {
+            self.set_state(
+                node,
+                NodeState::Skipped { satisfied: false },
+                seq,
+                &mut transitions,
+            );
+        }
+        for node in &running {
+            self.recompute(seq, Some(node), &mut transitions);
+        }
+        Ok(transitions)
+    }
+
     pub fn is_complete(&self) -> bool {
         self.nodes.values().all(|state| state.is_terminal())
     }
@@ -903,6 +945,42 @@ mod tests {
         assert_eq!(state.last_seq, 4);
         assert_eq!(state.nodes["root-b"], NodeState::Running);
         assert_eq!(state.nodes["child-b"], NodeState::Pending);
+    }
+
+    #[test]
+    fn an_unproven_batch_settles_every_running_node_without_freezing() {
+        let mut state = GraphState::seed(["base", "child", "other"], vec![edge("base", "child")])
+            .expect("seed");
+        apply(&mut state, 1, "base", Observed::Started);
+        apply(&mut state, 2, "other", Observed::Started);
+
+        let transitions = state.unprove_all_running(3).expect("unprove");
+
+        assert_eq!(state.nodes["base"], NodeState::Skipped { satisfied: false });
+        assert_eq!(
+            state.nodes["other"],
+            NodeState::Skipped { satisfied: false }
+        );
+        assert_eq!(state.nodes["child"], NodeState::Blocked);
+        assert!(state.running.is_empty());
+        assert!(
+            !state.frozen,
+            "a zero command exit is not a failure and must not read as frozen"
+        );
+        let unproven: Vec<_> = transitions
+            .iter()
+            .filter(|transition| transition.to == NodeState::Skipped { satisfied: false })
+            .map(|transition| transition.node.as_str())
+            .collect();
+        assert_eq!(unproven, vec!["base", "other"]);
+        assert!(transitions
+            .iter()
+            .any(|transition| transition.node == "child" && transition.to == NodeState::Blocked));
+        assert!(state.nodes.values().all(|node| node.is_terminal()));
+
+        let idle = state.unprove_all_running(4).expect("no running node");
+        assert!(idle.is_empty());
+        assert!(!state.frozen);
     }
 
     #[test]

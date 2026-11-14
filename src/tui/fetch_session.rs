@@ -59,8 +59,9 @@ pub struct StartFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Phase {
     Running,
-    /// The command exited 0. `unproven` counts downloads still marked running
-    /// because no final artifact was observed.
+    /// The command exited 0. `unproven` counts downloads finished as
+    /// unproven (`Skipped { satisfied: false }`) because no final artifact
+    /// was observed; they are terminal, never still running.
     Finished {
         unproven: usize,
     },
@@ -104,7 +105,9 @@ pub struct FetchSession {
     /// the command's real exit code into a different result.
     observation_error: Option<String>,
     status: String,
-    failure: bool,
+    /// The run itself failed. A state-file warning does not set this: the
+    /// command exited 0.
+    failed: bool,
     /// Built once from the real exit and the frozen frontier. `None` until a
     /// nonzero exit proves a failure.
     card: Option<RepairCard>,
@@ -176,7 +179,7 @@ impl FetchSession {
             phase: Phase::Running,
             observation_error: None,
             status,
-            failure: false,
+            failed: false,
             card: None,
             last_key: None,
             argv,
@@ -247,7 +250,7 @@ impl FetchSession {
         Footer {
             status: Some(&self.status),
             keys: Some(keys),
-            failure: self.failure,
+            failed: self.failed,
             repair: self.card.as_ref(),
         }
     }
@@ -346,7 +349,7 @@ impl FetchSession {
         }
 
         if code == 0 {
-            let unproven = self.monitor.live().graph().running.len();
+            let unproven = self.monitor.unproven();
             let state_warning = fetch::record_success(&self.config, &self.plan, at);
             self.phase = Phase::Finished { unproven };
             self.status = if unproven == 0 {
@@ -354,7 +357,6 @@ impl FetchSession {
             } else {
                 format!("fetch: exit 0 · {unproven} download(s) without a final artifact")
             };
-            self.failure = state_warning.is_some();
             if let Some(warning) = state_warning {
                 self.status.push_str(&format!(" · {warning}"));
             }
@@ -379,7 +381,7 @@ impl FetchSession {
                 note: self.observation_error.clone(),
             });
             self.status = format!("fetch failed: {evidence}");
-            self.failure = true;
+            self.failed = true;
             self.phase = Phase::Failed { evidence };
         }
         if let Some(error) = &self.observation_error {
@@ -416,7 +418,7 @@ impl FetchSession {
             spinner: view.spinner,
             frozen: view.frozen,
             status: self.status.clone(),
-            failure: self.failure,
+            failed_run: self.failed,
         }
     }
 }
@@ -452,7 +454,8 @@ struct FrameKey {
     spinner: usize,
     frozen: bool,
     status: String,
-    failure: bool,
+    /// The run failed, which is what styles the status line as a failure.
+    failed_run: bool,
 }
 
 #[cfg(test)]
@@ -680,7 +683,7 @@ mod tests {
             Some("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm")
         );
         assert_eq!(footer.keys, Some("esc detach · g ledger · l log · ? help"));
-        assert!(!footer.failure);
+        assert!(!footer.failed);
         assert!(session.running());
     }
 
@@ -879,7 +882,7 @@ mod tests {
             footer.keys,
             Some("esc dismiss · F fetch again · g ledger · l log · q quit · ? help")
         );
-        assert!(!footer.failure);
+        assert!(!footer.failed);
         let state = fs::read_to_string(fixture.root.join("state.json")).expect("state file");
         assert!(
             state.contains("\"last_fetch_pending\":1"),
@@ -910,7 +913,7 @@ mod tests {
             footer.status,
             Some("fetch failed: exit 1: error: failed to synchronise any database")
         );
-        assert!(footer.failure);
+        assert!(footer.failed);
         assert!(
             matches!(session.phase(), Phase::Failed { .. }),
             "the result is a failure even though no node froze"
@@ -933,6 +936,89 @@ mod tests {
         assert!(
             !fixture.root.join("state.json").exists(),
             "a failed fetch never records success"
+        );
+    }
+
+    #[test]
+    fn a_zero_exit_without_a_final_artifact_leaves_no_running_row() {
+        let fixture = Fixture::new();
+        let fake = Arc::new(FakeRunner::new());
+        fixture.queue_gates(&fake);
+        fake.push_stream(0, &[], &[]);
+        let runner = BlockingRunner::new(Arc::clone(&fake));
+
+        let mut session =
+            FetchSession::start(&fixture.config, runner.clone(), fixture.tree(), at(1))
+                .expect("session starts");
+        fs::write(fixture.part(), [0u8; 400]).expect("write part");
+        assert!(session.tick(at(2), false).changed);
+        assert_eq!(session.live().state("tool"), Some(NodeState::Running));
+
+        // The `.part` vanishes and no final artifact appears, while the child
+        // still exits 0: the command succeeded, the transfer is unproven.
+        fs::remove_file(fixture.part()).expect("remove part");
+        runner.release();
+        assert!(wait_until(|| {
+            session.tick(at(3), false);
+            !session.running()
+        }));
+
+        assert!(matches!(session.phase(), Phase::Finished { unproven: 1 }));
+        assert_eq!(
+            session.live().state("tool"),
+            Some(NodeState::Skipped { satisfied: false }),
+            "a finished run never leaves a row running"
+        );
+        assert!(
+            !session.live().graph().frozen,
+            "exit 0 is not a failure, so the run is not frozen"
+        );
+        let view = crate::tui::live::LiveView::build_at(session.tree(), session.live(), at(3));
+        assert_eq!(view.spinner, 0, "a finished run draws no spinner");
+        let footer = session.footer(false);
+        assert!(
+            footer
+                .status
+                .is_some_and(|status| status.contains("1 download(s) without a final artifact")),
+            "the mismatch is reported: {:?}",
+            footer.status
+        );
+        assert!(
+            !footer.failed,
+            "a zero exit with an unproven download is not a failed run"
+        );
+    }
+
+    #[test]
+    fn a_state_warning_does_not_style_a_successful_fetch_as_a_failure() {
+        let mut fixture = Fixture::new();
+        // /proc/self accepts reads but not file creation, so the state save
+        // fails while the command still exits 0.
+        fixture.config.state_file = PathBuf::from("/proc/self/aur-prefetch-state.json");
+        let fake = Arc::new(FakeRunner::new());
+        fixture.queue_gates(&fake);
+        fake.push_stream(0, &[], &[]);
+        let runner = BlockingRunner::new(Arc::clone(&fake));
+
+        let mut session =
+            FetchSession::start(&fixture.config, runner.clone(), fixture.tree(), at(1))
+                .expect("session starts");
+        runner.release();
+        assert!(wait_until(|| {
+            session.tick(at(2), false);
+            !session.running()
+        }));
+
+        let footer = session.footer(false);
+        let status = footer.status.expect("the result is on screen");
+        assert!(status.contains("fetch: exit 0"), "{status}");
+        assert!(
+            status.contains("state"),
+            "the state-file warning stays visible as text: {status}"
+        );
+        assert!(
+            !footer.failed,
+            "an unwritable state file must not style a successful fetch as a failure"
         );
     }
 
@@ -964,7 +1050,7 @@ mod tests {
             footer.status,
             Some("fetch failed: exit 1: error: failed retrieving file 'tool'")
         );
-        assert!(footer.failure);
+        assert!(footer.failed);
         let card = footer.repair.expect("the repair card carries the failure");
         assert_eq!(card.node.as_deref(), Some("tool 2.0.0-1"));
         assert_eq!(

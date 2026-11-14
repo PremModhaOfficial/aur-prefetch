@@ -192,6 +192,42 @@ mod tests {
     }
 
     #[test]
+    fn check_json_declares_only_sections_a_command_collects() {
+        // The report layer is the contract: a section that no command fills
+        // would serialize as `not_collected` forever and read as a missing
+        // fact. The key set is the list of sections that exist plus the
+        // envelope, so adding a field with no collector fails here. `drift` is
+        // declared on purpose - issue #41 fills it - and it is in the list.
+        let value: Value = serde_json::from_str(&check(&snapshot()).expect("json")).expect("JSON");
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .expect("one object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "actionable",
+                "aur",
+                "caches",
+                "command",
+                "disk",
+                "drift",
+                "fatal",
+                "lock",
+                "official",
+                "prefetch",
+                "state",
+                "timer",
+                "trust",
+                "verdict",
+            ]
+        );
+    }
+
+    #[test]
     fn a_fatal_check_is_an_error_verdict_with_the_message() {
         let mut snapshot = snapshot();
         snapshot.fatal = Some(crate::error::Error::failed("du failed"));

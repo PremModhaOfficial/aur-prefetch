@@ -77,7 +77,8 @@ fn bold() -> Style {
 pub struct Footer<'a> {
     pub status: Option<&'a str>,
     pub keys: Option<&'a str>,
-    pub failure: bool,
+    /// The command failed. A state-file warning on a zero exit is not this.
+    pub failed: bool,
     /// When present, the repair card replaces the action status line. It
     /// carries only observed facts: the failed row, the command evidence and
     /// the blocked count.
@@ -969,7 +970,7 @@ fn footer_lines(footer: Footer<'_>, width: usize, ascii: bool, color: bool) -> V
     if let Some(card) = footer.repair {
         lines.extend(repair_lines(card, width, ascii, color));
     } else if let Some(status) = footer.status {
-        let style = if footer.failure {
+        let style = if footer.failed {
             accent_bold(color, FAILURE)
         } else {
             bold()
@@ -3500,7 +3501,7 @@ mod tests {
         Footer {
             status: Some("fetch: running sudo -n /usr/bin/pacman -Syuw --noconfirm"),
             keys: Some("esc detach · g ledger · ? help"),
-            failure: false,
+            failed: false,
             repair: None,
         }
     }
@@ -3519,7 +3520,7 @@ mod tests {
         Footer {
             status: Some("fetch failed: exit 2: error: target not found: go"),
             keys: Some("esc dismiss · F fetch again · g ledger · q quit · ? help"),
-            failure: true,
+            failed: true,
             repair: Some(card),
         }
     }
@@ -3528,7 +3529,7 @@ mod tests {
         Footer {
             status: None,
             keys: Some("q quit · g tree · ? help · r refresh"),
-            failure: false,
+            failed: false,
             repair: None,
         }
     }
@@ -3800,7 +3801,7 @@ mod tests {
         Footer {
             status: Some("fetch: exit 2 after 6s"),
             keys: Some(keys),
-            failure: true,
+            failed: true,
             repair: Some(card),
         }
     }
@@ -4296,7 +4297,7 @@ mod tests {
             Footer {
                 status: Some("fetch blocked: pacman is running"),
                 keys: Some("r refresh · q quit · ? help"),
-                failure: true,
+                failed: true,
                 repair: None,
             },
             120,
@@ -4662,7 +4663,7 @@ mod tests {
                     "fetch blocked: not enough free space on /: need 5.0 GiB, have 1000 B",
                 ),
                 keys: Some("F retry · g ledger · r refresh · q quit · ? help"),
-                failure: true,
+                failed: true,
                 repair: None,
             },
             120,

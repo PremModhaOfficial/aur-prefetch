@@ -305,25 +305,6 @@ pub enum TrustState {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct FetchState {
-    pub last_run: Option<SystemTime>,
-    pub lines: Vec<String>,
-    pub running: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct NewsState {
-    pub url: String,
-    pub last_install: Option<SystemTime>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct JournalTail {
-    pub lines: Vec<String>,
-    pub at: Option<SystemTime>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct PostInstall {
     pub exit_code: i32,
     pub kernel_running: String,
@@ -375,6 +356,15 @@ pub enum PartialUpgrade {
 
 /// Everything one collection pass knows.
 ///
+/// Every section here is written by a command that runs today. A field with no
+/// collector would serialize as `NotCollected` forever and read as a fact the
+/// report layer had merely failed to get, so a section is added with its
+/// collector, never before it.
+///
+/// `drift` is the one declared exception: its producer is a live change
+/// (issue #41), which fills it from the post-upgrade pending query. The type
+/// exists because the state is declared, not because it is collected.
+///
 /// `actionable` is the count the CLI already uses for its exit verdict. It is
 /// part of the snapshot because the TUI needs the same answer, not a second
 /// calculation that can drift.
@@ -388,11 +378,6 @@ pub struct Snapshot {
     pub timer: Section<TimerState>,
     pub state: Section<StateInfo>,
     pub trust: Section<TrustState>,
-    pub doctor: Section<DoctorReport>,
-    pub fetch: Section<FetchState>,
-    pub news: Section<NewsState>,
-    pub journal: Section<JournalTail>,
-    pub post_install: Section<PostInstall>,
     pub prefetch: Section<PrefetchReport>,
     pub drift: Drift,
     pub actionable: u32,

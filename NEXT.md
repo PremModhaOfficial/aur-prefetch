@@ -501,6 +501,19 @@ Done when the frame budget in `TUI.md` holds and ASCII preserves meaning.
 - [ ] `PKGBUILD` installs the same binary; no new unit or manpage entry unless
       `tui` needs one.
 
+### T6. Reported model gaps
+
+Two issues named the same class of bug: a state the model declares but never
+reaches, and a flag carrying two meanings.
+
+- [x] #43 fetch run: a zero exit finishes a download it could not prove as a
+      terminal unproven row, so a finished run never draws a running row or a
+      spinner, and the footer's failure style is reserved for a failed run
+      rather than a state-file warning.
+- [x] #44 report layer: `Snapshot` declares only sections a command collects;
+      the five uncollected fields and the types only they used are gone, and a
+      JSON test pins the key set to the list of real sections.
+
 ---
 
 ## Phase 8: TUI v2 shell
