@@ -5,6 +5,10 @@ source /usr/local/lib/sim/lib.sh
 echo "scenario: clean is a dry run unless --apply"
 
 mkdir -p /root/.cache/yay/simapp /root/.cache/yay/ghost
+# A real build leaves its package behind; the name in the file is what makes
+# the build identifiable, not the directory name.
+: >/root/.cache/yay/simapp/simapp-1.0.0-1-x86_64.pkg.tar.zst
+: >/root/.cache/yay/ghost/ghost-1.0.0-1-x86_64.pkg.tar.zst
 touch -d '40 days ago' /root/.cache/yay/simapp /root/.cache/yay/ghost
 
 dry_log=$(mktemp)

@@ -213,6 +213,9 @@ permissions, and a floor that only the shared rule makes `doctor` refuse.
 - [x] Never delete a yay build for a package that is not installed.
 - [x] Sim scenario: dry-run changes nothing, apply removes only the expected
       files, and a non-installed package is untouched.
+- [x] A split build whose `.SRCINFO` is gone is identified by its built
+      packages, never by the directory name, so it is not kept forever. A
+      build that names nothing is kept and says why. Scenario 68.
 
 ### 3.5 `install`
 

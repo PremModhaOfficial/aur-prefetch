@@ -31,6 +31,10 @@ pub struct YayBuild {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum YayAction {
     KeepNotInstalled,
+    /// Nothing in the directory names the package: no `.SRCINFO` and no built
+    /// package. Kept, never guessed, because a wrong guess either leaks the
+    /// build or deletes one that belongs to something not installed.
+    KeepUnidentified,
     WouldRemove,
     Removed,
 }
@@ -250,6 +254,15 @@ fn collect_yay(
         // only some of its pkgname entries. Check every name the build
         // declares.
         let names = package_names(&path);
+        if names.is_empty() {
+            report.push(YayBuild {
+                name,
+                path,
+                size: None,
+                action: YayAction::KeepUnidentified,
+            });
+            continue;
+        }
         if !names.iter().any(|name| installed.contains(name.as_str())) {
             report.push(YayBuild {
                 name,
@@ -313,6 +326,14 @@ pub fn render_yay(report: &YayReport) -> String {
                 writeln!(out, "clean: yay build {}: keep (not installed)", build.name)
                     .expect("writing to a String cannot fail");
             }
+            YayAction::KeepUnidentified => {
+                writeln!(
+                    out,
+                    "clean: yay build {}: keep (cannot tell what it installs: no .SRCINFO and no built package)",
+                    build.name
+                )
+                .expect("writing to a String cannot fail");
+            }
             YayAction::WouldRemove => {
                 writeln!(
                     out,
@@ -333,7 +354,9 @@ pub fn render_yay(report: &YayReport) -> String {
 }
 
 /// Package names a cached build can install. The directory name is the
-/// pkgbase; `.SRCINFO` also lists every `pkgname` for split packages.
+/// pkgbase, which is not an installed name for a split package, so it is never
+/// used as a name. `.SRCINFO` lists every `pkgname`; when it is gone, the built
+/// packages still carry the real one in their file name.
 fn package_names(path: &Path) -> Vec<String> {
     let mut names = Vec::new();
     if let Ok(text) = fs::read_to_string(path.join(".SRCINFO")) {
@@ -352,7 +375,42 @@ fn package_names(path: &Path) -> Vec<String> {
     }
 
     if names.is_empty() {
-        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+        names = built_package_names(path);
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// `<pkgname>-<pkgver>-<pkgrel>-<arch>.pkg.tar.*`, the name `makepkg` gives a
+/// built package. A version may not contain `-`, so the name is whatever
+/// remains after three splits from the right. Only the archive itself counts:
+/// a `.sig` or a `.part` beside it is not proof that a package was built.
+fn built_package_names(path: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(path) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let file = entry.file_name();
+        let Some((stem, suffix)) = file.to_str().and_then(|file| file.split_once(".pkg.tar"))
+        else {
+            continue;
+        };
+        // `.pkg.tar`, `.pkg.tar.zst`, but not `.pkg.tar.zst.sig`.
+        if suffix.trim_start_matches('.').contains('.') {
+            continue;
+        }
+        let mut parts = stem.rsplitn(4, '-');
+        let (Some(arch), Some(_rel), Some(_ver), Some(name)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if !arch.is_empty() && !name.is_empty() {
             names.push(name.to_string());
         }
     }
@@ -536,6 +594,7 @@ mod tests {
         let config = test_config(&dir);
         let pkg = config.yay_cache_dir.join("simapp");
         fs::create_dir_all(&pkg).expect("yay dir");
+        fs::write(pkg.join("simapp-1.0.0-1-x86_64.pkg.tar.zst"), "built").expect("artifact");
         age(&pkg, 40);
 
         let runner = FakeRunner::new();
@@ -562,6 +621,8 @@ mod tests {
         let ghost = config.yay_cache_dir.join("ghost");
         fs::create_dir_all(&installed).expect("installed dir");
         fs::create_dir_all(&ghost).expect("ghost dir");
+        fs::write(installed.join("simapp-1.0.0-1-x86_64.pkg.tar.zst"), "built").expect("artifact");
+        fs::write(ghost.join("ghost-1.0.0-1-x86_64.pkg.tar.zst"), "built").expect("artifact");
         age(&installed, 40);
         age(&ghost, 40);
 
@@ -591,6 +652,7 @@ mod tests {
         let config = test_config(&dir);
         let pkg = config.yay_cache_dir.join("simapp");
         fs::create_dir_all(&pkg).expect("yay dir");
+        fs::write(pkg.join("simapp-1.0.0-1-x86_64.pkg.tar.zst"), "built").expect("artifact");
         age(&pkg, 40);
 
         let runner = FakeRunner::new();
@@ -647,6 +709,74 @@ mod tests {
                     && args.iter().map(String::as_str).eq(["-Q", "foo"])),
             "the pkgbase alone is not enough to decide installed state"
         );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_build_without_srcinfo_is_identified_by_its_built_package() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let pkg = config.yay_cache_dir.join("foo");
+        fs::create_dir_all(&pkg).expect("yay dir");
+        // A split build: the directory is the pkgbase, the installed name is
+        // the pkgname that makepkg wrote into the built package.
+        fs::write(pkg.join("foo-docs-1.0.0-1-x86_64.pkg.tar.zst"), "built").expect("artifact");
+        age(&pkg, 40);
+
+        let runner = FakeRunner::new();
+        queue(&runner, &dir, &["foo-docs"], 1);
+
+        run_with(&config, &runner, true).expect("clean");
+
+        assert!(
+            !pkg.exists(),
+            "the built package names the installed split package, so the build is removable"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_build_with_no_name_at_all_is_kept_and_says_so() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let pkg = config.yay_cache_dir.join("ghost");
+        fs::create_dir_all(&pkg).expect("yay dir");
+        age(&pkg, 40);
+
+        let runner = FakeRunner::new();
+        queue(&runner, &dir, &[], 0);
+
+        run_with(&config, &runner, true).expect("clean");
+
+        assert!(
+            pkg.exists(),
+            "nothing names the package, so the build is kept instead of guessed away"
+        );
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_hyphenated_package_name_survives_the_filename_split() {
+        let dir = temp_dir();
+        let pkg = dir.join("build");
+        fs::create_dir_all(&pkg).expect("build dir");
+        fs::write(pkg.join("libfoo-bar-1.2.3-4-any.pkg.tar.zst"), "built").expect("artifact");
+        fs::write(pkg.join("libfoo-bar-1.2.3-4-any.pkg.tar.zst.sig"), "sig").expect("signature");
+        fs::write(pkg.join("PKGBUILD"), "pkgname=libfoo-bar\n").expect("pkgbuild");
+
+        assert_eq!(super::package_names(&pkg), vec!["libfoo-bar".to_string()]);
+
+        // A signature or a partial artifact on its own names no built package.
+        fs::remove_file(pkg.join("libfoo-bar-1.2.3-4-any.pkg.tar.zst")).expect("remove artifact");
+        fs::write(
+            pkg.join("libfoo-bar-1.2.3-4-any.pkg.tar.zst.part"),
+            "partial",
+        )
+        .expect("partial artifact");
+        assert_eq!(super::package_names(&pkg), Vec::<String>::new());
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

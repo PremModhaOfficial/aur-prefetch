@@ -68,7 +68,7 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch check [--json]` — pending updates, disk, lock, caches, timer status
 - `aur-prefetch fetch` — free-space gate, `pacman -Syuw` only
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
-- `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
+- `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed. A build is identified by the names in its `.SRCINFO`, or by the package names in its built `*.pkg.tar.*` files when `.SRCINFO` is gone; the directory name is only the pkgbase, which is not an installed name for a split package. A build that names nothing (no `.SRCINFO`, no built package) is kept and printed as `keep (cannot tell what it installs: ...)` rather than guessed
 - `aur-prefetch doctor [--json]` — verify timers, limits, repo, journald
 - `aur-prefetch tui [--render-once] [--ascii]` — dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
 
