@@ -70,7 +70,7 @@ its side effects. Each command's acceptance criteria are in `NEXT.md`.
 - `aur-prefetch install [--yes] [--force]` — news gate, lock check, then `yay -Syuu`. A non-TTY needs `--yes`; an empty trust file needs `--force`. Blocks if the AUR update list cannot be read. Refuses to run as root, because yay and PKGBUILDs must never run as root
 - `aur-prefetch clean [--apply]` — dry run by default: prints sizes and the exact commands. `--apply` needs root (sudo) for `paccache` and removes only yay builds older than 30 days whose package is installed
 - `aur-prefetch doctor [--json]` — verify timers, limits, repo, journald
-- `aur-prefetch tui [--render-once] [--ascii]` - dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
+- `aur-prefetch tui [--render-once] [--ascii] [--no-motion]` - dependency tree. Starting it and quitting is read-only; `F` runs the same `fetch` command and draws its real `.part` bytes. `--render-once` prints one frame and works in a pipe. Interactive use needs a terminal.
 
 ### `tui`
 
@@ -82,6 +82,9 @@ prints one frame to stdout so a script or a pipe can read it; the exit code is
 `1` when the snapshot is actionable and `2` when collection failed. Without a
 terminal, the interactive form exits `2` and points at `--render-once`.
 `--ascii` replaces every glyph with ASCII, and `NO_COLOR` removes color.
+`--no-motion` stops the spinner and the 10 Hz pulse: while a fetch runs the
+frame is redrawn only for a real fact or the once-a-second elapsed label, never
+for the spinner alone.
 
 Exit codes follow `check`: `0` healthy or done, `1` actionable, `2` a terminal
 or collection error, and `130` when Ctrl-C ends the interactive tree.

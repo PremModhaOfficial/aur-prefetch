@@ -316,6 +316,12 @@ impl FetchMonitor {
         &self.run
     }
 
+    /// Freeze the spinner for this run (`--no-motion`). Observation is
+    /// unaffected: bytes, lines and transitions still arrive.
+    pub fn set_motion(&mut self, motion: bool) {
+        self.run.set_motion(motion);
+    }
+
     fn scan(&self) -> Result<CacheScan, Error> {
         let entries = fs::read_dir(&self.cache_dir).map_err(|err| {
             Error::failed(format!(

@@ -16,8 +16,8 @@ and draws the result.
 
 Shell and terminal:
 
-- `run(render_once: bool, ascii: bool) -> Result<(), Error>` — the only entry
-  point called from `src/main.rs` [mod.rs:run].
+- `run(render_once: bool, ascii: bool, motion: bool) -> Result<(), Error>` — the
+  only entry point called from `src/main.rs` [mod.rs:run].
 - `guard.rs`: `Guard` with `impl Drop`, `restore_terminal()`,
   `install_panic_hook()` [guard.rs:Guard] [guard.rs:restore_terminal]
   [guard.rs:install_panic_hook].
@@ -67,7 +67,13 @@ attestation, `esc` close or detach, `q` quit, Ctrl-C and Ctrl-Z
   cannot report a size; the interactive path refuses a non-tty instead
   [mod.rs:run] [mod.rs:ensure_interactive].
 - `--ascii` is also a no-colour mode: `use_color(ascii, no_color)` is false for
-  either [mod.rs:use_color].
+  either [mod.rs:use_color]. Every overlay frame uses `ASCII_BORDER` in ASCII
+  mode; ratatui's `border::PLAIN` is Unicode, so it is not ASCII [render.rs:frame_block].
+- `--no-motion` freezes the spinner cell on the run (`LiveRun::set_motion`), so
+  the frame key and the drawn glyph agree and a tick that only moved the spinner
+  asks for no redraw. The elapsed label still advances once a second; it is
+  measured data, not animation [live.rs:LiveRun::set_motion]
+  [fetch_session.rs:set_motion].
 - `render.rs` only lays text out: it never shells out and never collects
   [render.rs:render_frame].
 - `tree.rs` and `live.rs` are pure: no I/O, no clock of their own, `at` is

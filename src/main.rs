@@ -62,6 +62,9 @@ enum Commands {
         /// Use ASCII glyphs only
         #[arg(long)]
         ascii: bool,
+        /// No spinner or 10 Hz pulse; only real data redraws
+        #[arg(long)]
+        no_motion: bool,
     },
 }
 
@@ -74,7 +77,11 @@ fn main() -> ExitCode {
         Commands::Install { yes, force } => commands::install::run(yes, force),
         Commands::Clean { apply } => commands::clean::run(apply),
         Commands::Doctor { json } => commands::doctor::run(json),
-        Commands::Tui { render_once, ascii } => aur_prefetch::tui::run(render_once, ascii),
+        Commands::Tui {
+            render_once,
+            ascii,
+            no_motion,
+        } => aur_prefetch::tui::run(render_once, ascii, !no_motion),
     };
 
     match result {

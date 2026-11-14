@@ -48,11 +48,24 @@ pub fn sanitize_cell(input: &str) -> String {
     out
 }
 
-/// Replace every non-ASCII character with `?` for `--ascii`.
+/// Replace every non-ASCII character with its Tier A form for `--ascii`.
+///
+/// The chrome and the command layer share `·` as a separator (a gate detail, a
+/// fetch status line), and TUI.md's Tier A form for it is `|`. A character with
+/// no Tier A form becomes `?`, which is the honest "no ASCII form" marker for
+/// untrusted text such as a package name.
 pub fn to_ascii(input: &str) -> String {
     input
         .chars()
-        .map(|ch| if ch.is_ascii() { ch } else { '?' })
+        .map(|ch| match ch {
+            '·' => '|',
+            '–' | '—' => '-',
+            '⋮' => ':',
+            '▸' => '>',
+            '⏱' => 't',
+            ch if ch.is_ascii() => ch,
+            _ => '?',
+        })
         .collect()
 }
 
@@ -153,5 +166,18 @@ mod tests {
     fn ascii_mode_replaces_wide_text() {
         assert_eq!(to_ascii("café"), "caf?");
         assert_eq!(cell_text("界", 4, true), "?");
+    }
+
+    #[test]
+    fn ascii_keeps_the_meaning_of_shared_chrome_glyphs() {
+        // A separator in a gate detail or a status line must read as a
+        // separator, not as the unknown marker.
+        assert_eq!(
+            to_ascii("allowlist · 2 maintainer(s)"),
+            "allowlist | 2 maintainer(s)"
+        );
+        assert_eq!(to_ascii("6.0.1-1 – skipped"), "6.0.1-1 - skipped");
+        assert_eq!(to_ascii("⋮ 12 more"), ": 12 more");
+        assert_eq!(to_ascii("▸ base"), "> base");
     }
 }
