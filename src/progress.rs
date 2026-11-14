@@ -414,9 +414,17 @@ fn scan(
                     at: candidate.at,
                     detail: Some("built".to_string()),
                 }
-            } else if let Some(candidate) = other {
+            } else if let Some(candidate) = exact_partial.or(other_partial) {
                 ArtifactScan {
-                    state: ArtifactState::BuildPending,
+                    state: ArtifactState::Partial,
+                    at: candidate.at,
+                    detail: Some("partial build".to_string()),
+                }
+            } else if let Some(candidate) = other {
+                // An older build sits on disk. `build pending` means aurto or
+                // yay is building right now (GLOSSARY), not "a build exists".
+                ArtifactScan {
+                    state: ArtifactState::Stale,
                     at: candidate.at,
                     detail: Some(format!("older build {}", candidate.version)),
                 }
@@ -662,6 +670,25 @@ Download Size   : 827.00 B
             scan(Some(&[]), "yay-bin", "12.4.1-1", ScanKind::Aur).state,
             ArtifactState::BuildPending
         );
+
+        let old = vec![CacheEntry {
+            file_name: "yay-bin-11.0.0-1-x86_64.pkg.tar.zst".to_string(),
+            at: Some(UNIX_EPOCH),
+        }];
+        assert_eq!(
+            scan(Some(&old), "yay-bin", "12.4.1-1", ScanKind::Aur).state,
+            ArtifactState::Stale
+        );
+
+        let interrupted = vec![CacheEntry {
+            file_name: "yay-bin-12.4.1-1-x86_64.pkg.tar.zst.part".to_string(),
+            at: Some(UNIX_EPOCH),
+        }];
+        assert_eq!(
+            scan(Some(&interrupted), "yay-bin", "12.4.1-1", ScanKind::Aur).state,
+            ArtifactState::Partial,
+            "a .part is not a pending build: something is on disk"
+        );
         assert_eq!(
             scan(None, "yay-bin", "12.4.1-1", ScanKind::Aur).state,
             ArtifactState::Unknown
@@ -677,17 +704,15 @@ Download Size   : 827.00 B
             package("d", ArtifactState::Partial),
             package("e", ArtifactState::Missing),
             package("f", ArtifactState::BuildPending),
-            package("g", ArtifactState::Failed),
             package("h", ArtifactState::Unknown),
         ];
         let counts = Counts::from_packages(&packages);
         assert_eq!(counts.ready(), 2);
-        assert_eq!(counts.total(), 8);
+        assert_eq!(counts.total(), 7);
         assert_eq!(counts.stale, 1);
         assert_eq!(counts.partial, 1);
         assert_eq!(counts.missing, 1);
         assert_eq!(counts.build_pending, 1);
-        assert_eq!(counts.failed, 1);
         assert_eq!(counts.unknown, 1);
         assert_eq!(counts.held, None);
     }
