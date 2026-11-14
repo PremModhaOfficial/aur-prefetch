@@ -2334,9 +2334,9 @@ fn age_label(at: Option<SystemTime>, now: SystemTime) -> Option<String> {
 const HELP_ROWS: &[(&str, &str)] = &[
     ("q", "quit"),
     ("?", "toggle help"),
-    ("esc", "close help · detach or dismiss"),
+    ("esc", "close, detach or dismiss"),
     ("j k", "move selection"),
-    ("enter", "run armed install · dismiss receipt"),
+    ("enter", "install · dismiss receipt"),
     ("space", "attest news"),
     ("F", "fetch downloads"),
     ("g", "tree/ledger"),
@@ -2368,10 +2368,17 @@ fn help_lines(ascii: bool) -> Vec<Line<'static>> {
 }
 
 fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
-    let text = help_lines(ascii);
+    let mut text = help_lines(ascii);
+    let height = area.height.min(text.len() as u16 + 2);
+    // A terminal this short cannot show every row; say so instead of clipping.
+    let room = height.saturating_sub(2) as usize;
+    if text.len() > room {
+        let hidden = text.len() - room.saturating_sub(1);
+        text.truncate(room.saturating_sub(1));
+        text.push(Line::from(format!("+{hidden} more rows, taller window")));
+    }
     let content = text.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
     let width = area.width.min(content.saturating_add(4));
-    let height = area.height.min(text.len() as u16 + 2);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width) / 2,
         area.y + area.height.saturating_sub(height) / 2,
@@ -5697,7 +5704,23 @@ mod tests {
         }
         // `--ascii` replaces the row separators, as the footers do.
         let ascii = render_frame(&snapshot(), 80, 24, true, false, true);
-        assert!(ascii.contains("close help | detach or dismiss"));
+        assert!(ascii.contains("install | dismiss receipt"));
+    }
+
+    #[test]
+    fn a_short_terminal_says_the_help_is_a_subset() {
+        // 12 rows cannot hold 13, and a silent cut is what #62 reported.
+        let frame = render_frame(&snapshot(), 40, 12, false, false, true);
+        let hidden = super::HELP_ROWS.len() - 9;
+        assert!(frame.contains(&format!("+{hidden} more rows, taller window")));
+        assert!(
+            frame.contains("install · dismiss receipt"),
+            "a row is cut sideways"
+        );
+        assert!(
+            !frame.contains("ctrl-z"),
+            "a clipped row must not look whole"
+        );
     }
 
     #[test]
