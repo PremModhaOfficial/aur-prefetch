@@ -57,6 +57,19 @@ assert_contains "$(cat "$frame")" "install 2 packages" "the install context coun
 assert_eq "$(find /var/cache/pacman/aurto -maxdepth 1 -type f -printf '%f\n' | sort)" \
     "$before_aurto" "the tree left the aurto repo unchanged"
 
+# An older build is stale, not a build in progress: `build pending` means
+# aurto is building now, and nothing is. The exact build has to go first, or the
+# scan still finds a ready artifact.
+rm -f /var/cache/pacman/aurto/aurpkg-1.1.0-1-x86_64.pkg.tar.zst
+cp /srv/simrepo/simapp-1.0.0-1-x86_64.pkg.tar.zst \
+    /var/cache/pacman/aurto/aurpkg-1.0.0-1-x86_64.pkg.tar.zst
+runuser -l builder -c 'aur-prefetch tui --render-once' >"$frame" 2>&1
+assert_contains "$(cat "$frame")" "stale" "an older aurto build is stale"
+assert_contains "$(cat "$frame")" "older build 1.0.0-1" \
+    "the stale reason names the old build, not a pending one"
+assert_contains "$(cat "$frame")" "0 ready" "an older build is not ready"
+rm -f /var/cache/pacman/aurto/aurpkg-1.0.0-1-x86_64.pkg.tar.zst
+
 before_cache=$(cache_files)
 runuser -l builder -c 'aur-prefetch tui --render-once' >"$frame" 2>&1
 assert_eq "$(cache_files)" "$before_cache" "the tree left the cache unchanged"

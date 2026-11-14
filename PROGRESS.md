@@ -89,7 +89,7 @@ is the line between a monitor and a screensaver.
 |---|---|---|
 | Pending set, versions, download size, deps | `pacman -Qu` + `-Qi` | Rows, columns, edges |
 | Cache artifact, version match, mtime, `.part`, `.sig` | CacheDir scan | `✓ cached`, `▲ stale`, `◔ partial`, `○ missing` |
-| AUR built artifact and metadata | aurto repo, `.PKGINFO` | `◆ built` / `⏸ build-pending` |
+| AUR built artifact and metadata | aurto repo, `.PKGINFO` | `◆ built` / `▲ stale` / `◔ partial` / `⏸ build-pending` |
 | AUR runtime and build deps | `.SRCINFO`, `pacman -Si` | Child rows; unknown edges are `?` |
 | Download started, bytes, finished | `.part` size via `stat`; `pacman -Syuw` `downloading` lines only if present | `↓` running, real bytes, `✔` done |
 | Build phase started | `makepkg`/`yay` line: `Starting build()`, `check()`, `package()` | `⏵ buildPhase` |
@@ -206,7 +206,7 @@ counters show the rest.
 Prefetch precedence:
 
 ```text
-failed > partial > stale > built > cached > build-pending > missing > unknown
+partial > stale > built > cached > build-pending > missing > unknown
 ```
 
 Live precedence overrides the prefetch glyph only while a captured phase runs:
@@ -221,7 +221,6 @@ Live precedence overrides the prefetch glyph only while a captured phase runs:
 | partial | `◔` | `~` |
 | missing | `○` | `o` |
 | build-pending | `⏸` | `=` |
-| failed | `✖` | `x` |
 | unknown | `?` | `?` |
 | held | `■` | `#` |
 
@@ -331,7 +330,7 @@ The top line is generated, not typed:
 
 ```text
 ready 4 = 3 cached + 1 built · stale 1 · missing 1 · build-pending 1
-partial 0 · failed 0 · unknown 1 · held 0
+partial 0 · unknown 1 · held 0
 ```
 
 - `ready` = official `cached` + AUR `built` (install will not download/build).
@@ -339,7 +338,6 @@ partial 0 · failed 0 · unknown 1 · held 0
 - `missing` = no usable artifact.
 - `build-pending` = AUR, no built artifact; install will build.
 - `partial` = `.part` or clearly truncated; not usable.
-- `failed` = last fetch/build/install error for this package.
 - `unknown` = cache/repo unreadable or metadata missing.
 - `held` = ignored; only if parsed, otherwise absent.
 

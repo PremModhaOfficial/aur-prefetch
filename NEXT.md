@@ -252,7 +252,7 @@ Requires fault injection in the sim.
 - [ ] Kill pacman mid-install, verify `pacman -Qkk` detects damage and `Qk`
       does not.
 - [ ] Delete `db.lck` while pacman runs, verify `doctor` catches it.
-- [ ] Install a single package between fetch and install, verify `check`
+- [x] Install a single package between fetch and install, verify `check`
       reports a partial upgrade.
 - [ ] Stale aurto repo, verify `install` reports a foreground build risk.
 
@@ -347,6 +347,12 @@ freeze and the repair card.
 T2 slice landed: `progress::collect` scans the real cache and fills
 `PrefetchReport`; sim 33 proves cached, stale, partial, missing, built and no
 writes.
+
+Issue 40 landed: the AUR branch has a real `stale` arm, so an older build on
+disk is `stale`/`older build`, and `build pending` means only "no artifact on
+disk"; sim 33 proves both badges through the real aurto repo. `ArtifactState::Failed`
+is gone: `scan` cannot observe a build that failed, so the state had no producer
+and the live view carries failure itself.
 
 T2a landed: `src/tui/tree.rs` is the pure forest model and `render.rs` prints it
 bottom-up like nom. It has one row per package, one root per pending package

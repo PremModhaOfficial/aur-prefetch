@@ -8,8 +8,8 @@ use crate::config::Config;
 use crate::error::Error;
 use crate::lock;
 use crate::report::{
-    CacheUsage, Cached, DiskStatus, DiskUsage, LockState, Policy, Repo, Section, Snapshot,
-    StateInfo, TimerState, TrustState, Update,
+    CacheUsage, Cached, DiskStatus, DiskUsage, Drift, LockState, PartialUpgrade, Policy, Repo,
+    Section, Snapshot, StateInfo, TimerState, TrustState, Update,
 };
 use crate::runner::{CommandRunner, SystemRunner};
 use crate::state::State;
@@ -193,6 +193,8 @@ pub fn collect(
     snapshot.timer = Section::ready(timer, now);
 
     let state = collect_or_fatal!(snapshot, collect_state(config));
+    let drift = collect_drift(config, &state, pending_count(&snapshot));
+    snapshot.drift = drift;
     snapshot.state = Section::ready(state, now);
     let trust = collect_or_fatal!(snapshot, collect_trust(config));
     snapshot.trust = Section::ready(trust, now);
@@ -221,6 +223,7 @@ pub fn render_text(snapshot: &Snapshot) -> String {
     render_caches(&mut out, &snapshot.caches);
     render_timer(&mut out, &snapshot.timer);
     render_state(&mut out, &snapshot.state);
+    render_drift(&mut out, &snapshot.drift);
     render_trust(&mut out, &snapshot.trust);
 
     if snapshot.fatal.is_some() {
@@ -237,6 +240,18 @@ pub fn render_text(snapshot: &Snapshot) -> String {
         .expect("writing to a String cannot fail");
     }
     out
+}
+
+fn render_drift(out: &mut String, drift: &Drift) {
+    match &drift.partial_upgrade {
+        PartialUpgrade::None => {}
+        PartialUpgrade::Possible => out.push_str(
+            "check: partial upgrade: cannot tell (pacman.log unreadable while updates are pending)\n",
+        ),
+        PartialUpgrade::Detected(detail) => {
+            writeln!(out, "check: partial upgrade: {detail}").expect("writing to a String cannot fail");
+        }
+    }
 }
 
 fn render_updates(out: &mut String, label: &str, section: &Section<Vec<Update>>) {
@@ -594,12 +609,7 @@ fn collect_log_fallback(config: &Config) -> Option<String> {
         return Some("no pacman.log fallback".to_string());
     };
 
-    let lines: Vec<&str> = log.lines().collect();
-    let fetch = lines.iter().rposition(|line| line.contains("-Syuw"));
-    let install = lines
-        .iter()
-        .rposition(|line| line.contains("[ALPM] installed") || line.contains("[ALPM] upgraded"));
-
+    let (fetch, install) = log_positions(&log);
     Some(match (fetch, install) {
         (Some(fetch), Some(install)) if fetch > install => {
             "log shows a download after the last install".to_string()
@@ -608,6 +618,72 @@ fn collect_log_fallback(config: &Config) -> Option<String> {
         (Some(_), None) => "log shows a download and no install".to_string(),
         _ => "log shows no download record".to_string(),
     })
+}
+
+/// The last download-only fetch and the last ALPM install or upgrade, by line
+/// position. pacman appends, so a later line happened later.
+fn log_positions(log: &str) -> (Option<usize>, Option<usize>) {
+    let lines: Vec<&str> = log.lines().collect();
+    (
+        lines.iter().rposition(|line| line.contains("-Syuw")),
+        lines.iter().rposition(|line| {
+            line.contains("[ALPM] installed") || line.contains("[ALPM] upgraded")
+        }),
+    )
+}
+
+/// How many updates the lists actually reported. A failed or uncollected
+/// section proves no pending package, so it contributes nothing.
+fn pending_count(snapshot: &Snapshot) -> usize {
+    fn len(section: &Section<Vec<Update>>) -> usize {
+        match section {
+            Section::Ready { data, .. } => data.len(),
+            _ => 0,
+        }
+    }
+    len(&snapshot.official) + len(&snapshot.aur)
+}
+
+/// The drift record: the times the state file knows, and whether the log proves
+/// an upgrade ran after the last download-only fetch.
+///
+/// `check` cannot see a hand `pacman -S` in the state file, so the evidence is
+/// pacman's own log. `Possible` is a value, not a silence: when the log cannot
+/// be read the answer is unknown, and unknown is never reported as `none`.
+fn collect_drift(config: &Config, info: &StateInfo, pending: usize) -> Drift {
+    let drift = Drift {
+        last_fetch: info.last_fetch_unix,
+        last_install: info.last_install_unix,
+        partial_upgrade: PartialUpgrade::None,
+    };
+    if pending == 0 {
+        return drift;
+    }
+    match fs::read_to_string(&config.pacman_log) {
+        Ok(log) => Drift {
+            partial_upgrade: detect_partial_upgrade(&log, pending),
+            ..drift
+        },
+        Err(_) => Drift {
+            partial_upgrade: PartialUpgrade::Possible,
+            ..drift
+        },
+    }
+}
+
+/// An install or upgrade after the last download-only fetch, with updates still
+/// pending, is the mixed system `spec.md` calls a partial upgrade: the lists
+/// are new, some packages moved, the rest did not.
+fn detect_partial_upgrade(log: &str, pending: usize) -> PartialUpgrade {
+    if pending == 0 {
+        return PartialUpgrade::None;
+    }
+    match log_positions(log) {
+        (Some(fetch), Some(install)) if install > fetch => PartialUpgrade::Detected(format!(
+            "an upgrade ran after the last fetch and {pending} update(s) are still pending"
+        )),
+        _ => PartialUpgrade::None,
+    }
 }
 
 fn collect_trust(config: &Config) -> Result<TrustState, Error> {
@@ -657,13 +733,16 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    use super::{collect_cache, render_text, run_with, run_with_options, scheduled_timer};
+    use super::{
+        collect_cache, collect_drift, detect_partial_upgrade, render_text, run_with,
+        run_with_options, scheduled_timer,
+    };
     use crate::commands::fetch;
     use crate::config::Config;
     use crate::error::Error;
     use crate::report::{
-        CacheUsage, Cached, DiskStatus, DiskUsage, LockState, Policy, Repo, Section, Snapshot,
-        StateInfo, TimerState, TrustState, Update,
+        CacheUsage, Cached, DiskStatus, DiskUsage, LockState, PartialUpgrade, Policy, Repo,
+        Section, Snapshot, StateInfo, TimerState, TrustState, Update,
     };
     use crate::runner::{CommandOutput, FakeRunner};
 
@@ -1185,6 +1264,69 @@ check: action needed (1 item(s))
         assert!(matches!(result, Err(Error::Blocked(_))));
         assert_eq!(result.unwrap_err().exit_code(), 1);
         assert!(!config.state_file.exists(), "check must not write state");
+
+        fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    #[test]
+    fn a_partial_upgrade_is_an_install_after_the_last_fetch_with_updates_pending() {
+        let window = "\
+[2026-11-14T10:00:00+0000] [PACMAN] Running 'pacman -Syuw --noconfirm'
+[2026-11-14T10:05:00+0000] [ALPM] upgraded bigpkg (1.0.0-1 -> 2.0.0-1)
+";
+        assert_eq!(
+            detect_partial_upgrade(window, 1),
+            PartialUpgrade::Detected(
+                "an upgrade ran after the last fetch and 1 update(s) are still pending".to_string()
+            )
+        );
+        assert_eq!(
+            detect_partial_upgrade(window, 0),
+            PartialUpgrade::None,
+            "nothing pending means the upgrade finished"
+        );
+
+        let fetched_last = "\
+[2026-11-14T10:00:00+0000] [ALPM] upgraded old (1.0-1 -> 2.0-1)
+[2026-11-14T11:00:00+0000] [PACMAN] Running 'pacman -Syuw --noconfirm'
+";
+        assert_eq!(
+            detect_partial_upgrade(fetched_last, 3),
+            PartialUpgrade::None,
+            "a fetch after the last install is the window open, not mixed"
+        );
+
+        let no_fetch = "[2026-11-14T10:05:00+0000] [ALPM] installed thing (1.0-1)\n";
+        assert_eq!(
+            detect_partial_upgrade(no_fetch, 3),
+            PartialUpgrade::None,
+            "without a recorded fetch there is no window to have crossed"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_log_is_a_possible_drift_not_a_none() {
+        let dir = temp_dir();
+        let config = test_config(&dir);
+        let info = StateInfo {
+            last_fetch_unix: Some(1_760_000_000),
+            last_fetch_pending: Some(2),
+            last_install_unix: None,
+            fallback: None,
+        };
+
+        let drift = collect_drift(&config, &info, 2);
+
+        assert_eq!(drift.last_fetch, Some(1_760_000_000));
+        assert_eq!(drift.partial_upgrade, PartialUpgrade::Possible);
+        assert!(
+            render_text(&Snapshot {
+                drift,
+                ..base_snapshot()
+            })
+            .contains("check: partial upgrade: cannot tell"),
+            "an unknown answer is printed, never reported as none"
+        );
 
         fs::remove_dir_all(&dir).expect("clean temp dir");
     }

@@ -30,7 +30,6 @@ Test names, commit messages and issues use these words, not synonyms.
 | **missing** | Nothing on disk for it. |
 | **unknown** | The scan could not answer. A value, never a silent zero. |
 | **build pending** | `aurto` or `yay` is building it now. |
-| **failed** | The build or download failed. Never hidden by another state's glyph. |
 | **space floor** | The minimum free bytes below which `fetch` refuses. One calculation, shared with `check`. |
 | **pending download** | Bytes the pending packages will need. Raises the floor; it does not replace it. |
 | **lock gate** | The refusal while `pacman`, `yay`, `makepkg` or `aurto` is running. Checked by process name first, then by `db.lck`. |
@@ -69,7 +68,7 @@ Test names, commit messages and issues use these words, not synonyms.
 | **aurto** | The background AUR builder. Builds as the user, installs with root. |
 | **trust** | Whether `aurto` will build a maintainer's package. |
 | **drift** | A built package whose cached artifact no longer matches the recipe. |
-| **partial upgrade** | An update that installed some packages and not others. Refused, not resolved silently. |
+| **partial upgrade** | An update that installed some packages and not others. `check` detects it from `pacman.log` and reports it; never resolved silently. |
 | **state file** | The only file this tool writes about itself. A failed write is a warning, never a failed download. |
 | **invariant** | A rule proven by a test and a sim scenario, not by inspection. |
 

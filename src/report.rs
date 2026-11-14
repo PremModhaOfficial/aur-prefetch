@@ -114,7 +114,9 @@ pub enum Cached {
 /// What the cache/build scan proves about one package's artifact.
 ///
 /// `Cached` and `Built` are ready. `Stale` and `Partial` are not. `Unknown`
-/// is a value, not a missing zero.
+/// is a value, not a missing zero. There is no `Failed`: a static scan cannot
+/// observe a build in progress or a build that failed, so the live view carries
+/// that state itself and never invents it here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactState {
@@ -124,22 +126,21 @@ pub enum ArtifactState {
     Partial,
     Missing,
     BuildPending,
-    Failed,
     Unknown,
 }
 
 impl ArtifactState {
-    /// Primary-glyph precedence. Lower sorts first; failure is never hidden.
+    /// Primary-glyph precedence. Lower sorts first; a partial artifact outranks
+    /// a stale one.
     pub fn rank(self) -> u8 {
         match self {
-            Self::Failed => 0,
-            Self::Partial => 1,
-            Self::Stale => 2,
-            Self::Built => 3,
-            Self::Cached => 4,
-            Self::BuildPending => 5,
-            Self::Missing => 6,
-            Self::Unknown => 7,
+            Self::Partial => 0,
+            Self::Stale => 1,
+            Self::Built => 2,
+            Self::Cached => 3,
+            Self::BuildPending => 4,
+            Self::Missing => 5,
+            Self::Unknown => 6,
         }
     }
 }
@@ -169,7 +170,6 @@ pub struct Counts {
     pub partial: usize,
     pub missing: usize,
     pub build_pending: usize,
-    pub failed: usize,
     pub unknown: usize,
     /// `None` until IgnorePkg/IgnoreGroup is parsed; never a guessed zero.
     pub held: Option<usize>,
@@ -186,7 +186,6 @@ impl Counts {
                 ArtifactState::Partial => counts.partial += 1,
                 ArtifactState::Missing => counts.missing += 1,
                 ArtifactState::BuildPending => counts.build_pending += 1,
-                ArtifactState::Failed => counts.failed += 1,
                 ArtifactState::Unknown => counts.unknown += 1,
             }
         }
@@ -204,7 +203,6 @@ impl Counts {
             .saturating_add(self.partial)
             .saturating_add(self.missing)
             .saturating_add(self.build_pending)
-            .saturating_add(self.failed)
             .saturating_add(self.unknown)
     }
 }

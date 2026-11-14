@@ -323,9 +323,10 @@ Rules for the extraction:
 - `Cached` is a filename match for `<name>-<version>-*.pkg.tar.*` in the resolved
   CacheDir after stripping an epoch and excluding `.sig` files. For AUR it is
   `Unknown` in v1; the UI prints `?`, not `no`.
-- `Drift::partial_upgrade` is `Detected` when `pacman.log` shows any install
-  after the last fetch. The dashboard surfaces it; `Possible` means lists are
-  newer than the last install but no single install is proven.
+- `Drift::partial_upgrade` is `Detected` when `pacman.log` shows an install or
+  upgrade after the last download-only fetch while updates are still pending.
+  The dashboard surfaces it; `Possible` means the log cannot be read while
+  updates are pending, so the answer is unknown and never reported as `None`.
 - `PostInstall` is collected after `yay` exits, on both success and failure, so
   the failure modal has real kernel/pacdiff/reboot data.
 - `FetchState` is fed by a streaming channel; no screen shells out on its own.

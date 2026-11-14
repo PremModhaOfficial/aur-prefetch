@@ -2266,7 +2266,6 @@ fn artifact_color(state: ArtifactState) -> Color {
     match state {
         ArtifactState::Cached | ArtifactState::Built => DONE,
         ArtifactState::Stale | ArtifactState::Partial => ACTIVE,
-        ArtifactState::Failed => FAILURE,
         ArtifactState::Missing | ArtifactState::BuildPending => PLANNED,
         ArtifactState::Unknown => DIM,
     }
@@ -2312,7 +2311,6 @@ fn artifact_glyph(state: ArtifactState, ascii: bool) -> (&'static str, &'static 
         ArtifactState::Partial => ("◔", "~", "partial"),
         ArtifactState::Missing => ("○", "o", "missing"),
         ArtifactState::BuildPending => ("⏸", "=", "build-pending"),
-        ArtifactState::Failed => ("✖", "x", "failed"),
         ArtifactState::Unknown => ("?", "?", "unknown"),
     };
     (if ascii { fallback } else { unicode }, label)

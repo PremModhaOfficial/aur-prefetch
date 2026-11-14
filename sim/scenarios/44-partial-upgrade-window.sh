@@ -8,14 +8,12 @@
 # the new lists, the rest still on the old ones - and the prefetched artifact
 # sitting in the cache is exactly the upgrade that would finish the job.
 #
-# `report::Drift` and `report::PartialUpgrade` model this state (`src/report.rs`
-# 344-380) and nothing ever fills them: no command reads `pacman.log` for an
-# install after the last fetch. `check` therefore reports the pending update and
-# says nothing about the partial upgrade it was created by. Last assertion is
-# the deliverable, and it fails on purpose until the detector is wired in.
+# `report::Drift` is filled by `check` from this log: an ALPM install after the
+# last download-only fetch, with updates still pending, is the partial upgrade
+# `spec.md` calls the number one way to break the system.
 source /usr/local/lib/sim/lib.sh
 
-echo "scenario: a single install between fetch and install is a partial upgrade check never mentions"
+echo "scenario: a single install between fetch and install is the partial upgrade check reports"
 
 pkgname=bigpkg
 state=/home/builder/.local/state/aur-prefetch/state.json
@@ -62,7 +60,7 @@ assert_true "the prefetched artifact for the still-pending package is still cach
     test -f "$cache/simapp-2.0.0-1-x86_64.pkg.tar.zst"
 
 # Step 3: what the read-only report says about that. It names the pending
-# update, and it never says the word for the state it is in.
+# update, and it names the state the window put the system in.
 check_log=$(mktemp)
 before_check_local=$(local_db_state | sha256sum)
 before_check_usr=$(usr_state)
@@ -72,10 +70,12 @@ status=$?
 assert_eq "$status" "1" "check exits 1 (an update is still pending)"
 assert_contains "$(cat "$check_log")" "simapp" "check names the still-pending package"
 
-# GAP: report::PartialUpgrade is never filled, so check cannot say this. When it
-# can, this line goes red on purpose — invert it in the same commit.
-assert_false "check still does not report the partial upgrade it was handed" \
+# The deliverable: the evidence in the log is read, and the mixed system is
+# named rather than resolved silently.
+assert_true "check reports the partial upgrade it was handed" \
     grep -qi "partial upgrade" "$check_log"
+assert_contains "$(cat "$check_log")" "an upgrade ran after the last fetch" \
+    "the report names the evidence it read"
 
 # 4. Read-only, and nothing else moved: the mixed /usr is the install's doing,
 #    not the checks'.
