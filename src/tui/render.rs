@@ -2330,7 +2330,7 @@ fn age_label(at: Option<SystemTime>, now: SystemTime) -> Option<String> {
 }
 
 /// The help overlay's rows. The drift test compares this table against every
-/// `KeyCode` arm in `src/tui/mod.rs`, so a handled key cannot lack a row.
+/// `KeyCode` arm under `src/tui/`, so a handled key cannot lack a row.
 const HELP_ROWS: &[(&str, &str)] = &[
     ("q", "quit"),
     ("?", "toggle help"),
@@ -2347,7 +2347,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("ctrl-z", "suspend"),
 ];
 
-fn help_lines() -> Vec<Line<'static>> {
+fn help_lines(ascii: bool) -> Vec<Line<'static>> {
     let label = HELP_ROWS
         .iter()
         .map(|(keys, _)| display_width(keys))
@@ -2356,12 +2356,19 @@ fn help_lines() -> Vec<Line<'static>> {
         + 2;
     HELP_ROWS
         .iter()
-        .map(|(keys, action)| Line::from(format!("{keys:<label$}{action}")))
+        .map(|(keys, action)| {
+            let action = if ascii {
+                action.replace('·', "|")
+            } else {
+                action.to_string()
+            };
+            Line::from(format!("{keys:<label$}{action}"))
+        })
         .collect()
 }
 
 fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
-    let text = help_lines();
+    let text = help_lines(ascii);
     let content = text.iter().map(|line| line.width()).max().unwrap_or(0) as u16;
     let width = area.width.min(content.saturating_add(4));
     let height = area.height.min(text.len() as u16 + 2);
@@ -2389,7 +2396,6 @@ fn draw_help(frame: &mut Frame, area: Rect, ascii: bool) {
         popup.width.saturating_sub(4),
         popup.height.saturating_sub(2),
     );
-    let text = help_lines();
     frame.render_widget(Paragraph::new(text), inner);
 }
 
@@ -5606,13 +5612,28 @@ mod tests {
         assert!(frame.contains("ctrl-z  suspend"));
     }
 
-    /// Every `KeyCode` arm in the shell has a help row. The test scans the
-    /// shell's own source, so a key added there fails here without a second
+    /// Every `KeyCode` arm in the shell has a help row. The test reads the
+    /// shell's own sources, so a key added there fails here without a second
     /// hand-kept list to drift.
     #[test]
     fn every_handled_key_has_a_help_row() {
-        let handled = handled_keys(include_str!("mod.rs"));
-        for known in ["q", "j", "k", "space", "enter", "ctrl-c", "ctrl-z"] {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tui");
+        let mut sources: Vec<_> = std::fs::read_dir(dir)
+            .expect("the tui sources")
+            .map(|entry| entry.expect("a directory entry").path())
+            .filter(|path| path.extension().is_some_and(|kind| kind == "rs"))
+            .collect();
+        sources.sort();
+        let mut handled = Vec::new();
+        for path in &sources {
+            handled_keys(
+                &std::fs::read_to_string(path).expect("a tui source"),
+                &mut handled,
+            );
+        }
+        for known in [
+            "q", "esc", "j", "k", "space", "enter", "F", "ctrl-c", "ctrl-z",
+        ] {
             assert!(
                 handled.contains(&known.to_string()),
                 "missing {known}: {handled:?}"
@@ -5630,8 +5651,7 @@ mod tests {
         }
     }
 
-    fn handled_keys(source: &str) -> Vec<String> {
-        let mut keys: Vec<String> = Vec::new();
+    fn handled_keys(source: &str, keys: &mut Vec<String>) {
         for line in source.lines() {
             let mut rest = line;
             while let Some(at) = rest.find("KeyCode::") {
@@ -5648,6 +5668,10 @@ mod tests {
                         .collect::<String>()
                         .to_lowercase(),
                 };
+                if code.is_empty() {
+                    // A literal `"KeyCode::"` in a source, not an arm.
+                    continue;
+                }
                 let key = if line.contains("KeyModifiers::CONTROL") {
                     format!("ctrl-{code}")
                 } else {
@@ -5658,14 +5682,12 @@ mod tests {
                 }
             }
         }
-        keys
     }
 
     #[test]
     fn the_help_popup_grows_to_its_rows() {
-        // Thirteen rows never fit the old 12-row cap; every one is on screen.
+        // The old 12-row cap clipped the thirteenth row; every one is on screen.
         let frame = render_frame(&snapshot(), 80, 24, false, false, true);
-        assert!(super::HELP_ROWS.len() > 12);
         for (keys, action) in super::HELP_ROWS {
             assert!(
                 frame.contains(&format!("{keys} ")),
@@ -5673,6 +5695,9 @@ mod tests {
             );
             assert!(frame.contains(action), "help text `{action}` is clipped");
         }
+        // `--ascii` replaces the row separators, as the footers do.
+        let ascii = render_frame(&snapshot(), 80, 24, true, false, true);
+        assert!(ascii.contains("close help | detach or dismiss"));
     }
 
     #[test]
